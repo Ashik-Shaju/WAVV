@@ -1,0 +1,37 @@
+{
+  "model_id": "audiomuse-dclap-v1-fp32-audio-int8-text",
+  "audio_model": {
+    "path": "model_epoch_36.onnx",
+    "external_data_path": "model_epoch_36.onnx.data",
+    "sha256": "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971",
+    "external_data_sha256": "2a735b23c2aad7b12d9ffc85334cebcc659c07696d2ff60e2e378da28b6df657",
+    "input_name": "mel_spectrogram",
+    "input_shape": [1, 1, 128, 1001],
+    "output_dimension": 512,
+    "sample_rate": 48000,
+    "segment_samples": 480000,
+    "segment_hop_samples": 240000,
+    "n_mels": 128,
+    "n_fft": 2048,
+    "mel_hop_samples": 480,
+    "fmin": 0,
+    "fmax": 14000,
+    "power": 2.0
+  },
+  "text_model": {
+    "path": "clap_text_model.int8.dynamic.per_channel.onnx",
+    "sha256": "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985",
+    "input_ids_name": "input_ids",
+    "attention_mask_name": "attention_mask",
+    "max_length": 77,
+    "output_dimension": 512
+  },
+  "tokenizer": {
+    "vocab_path": "tokenizer/vocab.json",
+    "merges_path": "tokenizer/merges.txt",
+    "bos_id": 0,
+    "pad_id": 1,
+    "eos_id": 2,
+    "unk_id": 3
+  }
+}

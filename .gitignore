@@ -10,11 +10,7 @@ local.properties
 *.aab
 
 # Local model and dataset artifacts (downloaded/generated; some exceed GitHub limits)
-*.onnx
-*.onnx.data
-app/src/main/assets/dclap/
 dclap/.venv/
-dclap/models/
 dclap/data/
 dclap/evaluations/cache/
 dclap/fixtures/*.wav

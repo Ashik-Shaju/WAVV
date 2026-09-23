@@ -1,0 +1,95 @@
+{
+  "baseline": {
+    "artifacts": [
+      {
+        "path": "models\\v1\\clap_text_model.onnx",
+        "sha256": "200d48f3905ff1f272af5006dd9851f94071a7dde4eafd9c07bc09c5ac65a714",
+        "size_bytes": 501445503
+      }
+    ],
+    "inputs": [
+      {
+        "name": "input_ids",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ],
+        "type": "tensor(int64)"
+      },
+      {
+        "name": "attention_mask",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ],
+        "type": "tensor(int64)"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "text_embedding",
+        "shape": [
+          "batch_size",
+          512
+        ],
+        "type": "tensor(float)"
+      }
+    ],
+    "path": "models\\v1\\clap_text_model.onnx",
+    "providers": [
+      "CPUExecutionProvider"
+    ],
+    "sha256": "200d48f3905ff1f272af5006dd9851f94071a7dde4eafd9c07bc09c5ac65a714",
+    "size_bytes": 501445503
+  },
+  "candidate": {
+    "artifacts": [
+      {
+        "path": "models\\v1\\clap_text_model.int8.dynamic.per_channel.onnx",
+        "sha256": "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985",
+        "size_bytes": 126531567
+      }
+    ],
+    "inputs": [
+      {
+        "name": "input_ids",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ],
+        "type": "tensor(int64)"
+      },
+      {
+        "name": "attention_mask",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ],
+        "type": "tensor(int64)"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "text_embedding",
+        "shape": [
+          "batch_size",
+          512
+        ],
+        "type": "tensor(float)"
+      }
+    ],
+    "path": "models\\v1\\clap_text_model.int8.dynamic.per_channel.onnx",
+    "providers": [
+      "CPUExecutionProvider"
+    ],
+    "sha256": "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985",
+    "size_bytes": 126531567
+  },
+  "quantization": {
+    "activations": "dynamic",
+    "method": "ONNX Runtime quantize_dynamic",
+    "per_channel": true,
+    "reduce_range": false,
+    "weight_type": "QInt8"
+  }
+}

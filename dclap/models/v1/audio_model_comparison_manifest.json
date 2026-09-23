@@ -1,0 +1,86 @@
+{
+  "baseline": {
+    "artifacts": [
+      {
+        "path": "models\\v1\\model_epoch_36.onnx",
+        "sha256": "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971",
+        "size_bytes": 1243778
+      },
+      {
+        "path": "models\\v1\\model_epoch_36.onnx.data",
+        "sha256": "2a735b23c2aad7b12d9ffc85334cebcc659c07696d2ff60e2e378da28b6df657",
+        "size_bytes": 21168128
+      }
+    ],
+    "inputs": [
+      {
+        "name": "mel_spectrogram",
+        "shape": [
+          1,
+          1,
+          128,
+          "s35"
+        ],
+        "type": "tensor(float)"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "embedding",
+        "shape": [
+          1,
+          512
+        ],
+        "type": "tensor(float)"
+      }
+    ],
+    "path": "models\\v1\\model_epoch_36.onnx",
+    "providers": [
+      "CPUExecutionProvider"
+    ],
+    "sha256": "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971",
+    "size_bytes": 22411906
+  },
+  "candidate": {
+    "artifacts": [
+      {
+        "path": "models\\v1\\model_epoch_36.fp16.onnx",
+        "sha256": "ba3b0e635c7f976641bd6e12b7979ba52a5b018362f1b880091aae9a4dc3bc19",
+        "size_bytes": 11795607
+      }
+    ],
+    "inputs": [
+      {
+        "name": "mel_spectrogram",
+        "shape": [
+          1,
+          1,
+          128,
+          "s35"
+        ],
+        "type": "tensor(float)"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "embedding",
+        "shape": [
+          1,
+          512
+        ],
+        "type": "tensor(float)"
+      }
+    ],
+    "path": "models\\v1\\model_epoch_36.fp16.onnx",
+    "providers": [
+      "CPUExecutionProvider"
+    ],
+    "sha256": "ba3b0e635c7f976641bd6e12b7979ba52a5b018362f1b880091aae9a4dc3bc19",
+    "size_bytes": 11795607
+  },
+  "conversion": {
+    "external_data": false,
+    "keep_io_types": true,
+    "method": "onnxconverter-common float16.convert_float_to_float16"
+  }
+}

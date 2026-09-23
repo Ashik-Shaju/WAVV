@@ -10,12 +10,12 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The model files belong in `models\v1` and must remain side-by-side:
+The model files in `models\v1` and the Android asset copies are tracked with Git LFS. Install Git LFS before cloning, or run `git lfs pull` after cloning, so model pointers are replaced with the real files. Keep the audio model and its external data file side-by-side:
 
 - `model_epoch_36.onnx`
 - `model_epoch_36.onnx.data`
 
-They are release artifacts and are intentionally ignored by this folder's `.gitignore`.
+Large model files use Git LFS so collaborators share the same pinned artifacts without storing binaries in regular Git history.
 
 ## Run the gate
 
