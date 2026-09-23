@@ -315,8 +315,8 @@ Train only tasks with valid labels. Missing task labels must be masked rather th
 ## 8.3 Data
 
 Primary:
-- MTG-Jamendo
-- human-validated MTG-derived annotations
+- curated MTG-Jamendo split-0 training tags (weak labels), with split-0 validation for selection
+- human-validated MTG-derived annotations from split-0 test tracks for held-out evaluation only; do not combine numbered MTG partitions
 
 Emotion:
 - DEAM for valence/arousal

@@ -100,8 +100,10 @@ Do not use MUSDB18-HQ stems for the core UHQ training path.
 ## 4.2 Music Understanding
 
 Primary:
-- MTG-Jamendo
-- human-validated MTG-derived annotations
+- curated MTG-Jamendo split-0 training tags (weak labels; use split-0 validation for selection)
+- human-validated MTG-derived annotations from split-0 test tracks for evaluation only
+
+The numbered MTG-Jamendo partitions overlap and are alternative randomized splits; do not combine them.
 
 Emotion:
 - DEAM for valence/arousal
@@ -226,6 +228,8 @@ Implement:
 - window-level inference
 - song-level aggregation
 - profile cache
+
+Follow the [Music Understanding implementation plan](Wavv_Music_Understanding_Implementation_Plan.md) for artifact pinning, label/split gates, and held-out evaluation. Do not train on the human-validated split-0 test annotations.
 
 Exit:
 - metrics are recorded for each task;
@@ -707,4 +711,3 @@ When a model specification conflicts with an older project-level sentence, the n
 | Recommendation behavioral datasets | Recommendation/behavioral specification |
 | Execution order | `plan.md` |
 | Cloud computing architecture | `cloud_computing.md` + cloud decisions in `decisions.md` |
-

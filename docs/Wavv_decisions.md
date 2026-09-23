@@ -121,7 +121,7 @@ Selective upper-layer fine-tuning is an experiment only after the frozen baselin
 ## D-011 — MTG-Jamendo is the primary categorical Music Understanding source
 **Status:** Accepted
 
-Use MTG-Jamendo for genre, mood/theme and instrument-related supervision, with the human-validated MTG-derived annotations preferred where they directly support Wavv tasks.
+Train categorical heads from curated MTG-Jamendo split-0 training tags, treating them as weak labels. Use split-0 validation for selection and reserve its human-validated test annotations for independent evaluation only. Numbered partitions overlap and are alternative randomized splits; do not combine them. The human annotations cover selected tasks, not the full Wavv label set or instrument taxonomy. Record split and label mappings in the dataset manifest.
 
 DEAM is the primary auxiliary source for continuous valence/arousal.
 

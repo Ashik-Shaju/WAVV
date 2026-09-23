@@ -293,7 +293,7 @@ Do not force labels that are unsupported by training annotations.
 
 ## 9.1 MTG-Jamendo
 
-Use MTG-Jamendo as the primary source for categorical/music-attribute training.
+Use the official MTG-Jamendo training data as the primary source of categorical/music-attribute training targets. Treat the original user-provided tags as weak labels: curate mappings and report their coverage and noise rather than treating every tag as a clean class.
 
 The dataset contains more than 55,000 tracks and a large tag vocabulary spanning:
 
@@ -307,26 +307,9 @@ Do not blindly train on every original uploader tag as a single flat ontology.
 
 ## 9.2 Human-validated MTG-Jamendo classification annotations
 
-Use the derived **human-validated Music Classification Annotations** as the preferred source for the corresponding supervised tasks when available.
+Reserve the released human-validated Music Classification Annotations for independent evaluation. The released annotations cover MTG-Jamendo split-0 test tracks, so using them to fit a head would spend the held-out benchmark. The numbered official MTG-Jamendo splits are alternative randomized partitions, not independent folds; a split-0 test track can be in another split's training list. Use split 0 consistently for the categorical baseline and never combine numbered partitions. The clean release has four genre taxonomies with 411–612 unanimous examples each, six separate binary mood attributes with 5,678–7,686 examples each, 4,476 danceability labels, and 2,070 voice/instrumental labels. It does not supply a human-validated instrument taxonomy.
 
-These annotations were produced using established music-classification taxonomies and include labels for tasks such as:
-
-- genre
-- mood-related attributes
-- danceability
-- voice/instrumental
-- gender
-- tonal/atonal
-
-The clean subset keeps labels with perfect inter-annotator agreement.
-
-### Important correction to older documentation
-
-These annotations should **not** be treated only as an external evaluation set in V1.
-
-For the Wavv tasks they directly support, they may be used as **training targets**, provided the track split and label mapping are handled correctly.
-
-Do not simultaneously treat identical annotations as both training data and an independent evaluation set.
+Use these annotations only for the task definitions and tracks they actually cover. Keep all split-0 test tracks out of fitting and tuning, and do not report this set as an independent evaluation after using any of its labels during model selection. Confirm dataset version, track IDs, label definitions, and split membership in the dataset manifest before training.
 
 ---
 
@@ -985,11 +968,11 @@ text_embedding
 | Music Understanding backbone | **DyMN04-AS** |
 | DyMN backbone training | **Frozen initially** |
 | DyMN AudioSet logits | **Not used as Wavv outputs** |
-| Genre | Human-validated MTG-derived labels |
-| Mood | Human-validated MTG-derived labels |
-| Instruments | MTG-derived labels first |
-| Vocal/instrumental | Human-validated MTG-derived labels |
-| Danceability | Human-validated MTG-derived labels |
+| Genre | Curated MTG-Jamendo training tags; four human-validated split-0 taxonomies held out for evaluation |
+| Mood | Curated MTG-Jamendo training tags; evaluate the six matching human-validated binary attributes separately |
+| Instruments | MTG-Jamendo uploader tags as weak labels; no human-validated instrument taxonomy in this release |
+| Vocal/instrumental | Train only from an explicitly mapped training label; 2,070 human-validated examples for final evaluation |
+| Danceability | Train only from an explicitly mapped training label; 4,476 human-validated examples for final evaluation |
 | Valence | DEAM |
 | Arousal | DEAM |
 | BPM | DSP |
@@ -1008,6 +991,10 @@ text_embedding
 # 33. Source/Validation Notes
 
 This specification is based on the currently available Wavv project materials and the following evidence.
+
+### MTG-Jamendo labels and splits
+
+The official [dataset documentation](https://github.com/MTG/mtg-jamendo-dataset), [split generator](https://github.com/MTG/mtg-jamendo-dataset/blob/master/scripts/data_split.py), and [human-annotation description](https://github.com/MTG/mtg-jamendo-dataset/blob/master/derived/music-classification-annotations/README.md) show that the human-validated labels are for split-0 test tracks and that numbered splits are alternative randomized partitions. These files overlap, so split-0 test IDs must not be drawn into training from another numbered split. The clean human labels cover selected genre, binary mood, danceability, and voice/instrumental tasks; they do not provide human-validated instrument labels. See the [implementation research note](research/Wavv-Music-Understanding-Implementation-Research.md) for support counts and example overlap evidence.
 
 ### Project Music Understanding document
 
@@ -1052,7 +1039,8 @@ Do not silently introduce a new model, dataset, embedding fusion method, or trai
 **Primary semantic audio embedding:** DCLAP  
 **Primary text-to-audio alignment:** DCLAP-compatible text embedding space  
 **Music Understanding:** DyMN04-AS + Wavv-specific heads  
-**Primary categorical data:** Human-validated MTG-Jamendo annotations  
+**Categorical training data:** Curated MTG-Jamendo training tags  
+**Human-validated MTG-Jamendo annotations:** held-out split-0 evaluation only  
 **Primary emotion data:** DEAM  
 **DSP metadata:** BPM, key, loudness, duration  
 **Embedding fusion:** Deferred until measured  
