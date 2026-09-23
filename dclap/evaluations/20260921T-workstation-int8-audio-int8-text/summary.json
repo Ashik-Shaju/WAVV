@@ -1,0 +1,485 @@
+{
+  "audio_cache_files": {
+    "fp16": [
+      "genres/blues/blues.00000.wav",
+      "genres/blues/blues.00001.wav",
+      "genres/blues/blues.00002.wav"
+    ],
+    "fp32": [
+      "genres/blues/blues.00000.wav",
+      "genres/blues/blues.00001.wav",
+      "genres/blues/blues.00002.wav"
+    ],
+    "int8": [
+      "genres/blues/blues.00000.wav",
+      "genres/blues/blues.00001.wav",
+      "genres/blues/blues.00002.wav"
+    ]
+  },
+  "comparison": {
+    "audio_models": {
+      "fp16": "models\\v1\\model_epoch_36.fp16.onnx",
+      "fp32": "models\\v1\\model_epoch_36.onnx",
+      "int8": "models\\v1\\model_epoch_36.int8.dynamic.per_channel.onnx"
+    },
+    "baseline": "fp32_audio_fp32_text",
+    "text_models": {
+      "fp32": "models\\v1\\clap_text_model.onnx",
+      "int8": "models\\v1\\clap_text_model.int8.dynamic.per_channel.onnx"
+    },
+    "variants": [
+      "fp16_audio_fp32_text",
+      "fp16_audio_int8_text",
+      "fp32_audio_fp32_text",
+      "fp32_audio_int8_text",
+      "int8_audio_int8_text"
+    ]
+  },
+  "created_at": "2026-09-21T14:11:17.144684+00:00",
+  "dataset": {
+    "audio_count": 989,
+    "excluded_files": [
+      {
+        "genre": "jazz",
+        "local_path": "data\\gtzan\\jazz\\jazz.00054.wav",
+        "path": "genres/jazz/jazz.00054.wav",
+        "reason": "NoBackendError: source file is not decodable as audio"
+      }
+    ],
+    "genres": [
+      "blues",
+      "classical",
+      "country",
+      "disco",
+      "hiphop",
+      "jazz",
+      "metal",
+      "pop",
+      "reggae",
+      "rock"
+    ],
+    "manifest": "data\\gtzan\\dataset_manifest.json",
+    "relevance": "same GTZAN genre label"
+  },
+  "evaluation_scope": {
+    "android": "not used",
+    "dataset": "full local GTZAN manifest; 989 valid tracks",
+    "new_variant": "int8_audio_int8_text",
+    "other_variants_rerun": false,
+    "previous_results_reused": "20260921T-workstation-fp16-audio-int8-text"
+  },
+  "metrics": {
+    "audio_representation_preservation_fp32_to_fp16": {
+      "cosine_drop_mean": 2.9206275939941406e-06,
+      "cosine_similarity_mean": 0.999997079372406,
+      "cosine_similarity_median": 0.9999973773956299,
+      "cosine_similarity_p05": 0.9999947547912598,
+      "l2_mean": 0.002346883062273264,
+      "l2_median": 0.0022994554601609707,
+      "l2_p95": 0.003223459469154477,
+      "mse_mean": 1.12797762241712e-08,
+      "mse_median": 1.0327140032018178e-08,
+      "mse_p95": 2.02943510885234e-08
+    },
+    "audio_representation_preservation_fp32_to_int8": {
+      "cosine_drop_mean": 1.4066696166992188e-05,
+      "cosine_similarity_mean": 0.999985933303833,
+      "cosine_similarity_median": 0.9999862909317017,
+      "cosine_similarity_p05": 0.9999809861183167,
+      "l2_mean": 0.005289982073009014,
+      "l2_median": 0.0052352906204760075,
+      "l2_p95": 0.00616843905299902,
+      "mse_mean": 5.513078349395073e-08,
+      "mse_median": 5.353177101596884e-08,
+      "mse_p95": 7.431606974250826e-08
+    },
+    "audio_to_audio_control": {
+      "fp16": {
+        "average_precision": 0.6100155089454844,
+        "average_precision_at_10": 0.0740921168203777,
+        "hit_rate_at_1": 0.8574317492416582,
+        "hit_rate_at_10": 0.967644084934277,
+        "hit_rate_at_5": 0.9514661274014156,
+        "mAP": 0.6100155089454844,
+        "mAP_at_10": 0.0740921168203777,
+        "recall_at_1": 0.008647036594458231,
+        "recall_at_10": 0.07893658526621115,
+        "recall_at_5": 0.041152679474216386
+      },
+      "fp32": {
+        "average_precision": 0.609945735522808,
+        "average_precision_at_10": 0.07407690840223702,
+        "hit_rate_at_1": 0.8564206268958544,
+        "hit_rate_at_10": 0.9686552072800809,
+        "hit_rate_at_5": 0.9514661274014156,
+        "mAP": 0.609945735522808,
+        "mAP_at_10": 0.07407690840223702,
+        "recall_at_1": 0.008636925371000194,
+        "recall_at_10": 0.07893658526621115,
+        "recall_at_5": 0.041130210088754074
+      },
+      "int8": {
+        "average_precision": 0.6099615634390615,
+        "average_precision_at_10": 0.07406421433426826,
+        "hit_rate_at_1": 0.8564206268958544,
+        "hit_rate_at_10": 0.9686552072800809,
+        "hit_rate_at_5": 0.9514661274014156,
+        "mAP": 0.6099615634390615,
+        "mAP_at_10": 0.07406421433426826,
+        "recall_at_1": 0.008636925371000194,
+        "recall_at_10": 0.07889389343383277,
+        "recall_at_5": 0.04112122233456915
+      }
+    },
+    "baseline_retrieval": {
+      "average_precision": 0.6208021917434493,
+      "average_precision_at_10": 0.06981084255250923,
+      "hit_rate_at_1": 0.7333333333333333,
+      "hit_rate_at_10": 1.0,
+      "hit_rate_at_5": 0.9333333333333333,
+      "mAP": 0.6208021917434493,
+      "mAP_at_10": 0.06981084255250923,
+      "recall_at_1": 0.007343434343434345,
+      "recall_at_10": 0.075989898989899,
+      "recall_at_5": 0.03812457912457913
+    },
+    "candidate_retrieval": {
+      "average_precision": 0.6190323772987508,
+      "average_precision_at_10": 0.06851269440436107,
+      "hit_rate_at_1": 0.7333333333333333,
+      "hit_rate_at_10": 0.9666666666666667,
+      "hit_rate_at_5": 0.9666666666666667,
+      "mAP": 0.6190323772987508,
+      "mAP_at_10": 0.06851269440436107,
+      "recall_at_1": 0.007343434343434345,
+      "recall_at_10": 0.07454545454545454,
+      "recall_at_5": 0.0367912457912458
+    },
+    "definitions": {
+      "hit_rate_at_k": "fraction of queries with at least one relevant item in top K",
+      "mAP": "mean average precision over the full ranked corpus",
+      "mAP_at_10": "mean average precision truncated at rank 10",
+      "recall_at_k": "relevant items retrieved in top K divided by all relevant corpus items",
+      "relative_degradation_percent": "(candidate - baseline) / abs(baseline) * 100; negative is lower retrieval quality"
+    },
+    "isolated_conversion_effects_percent": {
+      "audio_fp16_holding_text_fp32": {
+        "average_precision": 0.0054461306367393466,
+        "average_precision_at_10": 0.0198950311743081,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": 0.0,
+        "hit_rate_at_5": 0.0,
+        "mAP": 0.0054461306367393466,
+        "mAP_at_10": 0.0198950311743081,
+        "recall_at_1": 0.0,
+        "recall_at_10": 0.0,
+        "recall_at_5": 0.0
+      },
+      "audio_fp16_holding_text_int8": {
+        "average_precision": -0.010493191586033783,
+        "average_precision_at_10": 0.0,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": 0.0,
+        "hit_rate_at_5": 0.0,
+        "mAP": -0.010493191586033783,
+        "mAP_at_10": 0.0,
+        "recall_at_1": 0.0,
+        "recall_at_10": 0.0,
+        "recall_at_5": 0.0
+      },
+      "audio_int8_holding_text_int8": {
+        "average_precision": -0.017672215934258835,
+        "average_precision_at_10": -0.008108139888006788,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": 0.0,
+        "hit_rate_at_5": 0.0,
+        "mAP": -0.017672215934258835,
+        "mAP_at_10": -0.008108139888006788,
+        "recall_at_1": 0.0,
+        "recall_at_10": 0.0,
+        "recall_at_5": 0.0
+      },
+      "text_int8_holding_audio_fp16": {
+        "average_precision": -0.28335595855826795,
+        "average_precision_at_10": -1.87108701245483,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": -3.3333333333333326,
+        "hit_rate_at_5": 3.5714285714285707,
+        "mAP": -0.28335595855826795,
+        "mAP_at_10": -1.87108701245483,
+        "recall_at_1": 0.0,
+        "recall_at_10": -1.9008374318755974,
+        "recall_at_5": -3.4973063675704283
+      },
+      "text_int8_holding_audio_fp32": {
+        "average_precision": -0.2674601333753762,
+        "average_precision_at_10": -1.8515642346249483,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": -3.3333333333333326,
+        "hit_rate_at_5": 3.5714285714285707,
+        "mAP": -0.2674601333753762,
+        "mAP_at_10": -1.8515642346249483,
+        "recall_at_1": 0.0,
+        "recall_at_10": -1.9008374318755974,
+        "recall_at_5": -3.4973063675704283
+      }
+    },
+    "relative_degradation_percent_vs_fp32_audio_fp32_text": {
+      "fp16_audio_fp32_text": {
+        "average_precision": 0.0054461306367393466,
+        "average_precision_at_10": 0.0198950311743081,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": 0.0,
+        "hit_rate_at_5": 0.0,
+        "mAP": 0.0054461306367393466,
+        "mAP_at_10": 0.0198950311743081,
+        "recall_at_1": 0.0,
+        "recall_at_10": 0.0,
+        "recall_at_5": 0.0
+      },
+      "fp16_audio_int8_text": {
+        "average_precision": -0.2779252598571986,
+        "average_precision_at_10": -1.8515642346249483,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": -3.3333333333333326,
+        "hit_rate_at_5": 3.5714285714285707,
+        "mAP": -0.2779252598571986,
+        "mAP_at_10": -1.8515642346249483,
+        "recall_at_1": 0.0,
+        "recall_at_10": -1.9008374318755974,
+        "recall_at_5": -3.4973063675704283
+      },
+      "fp32_audio_fp32_text": {
+        "average_precision": 0.0,
+        "average_precision_at_10": 0.0,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": 0.0,
+        "hit_rate_at_5": 0.0,
+        "mAP": 0.0,
+        "mAP_at_10": 0.0,
+        "recall_at_1": 0.0,
+        "recall_at_10": 0.0,
+        "recall_at_5": 0.0
+      },
+      "fp32_audio_int8_text": {
+        "average_precision": -0.2674601333753762,
+        "average_precision_at_10": -1.8515642346249483,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": -3.3333333333333326,
+        "hit_rate_at_5": 3.5714285714285707,
+        "mAP": -0.2674601333753762,
+        "mAP_at_10": -1.8515642346249483,
+        "recall_at_1": 0.0,
+        "recall_at_10": -1.9008374318755974,
+        "recall_at_5": -3.4973063675704283
+      },
+      "int8_audio_int8_text": {
+        "average_precision": -0.2850850831773269,
+        "average_precision_at_10": -1.8595222470946953,
+        "hit_rate_at_1": 0.0,
+        "hit_rate_at_10": -3.3333333333333326,
+        "hit_rate_at_5": 3.5714285714285707,
+        "mAP": -0.2850850831773269,
+        "mAP_at_10": -1.8595222470946953,
+        "recall_at_1": 0.0,
+        "recall_at_10": -1.9008374318755974,
+        "recall_at_5": -3.4973063675704283
+      }
+    },
+    "retrieval_by_variant": {
+      "fp16_audio_fp32_text": {
+        "average_precision": 0.6208360014418074,
+        "average_precision_at_10": 0.0698247314413981,
+        "hit_rate_at_1": 0.7333333333333333,
+        "hit_rate_at_10": 1.0,
+        "hit_rate_at_5": 0.9333333333333333,
+        "mAP": 0.6208360014418074,
+        "mAP_at_10": 0.0698247314413981,
+        "recall_at_1": 0.007343434343434345,
+        "recall_at_10": 0.075989898989899,
+        "recall_at_5": 0.03812457912457913
+      },
+      "fp16_audio_int8_text": {
+        "average_precision": 0.6190768256388471,
+        "average_precision_at_10": 0.06851824995991664,
+        "hit_rate_at_1": 0.7333333333333333,
+        "hit_rate_at_10": 0.9666666666666667,
+        "hit_rate_at_5": 0.9666666666666667,
+        "mAP": 0.6190768256388471,
+        "mAP_at_10": 0.06851824995991664,
+        "recall_at_1": 0.007343434343434345,
+        "recall_at_10": 0.07454545454545454,
+        "recall_at_5": 0.0367912457912458
+      },
+      "fp32_audio_fp32_text": {
+        "average_precision": 0.6208021917434493,
+        "average_precision_at_10": 0.06981084255250923,
+        "hit_rate_at_1": 0.7333333333333333,
+        "hit_rate_at_10": 1.0,
+        "hit_rate_at_5": 0.9333333333333333,
+        "mAP": 0.6208021917434493,
+        "mAP_at_10": 0.06981084255250923,
+        "recall_at_1": 0.007343434343434345,
+        "recall_at_10": 0.075989898989899,
+        "recall_at_5": 0.03812457912457913
+      },
+      "fp32_audio_int8_text": {
+        "average_precision": 0.619141793373415,
+        "average_precision_at_10": 0.06851824995991664,
+        "hit_rate_at_1": 0.7333333333333333,
+        "hit_rate_at_10": 0.9666666666666667,
+        "hit_rate_at_5": 0.9666666666666667,
+        "mAP": 0.619141793373415,
+        "mAP_at_10": 0.06851824995991664,
+        "recall_at_1": 0.007343434343434345,
+        "recall_at_10": 0.07454545454545454,
+        "recall_at_5": 0.0367912457912458
+      },
+      "int8_audio_int8_text": {
+        "average_precision": 0.6190323772987508,
+        "average_precision_at_10": 0.06851269440436107,
+        "hit_rate_at_1": 0.7333333333333333,
+        "hit_rate_at_10": 0.9666666666666667,
+        "hit_rate_at_5": 0.9666666666666667,
+        "mAP": 0.6190323772987508,
+        "mAP_at_10": 0.06851269440436107,
+        "recall_at_1": 0.007343434343434345,
+        "recall_at_10": 0.07454545454545454,
+        "recall_at_5": 0.0367912457912458
+      }
+    },
+    "text_representation_preservation_fp32_to_int8": {
+      "cosine_drop_mean": 0.013168156147003174,
+      "cosine_similarity_mean": 0.9868318438529968,
+      "cosine_similarity_median": 0.98912113904953,
+      "cosine_similarity_p05": 0.9717245101928711,
+      "l2_mean": 0.15560196340084076,
+      "l2_median": 0.14750508964061737,
+      "l2_p95": 0.23767444491386414,
+      "mse_mean": 5.1438149966998026e-05,
+      "mse_median": 4.249575431458652e-05,
+      "mse_p95": 0.0001104513939935714
+    }
+  },
+  "performance_comparison": {
+    "audio_fp32_to_fp16": {
+      "model_size_bytes": {
+        "baseline": 22411906,
+        "candidate": 11795607,
+        "relative_change_percent": -47.36901448721051
+      },
+      "rss_delta_mb": {
+        "baseline": 30.5625,
+        "candidate": 17.4296875,
+        "relative_change_percent": -42.97034764826176
+      },
+      "session_creation_ms": {
+        "baseline": 143.53859999937413,
+        "candidate": 231.479500000205,
+        "relative_change_percent": 61.26637712867085
+      },
+      "warm_latency_mean_ms": {
+        "baseline": 32.82438333333333,
+        "candidate": 251.74039666666667,
+        "relative_change_percent": 666.9310771514877
+      },
+      "warm_latency_median_ms": {
+        "baseline": 33.08455,
+        "candidate": 250.22075,
+        "relative_change_percent": 656.3069468981746
+      },
+      "warm_latency_p95_ms": {
+        "baseline": 34.70798,
+        "candidate": 262.88581,
+        "relative_change_percent": 657.421809047948
+      }
+    },
+    "audio_fp32_to_int8": {
+      "model_size_bytes": {
+        "baseline": 22411906,
+        "candidate": 11409415,
+        "relative_change_percent": -49.092170027841455
+      },
+      "rss_delta_mb": {
+        "baseline": 30.5625,
+        "candidate": 13.32421875,
+        "relative_change_percent": -56.40337423312884
+      },
+      "session_creation_ms": {
+        "baseline": 143.53859999937413,
+        "candidate": 142.69950000016252,
+        "relative_change_percent": -0.5845814291175133
+      },
+      "warm_latency_mean_ms": {
+        "baseline": 32.82438333333333,
+        "candidate": 35.00492,
+        "relative_change_percent": 6.643039244707828
+      },
+      "warm_latency_median_ms": {
+        "baseline": 33.08455,
+        "candidate": 34.77585,
+        "relative_change_percent": 5.112053813638083
+      },
+      "warm_latency_p95_ms": {
+        "baseline": 34.70798,
+        "candidate": 36.477795,
+        "relative_change_percent": 5.099158752540486
+      }
+    },
+    "text_fp32_to_int8": {
+      "model_size_bytes": {
+        "baseline": 501445503,
+        "candidate": 126531567,
+        "relative_change_percent": -74.76663640555174
+      },
+      "rss_delta_mb": {
+        "baseline": 862.3125,
+        "candidate": 209.5859375,
+        "relative_change_percent": -75.69489744147279
+      },
+      "session_creation_ms": {
+        "baseline": 764.2582999997103,
+        "candidate": 386.96990000062215,
+        "relative_change_percent": -49.36660812178699
+      },
+      "warm_latency_mean_ms": {
+        "baseline": 159.98154333333332,
+        "candidate": 55.913023333333335,
+        "relative_change_percent": -65.05032882647316
+      },
+      "warm_latency_median_ms": {
+        "baseline": 159.92374999999998,
+        "candidate": 55.98365,
+        "relative_change_percent": -64.99353598199141
+      },
+      "warm_latency_p95_ms": {
+        "baseline": 164.00646500000002,
+        "candidate": 57.531025,
+        "relative_change_percent": -64.9214895278671
+      }
+    }
+  },
+  "performance_file": "performance.json",
+  "reused_results": {
+    "performance": {
+      "audio_fp16": true,
+      "audio_fp32": true,
+      "text_fp32": true,
+      "text_int8": true
+    },
+    "summary": "evaluations\\20260921T-workstation-fp16-audio-int8-text\\summary.json"
+  },
+  "run_id": "20260921T-workstation-int8-audio-int8-text",
+  "runtime": {
+    "cpu": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+    "onnxruntime": "1.22.0",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]"
+  },
+  "tokenizer": {
+    "max_length": 77,
+    "padding": "max_length",
+    "path": "models\\v1\\tokenizer",
+    "truncation": true
+  }
+}

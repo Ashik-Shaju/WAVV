@@ -1,0 +1,74 @@
+{
+  "scope": {
+    "new_variant": "int8_audio_int8_text",
+    "other_combinations_rerun": false,
+    "audio_reference": "fp32_audio_only_for_device_representation"
+  },
+  "device": {
+    "manufacturer": "vivo",
+    "model": "I2018",
+    "device": "2018",
+    "sdk": 33,
+    "abis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "armeabi"
+    ]
+  },
+  "cpu": {
+    "features": "fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp",
+    "neon": true,
+    "dotprod": true,
+    "execution_provider": "CPUExecutionProvider",
+    "available_providers": [
+      "CPUExecutionProvider",
+      "NnapiExecutionProvider",
+      "XnnpackExecutionProvider"
+    ],
+    "intra_op_threads": 8,
+    "acceleration": "ONNX Runtime ARM CPU kernels with NEON and dotprod dispatch"
+  },
+  "fixture": {
+    "audio_records": 30,
+    "text_queries": 30,
+    "tracks_per_genre": 3,
+    "application_independent": true
+  },
+  "representation": {
+    "audio_fp32_to_int8": {
+      "cosine_mean": 0.9999857454715577,
+      "cosine_median": 0.9999869716877682,
+      "mse_mean": 5.568117685206762E-8,
+      "l2_mean": 0.005313026520311318
+    }
+  },
+  "retrieval_by_variant": {
+    "int8_audio_int8_text": {
+      "mAP": 0.6469213633782663,
+      "mAP_at_10": 0.6281613756613758,
+      "recall_at_1": 0.23333333333333325,
+      "recall_at_5": 0.7000000000000003,
+      "recall_at_10": 0.8777777777777778
+    }
+  },
+  "performance": {
+    "audio_fp32_reference": {
+      "model": "model_epoch_36.onnx",
+      "session_creation_ms": 208.20276,
+      "rss_delta_mb": 28.7431640625,
+      "warm_single_window_ms": 240.1175104
+    },
+    "audio_int8": {
+      "model": "model_epoch_36.int8.dynamic.per_channel.onnx",
+      "session_creation_ms": 188.817969,
+      "rss_delta_mb": 13.13671875,
+      "warm_single_window_ms": 259.5134164
+    },
+    "text_int8": {
+      "model": "clap_text_model.int8.dynamic.per_channel.onnx",
+      "session_creation_ms": 594.072604,
+      "rss_delta_mb": 211.96875,
+      "warm_single_query_ms": 179.7418646
+    }
+  }
+}

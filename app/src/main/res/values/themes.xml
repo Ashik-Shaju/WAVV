@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Wavv" parent="android:style/Theme.DeviceDefault.NoActionBar" />
+</resources>

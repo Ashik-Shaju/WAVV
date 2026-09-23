@@ -1,0 +1,56 @@
+{
+  "model_id": "audiomuse-dclap-v1-fp32-audio-int8-text",
+  "release": "https://github.com/NeptuneHub/AudioMuse-AI-DCLAP/releases/tag/v1",
+  "license": "AGPL-3.0",
+  "audio": {
+    "files": [
+      {
+        "path": "models/v1/model_epoch_36.onnx",
+        "url": "https://github.com/NeptuneHub/AudioMuse-AI-DCLAP/releases/download/v1/model_epoch_36.onnx",
+        "size_bytes": 1243778,
+        "sha256": "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971"
+      },
+      {
+        "path": "models/v1/model_epoch_36.onnx.data",
+        "url": "https://github.com/NeptuneHub/AudioMuse-AI-DCLAP/releases/download/v1/model_epoch_36.onnx.data",
+        "size_bytes": 21168128,
+        "sha256": "2a735b23c2aad7b12d9ffc85334cebcc659c07696d2ff60e2e378da28b6df657"
+      }
+    ],
+    "input_name": "mel_spectrogram",
+    "input_dtype": "float32",
+    "input_shape": [1, 1, 128, 1001],
+    "output_shape": [1, 512],
+    "normalized": true,
+    "preprocessing": {
+      "sample_rate": 48000,
+      "segment_samples": 480000,
+      "segment_hop_samples": 240000,
+      "n_mels": 128,
+      "n_fft": 2048,
+      "mel_hop_samples": 480,
+      "window": "hann",
+      "center": true,
+      "pad_mode": "reflect",
+      "fmin": 0,
+      "fmax": 14000,
+      "power": 2.0,
+      "db_ref": 1.0,
+      "db_amin": 1e-10,
+      "db_top": null,
+      "audio_quantization": "clip [-1, 1], int16, float32 / 32767"
+    },
+    "onnx_opset": 18
+  },
+  "text": {
+    "status": "selected_fp32_audio_int8_text",
+    "path": "models/v1/clap_text_model.onnx",
+    "selected_path": "models/v1/clap_text_model.int8.dynamic.per_channel.onnx",
+    "selected_size_bytes": 126531567,
+    "selected_sha256": "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985",
+    "url": "https://github.com/NeptuneHub/AudioMuse-AI-DCLAP/releases/download/v1/clap_text_model.onnx",
+    "size_bytes": 501445503,
+    "sha256": "200d48f3905ff1f272af5006dd9851f94071a7dde4eafd9c07bc09c5ac65a714",
+    "license": "CC0-1.0 for the LAION CLAP text head; MIT for the matching RoBERTa tokenizer"
+  }
+}

@@ -1,0 +1,154 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
+@import 'tailwindcss';
+
+* { box-sizing: border-box; }
+
+html { height: -webkit-fill-available; }
+
+body {
+  font-family: 'Nunito', sans-serif;
+  margin: 0; padding: 0;
+  background: #000;
+  overflow: hidden;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.glass-btn {
+  background: rgba(255,255,255,0.12);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, transform 0.15s;
+  color: white;
+}
+.glass-btn:hover { background: rgba(255,255,255,0.22); transform: scale(1.06); }
+.glass-btn:active { transform: scale(0.94); }
+
+.glass-pill {
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 999px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  color: white;
+}
+.glass-pill:hover { background: rgba(255,255,255,0.18); }
+
+/* Search bar gradient border shift */
+@keyframes searchHueShift {
+  0%   { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
+/* Top gradient fades in when card changes */
+@keyframes gradFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes sphereFloat {
+  0%   { transform: translateY(0px) scale(1); }
+  100% { transform: translateY(-18px) scale(1.04); }
+}
+@keyframes sphereGlow {
+  0%   { opacity: 0.35; transform: scale(1); }
+  100% { opacity: 0.65; transform: scale(1.15); }
+}
+@keyframes auroraMain {
+  0%   { transform: translate(0%, 0%) scale(1);    opacity: 0.85; }
+  33%  { transform: translate(8%, -6%) scale(1.1); opacity: 1; }
+  66%  { transform: translate(-6%, 4%) scale(0.96); opacity: 0.9; }
+  100% { transform: translate(4%, -2%) scale(1.05); opacity: 0.85; }
+}
+@keyframes auroraSecond {
+  0%   { transform: translate(0%, 0%) scale(1);     opacity: 0.5; }
+  50%  { transform: translate(-10%, 8%) scale(1.12); opacity: 0.75; }
+  100% { transform: translate(6%, -4%) scale(0.95);  opacity: 0.5; }
+}
+@keyframes orbDrift1 {
+  0%   { transform: translate(0px, 0px) scale(1); }
+  100% { transform: translate(14px, -20px) scale(1.08); }
+}
+@keyframes orbDrift2 {
+  0%   { transform: translate(0px, 0px) scale(1); }
+  100% { transform: translate(-10px, 12px) scale(1.12); }
+}
+@keyframes orbDrift3 {
+  0%   { transform: translate(0px, 0px) scale(1); }
+  100% { transform: translate(8px, -8px) scale(0.94); }
+}
+@keyframes glowShift {
+  0%   { transform: translate(0px, 0px) scale(1);    opacity: 0.75; }
+  100% { transform: translate(-14px, 10px) scale(1.15); opacity: 1; }
+}
+@keyframes glowBase {
+  0%   { opacity: 0.85; }
+  100% { opacity: 1; }
+}
+@keyframes raySweep {
+  0%   { transform: translateX(-120%) skewX(-12deg); opacity: 0; }
+  10%  { opacity: 1; }
+  60%  { opacity: 1; }
+  100% { transform: translateX(220%) skewX(-12deg); opacity: 0; }
+}
+@keyframes rayPulse {
+  0%, 100% { opacity: 0.85; }
+  50%       { opacity: 1; }
+}
+@keyframes meshDrift {
+  0%   { transform: scale(1)    rotate(0deg)   translate(0%, 0%); }
+  33%  { transform: scale(1.08) rotate(3deg)   translate(2%, -3%); }
+  66%  { transform: scale(1.04) rotate(-2deg)  translate(-3%, 2%); }
+  100% { transform: scale(1.1)  rotate(4deg)   translate(1%, -1%); }
+}
+
+@keyframes ambientGlow {
+  0% { transform: translateX(-5%) translateY(2%) scale(0.95); opacity: 0.3; }
+  100% { transform: translateX(5%) translateY(-2%) scale(1.05); opacity: 0.6; }
+}
+
+.progress-track {
+  position: relative;
+  height: 3px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: white;
+  position: relative;
+  transition: width 0.15s ease-out;
+}
+.progress-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: white;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.progress-track:hover .progress-thumb { opacity: 1; }
+
+.hide-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.hide-scroll::-webkit-scrollbar { display: none; }

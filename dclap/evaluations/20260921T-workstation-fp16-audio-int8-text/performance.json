@@ -1,0 +1,223 @@
+{
+  "audio_fp16": {
+    "model": {
+      "artifacts": [
+        {
+          "path": "models\\v1\\model_epoch_36.fp16.onnx",
+          "sha256": "ba3b0e635c7f976641bd6e12b7979ba52a5b018362f1b880091aae9a4dc3bc19",
+          "size_bytes": 11795607
+        }
+      ],
+      "inputs": [
+        {
+          "name": "mel_spectrogram",
+          "shape": [
+            1,
+            1,
+            128,
+            "s35"
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "embedding",
+          "shape": [
+            1,
+            512
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "path": "models\\v1\\model_epoch_36.fp16.onnx",
+      "providers": [
+        "CPUExecutionProvider"
+      ],
+      "sha256": "ba3b0e635c7f976641bd6e12b7979ba52a5b018362f1b880091aae9a4dc3bc19",
+      "size_bytes": 11795607
+    },
+    "repeats": 30,
+    "rss_after_session_mb": 329.34765625,
+    "rss_before_mb": 311.91796875,
+    "rss_delta_mb": 17.4296875,
+    "session_creation_ms": 231.479500000205,
+    "warm_single_window_latency_ms": {
+      "max": 265.1471,
+      "mean": 251.74039666666667,
+      "median": 250.22075,
+      "min": 238.1335,
+      "p95": 262.88581
+    }
+  },
+  "audio_fp32": {
+    "model": {
+      "artifacts": [
+        {
+          "path": "models\\v1\\model_epoch_36.onnx",
+          "sha256": "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971",
+          "size_bytes": 1243778
+        },
+        {
+          "path": "models\\v1\\model_epoch_36.onnx.data",
+          "sha256": "2a735b23c2aad7b12d9ffc85334cebcc659c07696d2ff60e2e378da28b6df657",
+          "size_bytes": 21168128
+        }
+      ],
+      "inputs": [
+        {
+          "name": "mel_spectrogram",
+          "shape": [
+            1,
+            1,
+            128,
+            "s35"
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "embedding",
+          "shape": [
+            1,
+            512
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "path": "models\\v1\\model_epoch_36.onnx",
+      "providers": [
+        "CPUExecutionProvider"
+      ],
+      "sha256": "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971",
+      "size_bytes": 22411906
+    },
+    "repeats": 30,
+    "rss_after_session_mb": 337.4453125,
+    "rss_before_mb": 306.8828125,
+    "rss_delta_mb": 30.5625,
+    "session_creation_ms": 143.53859999937413,
+    "warm_single_window_latency_ms": {
+      "max": 35.0278,
+      "mean": 32.82438333333333,
+      "median": 33.08455,
+      "min": 29.7656,
+      "p95": 34.70798
+    }
+  },
+  "text_fp32": {
+    "model": {
+      "artifacts": [
+        {
+          "path": "models\\v1\\clap_text_model.onnx",
+          "sha256": "200d48f3905ff1f272af5006dd9851f94071a7dde4eafd9c07bc09c5ac65a714",
+          "size_bytes": 501445503
+        }
+      ],
+      "inputs": [
+        {
+          "name": "input_ids",
+          "shape": [
+            "batch_size",
+            "sequence_length"
+          ],
+          "type": "tensor(int64)"
+        },
+        {
+          "name": "attention_mask",
+          "shape": [
+            "batch_size",
+            "sequence_length"
+          ],
+          "type": "tensor(int64)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text_embedding",
+          "shape": [
+            "batch_size",
+            512
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "path": "models\\v1\\clap_text_model.onnx",
+      "providers": [
+        "CPUExecutionProvider"
+      ],
+      "sha256": "200d48f3905ff1f272af5006dd9851f94071a7dde4eafd9c07bc09c5ac65a714",
+      "size_bytes": 501445503
+    },
+    "repeats": 30,
+    "rss_after_session_mb": 1174.046875,
+    "rss_before_mb": 311.734375,
+    "rss_delta_mb": 862.3125,
+    "session_creation_ms": 764.2582999997103,
+    "warm_single_query_latency_ms": {
+      "max": 166.4341,
+      "mean": 159.98154333333332,
+      "median": 159.92374999999998,
+      "min": 153.4427,
+      "p95": 164.00646500000002
+    }
+  },
+  "text_int8": {
+    "model": {
+      "artifacts": [
+        {
+          "path": "models\\v1\\clap_text_model.int8.dynamic.per_channel.onnx",
+          "sha256": "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985",
+          "size_bytes": 126531567
+        }
+      ],
+      "inputs": [
+        {
+          "name": "input_ids",
+          "shape": [
+            "batch_size",
+            "sequence_length"
+          ],
+          "type": "tensor(int64)"
+        },
+        {
+          "name": "attention_mask",
+          "shape": [
+            "batch_size",
+            "sequence_length"
+          ],
+          "type": "tensor(int64)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text_embedding",
+          "shape": [
+            "batch_size",
+            512
+          ],
+          "type": "tensor(float)"
+        }
+      ],
+      "path": "models\\v1\\clap_text_model.int8.dynamic.per_channel.onnx",
+      "providers": [
+        "CPUExecutionProvider"
+      ],
+      "sha256": "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985",
+      "size_bytes": 126531567
+    },
+    "repeats": 30,
+    "rss_after_session_mb": 536.48828125,
+    "rss_before_mb": 326.90234375,
+    "rss_delta_mb": 209.5859375,
+    "session_creation_ms": 386.96990000062215,
+    "warm_single_query_latency_ms": {
+      "max": 58.4148,
+      "mean": 55.913023333333335,
+      "median": 55.98365,
+      "min": 53.1973,
+      "p95": 57.531025
+    }
+  }
+}

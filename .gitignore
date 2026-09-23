@@ -1,0 +1,42 @@
+# Android / Gradle
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+*.apk
+*.aab
+
+# Local model and dataset artifacts (downloaded/generated; some exceed GitHub limits)
+*.onnx
+*.onnx.data
+app/src/main/assets/dclap/
+dclap/.venv/
+dclap/models/
+dclap/data/
+dclap/evaluations/cache/
+dclap/fixtures/*.wav
+
+# Web dependencies and generated output
+wavv/node_modules/
+wavv/dist/
+wavv/.vite/
+wavv/*.tsbuildinfo
+
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Local exports and machine data
+/wavv.make
+*.hprof
+*.log
+Thumbs.db
+Desktop.ini

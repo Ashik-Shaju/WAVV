@@ -1,0 +1,10 @@
+{
+  "description": "Streamline your local music experience with dynamic album art, subtle motion gradients, and intuitive playback controls for immersive listening.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
