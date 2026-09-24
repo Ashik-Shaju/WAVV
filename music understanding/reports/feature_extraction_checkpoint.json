@@ -1,0 +1,18 @@
+{
+  "availability_report_sha256": "d5008930ae77b4a40bbb7de028093a90bd6219b9eda0c6a2448b02fae8552eb4",
+  "cache_path_local_ignored": "data/features/mtg_dymn04as_800.sqlite",
+  "cache_size_bytes": 417792,
+  "cached_features_finite_and_384d": true,
+  "cached_id_split_artist_mapping_matches_manifest": true,
+  "cached_rows": 193,
+  "candidate_inventory_sha256": "8dedce1f0d9fa2890007d1833d777c0577e168dbb5677d502d8f64a94f612185",
+  "checkpoint_date": "2026-09-25",
+  "manifest_rows": 800,
+  "manifest_sha256": "ec17cb3d1b7e0ee9f3f5d8c3c272b5f98fcf1699bcfe1514fb4906e9fed49be1",
+  "remaining_rows": 607,
+  "resume_command": ".\\.venv\\Scripts\\python.exe scripts\\extract_mtg_features.py",
+  "sqlite_integrity": "ok",
+  "state": "paused_by_user",
+  "temporary_audio_files": 0,
+  "training_started": false
+}

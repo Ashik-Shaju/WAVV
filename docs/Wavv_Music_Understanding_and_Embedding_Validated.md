@@ -293,7 +293,7 @@ Do not force labels that are unsupported by training annotations.
 
 ## 9.1 MTG-Jamendo
 
-Use the official MTG-Jamendo training data as the primary source of categorical/music-attribute training targets. Treat the original user-provided tags as weak labels: curate mappings and report their coverage and noise rather than treating every tag as a clean class.
+For eventual expansion, use the official MTG-Jamendo training data as the primary source of categorical/music-attribute targets. Treat uploader tags as weak labels: curate mappings and report their coverage and noise rather than treating every tag as a clean class. The first CPU-constrained baseline is narrower: it uses the pinned human-annotation IDs with a custom artist-grouped split, as specified in `docs/Wavv_Music_Understanding_Implementation_Plan.md`; it does not download or train on the full official train partition.
 
 The dataset contains more than 55,000 tracks and a large tag vocabulary spanning:
 
@@ -309,7 +309,7 @@ Do not blindly train on every original uploader tag as a single flat ontology.
 
 Use the exact hash-verified pinned Music Classification Annotations TSV as the source of labels and parsed support; record its differences from the README as upstream documentation drift. Select only taxonomies with clear semantics and sufficient class/artist support. These tracks are in split-0 test, so any IDs used for fitting or tuning lose their original split-0 test status. Create one custom artist-grouped split for the selected tracks; never combine numbered MTG partitions, which overlap. The release defines four genre taxonomies, seven separate binary mood attributes, danceability, gender, tonal/atonal, and voice/instrumental. It does not supply human-validated instrument labels. Use MTG uploader tags on the same selected recordings for broader weak-tag tasks and keep results by label source/task separate. The clean TSV retains `voice` without an `instrumental` negative class, so it cannot by itself train or validate a vocal/instrumental binary output. Exclude the `instrumental` responses from gender's male/female label counts.
 
-Use the smallest artist-grouped audio subset that satisfies each selected task's class-support and validation gates. Begin with a few-hundred-track extraction timing pilot. Increase only the fit groups when validation or class support is inadequate; freeze validation and test artists, and do not claim a fixed cap is sufficient before measuring it. Confirm dataset version, track IDs, label definitions, taxonomy counts, and split membership in the dataset manifest before training.
+For the first CPU-constrained baseline, use the frozen 800-ID eligible manifest: 560 fit, 120 validation, and 120 test tracks with no artist or track overlap. The exact selected tasks and their per-class support are in the implementation plan and generated manifest report. This cap passes the declared minimum reporting floors for eight human-label tasks, but it does not guarantee useful accuracy. Gender and tonal/atonal fail the rare-class floors; uploader tags at this cap have no labels meeting the same support requirements. Defer these tasks until a measured validation failure or coverage gap justifies a larger manifest. The 4,250-track value is an optional expansion ceiling, not the first extraction target.
 
 ---
 
@@ -331,7 +331,7 @@ The supplied DEAM manual states:
 - dynamic arousal annotations are generally higher quality than dynamic valence
 - 2015 evaluation-set valence is particularly reliable
 
-Use DEAM to train/adapt the emotion head.
+Use DEAM to train/adapt the emotion head only after choosing the target contract and aligning timestamps to audio. DEAM is deferred from the first 800-track baseline.
 
 Do not build a completely separate large emotion network for V1.
 
@@ -339,7 +339,7 @@ Do not build a completely separate large emotion network for V1.
 
 # 11. Final Label Scope
 
-Keep V1 compact and useful.
+Keep the eventual V1 profile compact and useful. The first baseline does not implement every output below: its supported set is the eight tasks in the 800-track manifest. Defer genre, instruments, vocal/instrumental, gender, tonal/atonal, and valence/arousal when their labels or class support do not pass the documented gates.
 
 ## Genre
 
@@ -383,7 +383,7 @@ Only add OpenMIC later if testing proves MTG instrument coverage/quality inadequ
 
 ## Vocal/instrumental
 
-Use the validated MTG-derived voice/instrumental annotation where available.
+The clean MTG annotation has no instrumental-negative class, so it cannot train a binary vocal/instrumental head. Defer this output until a validated negative-label source is selected.
 
 ## Danceability
 
@@ -615,25 +615,23 @@ The coding agent MUST:
 
 ## Stage 0 — Pipeline smoke test
 
-Use a small subset:
-
-- approximately 1,000 tracks
+Run the 9-track feature-extraction smoke check, then complete the frozen 800-track feature cache only after it passes. The 800-track capped cohort is for the first low-resource baseline, not a population-representative sample.
 
 Verify:
 
 - loaders
 - feature extraction
 - labels
-- losses
-- metrics
-- output schema
-- checkpointing
+- feature/cache integrity and repeatability
+- exact split-manifest alignment
+- output metadata and checkpoint contract
 
 ## Stage 1 — Frozen backbone
 
-- freeze DyMN04-AS
-- train Wavv task heads
-- evaluate all tasks
+- freeze DyMN04-AS and fit eight independent binary logistic heads on its 384-D pooled features
+- train each head only on fit rows with its label; fit standardization on fit data only
+- select L2 regularization by validation AUROC and threshold by validation macro-F1
+- compare with a majority baseline, then evaluate once on the locked artist-disjoint test cohort
 
 ## Stage 2 — Improve data/labels
 

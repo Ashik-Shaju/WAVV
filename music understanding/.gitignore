@@ -1,5 +1,11 @@
 .venv/
 vendor/
-data/
+data/*
+!data/manifests/
+data/manifests/*
+!data/manifests/mtg_human_fit.jsonl
+!data/manifests/mtg_human_validation.jsonl
+!data/manifests/mtg_human_test.jsonl
+!data/manifests/mtg_human_candidates.jsonl
 __pycache__/
 *.py[cod]

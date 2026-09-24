@@ -291,7 +291,7 @@ Use **DyMN04-AS**.
 
 Initial policy:
 - frozen pretrained backbone;
-- Wavv-specific heads on an intermediate feature representation;
+- Wavv-specific heads on the verified 384-value pooled feature;
 - verify the exact feature layer against the actual model implementation.
 
 Do not use the AudioSet 527-class logits as Wavv metadata.
@@ -311,6 +311,10 @@ arousal
 ```
 
 Train only tasks with valid labels. Missing task labels must be masked rather than forcing every track to contribute to every head.
+
+The first low-resource fit uses eight independent one-logit binary logistic heads. Fit each head only on rows with that task's consensus label; fit feature standardization on fit rows only. Tune regularization and the decision threshold on validation, and do not inspect test scores until the model is locked.
+
+The first low-resource baseline is narrower than the eventual profile: use the eight human-annotation tasks retained by the frozen 800-track manifest in the [implementation plan](Wavv_Music_Understanding_Implementation_Plan.md). Gender, tonal/atonal, uploader-tag heads, vocal/instrumental, instruments, and DEAM valence/arousal are deferred until their support/target contracts pass the same evidence gates. Empty or deferred fields remain unavailable; do not synthesize predictions for them.
 
 ## 8.3 Data
 

@@ -23,8 +23,8 @@
     "commit": "cafd8e20c265ed84f1e61f1c875327971f43a62f",
     "metadata_license": "CC-BY-NC-SA-4.0",
     "usage": "non-commercial research and academic use only per upstream; individual audio terms are user-managed and not verified here",
-    "split_policy": "split-0 only; other numbered partitions are alternate splits and must not be combined",
-    "human_annotations": "track IDs are in split-0 test; selected tasks may use them after source reconciliation and a custom artist-grouped split, retiring the original split-0 test claim for reused IDs"
+    "split_policy": "Use only pinned split-0 metadata for source tags; numbered MTG partitions are alternate splits and must not be combined. The human-annotation IDs are re-split by artist into custom fit/validation/test partitions.",
+    "human_annotations": "Track IDs originate in split-0 test; all reused IDs retire their original split-0 test claim. Current eligible-ID inventory and custom artist-grouped manifest are recorded in reports/jamendo_availability.json and reports/mtg_human_manifest.json."
   },
   "deam": {
     "dataset_page": "https://cvml.unige.ch/databases/DEAM/",

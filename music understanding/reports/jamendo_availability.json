@@ -1,0 +1,157 @@
+{
+  "annotated_tracks": 10671,
+  "annotation_sha256": "9b060b3db785d475870ceb0682241782bf20053d751863fbd42e02cf11088e1d",
+  "audio_downloaded": false,
+  "audited_on": "2026-09-24",
+  "availability": {
+    "eligible": 4915,
+    "not_allowed": 228,
+    "not_returned": 5528
+  },
+  "client_id_recorded": false,
+  "human_label_support": {
+    "danceability": {
+      "danceable": {
+        "annotated_artists": 367,
+        "annotated_tracks": 1698,
+        "eligible_artists": 202,
+        "eligible_tracks": 789
+      },
+      "not_danceable": {
+        "annotated_artists": 441,
+        "annotated_tracks": 2759,
+        "eligible_artists": 244,
+        "eligible_tracks": 1231
+      }
+    },
+    "gender": {
+      "female": {
+        "annotated_artists": 263,
+        "annotated_tracks": 1814,
+        "eligible_artists": 148,
+        "eligible_tracks": 814
+      },
+      "male": {
+        "annotated_artists": 85,
+        "annotated_tracks": 260,
+        "eligible_artists": 46,
+        "eligible_tracks": 116
+      }
+    },
+    "mood_acoustic": {
+      "acoustic": {
+        "annotated_artists": 321,
+        "annotated_tracks": 2406,
+        "eligible_artists": 176,
+        "eligible_tracks": 981
+      },
+      "not_acoustic": {
+        "annotated_artists": 512,
+        "annotated_tracks": 3969,
+        "eligible_artists": 312,
+        "eligible_tracks": 1932
+      }
+    },
+    "mood_aggressive": {
+      "aggressive": {
+        "annotated_artists": 212,
+        "annotated_tracks": 822,
+        "eligible_artists": 121,
+        "eligible_tracks": 442
+      },
+      "not_aggressive": {
+        "annotated_artists": 588,
+        "annotated_tracks": 6851,
+        "eligible_artists": 364,
+        "eligible_tracks": 3105
+      }
+    },
+    "mood_electronic": {
+      "electronic": {
+        "annotated_artists": 421,
+        "annotated_tracks": 3935,
+        "eligible_artists": 249,
+        "eligible_tracks": 1851
+      },
+      "not_electronic": {
+        "annotated_artists": 381,
+        "annotated_tracks": 3155,
+        "eligible_artists": 230,
+        "eligible_tracks": 1394
+      }
+    },
+    "mood_happy": {
+      "happy": {
+        "annotated_artists": 309,
+        "annotated_tracks": 1472,
+        "eligible_artists": 168,
+        "eligible_tracks": 659
+      },
+      "not_happy": {
+        "annotated_artists": 525,
+        "annotated_tracks": 4209,
+        "eligible_artists": 319,
+        "eligible_tracks": 1950
+      }
+    },
+    "mood_party": {
+      "not_party": {
+        "annotated_artists": 591,
+        "annotated_tracks": 6757,
+        "eligible_artists": 356,
+        "eligible_tracks": 3069
+      },
+      "party": {
+        "annotated_artists": 162,
+        "annotated_tracks": 711,
+        "eligible_artists": 81,
+        "eligible_tracks": 323
+      }
+    },
+    "mood_relaxed": {
+      "not_relaxed": {
+        "annotated_artists": 508,
+        "annotated_tracks": 3810,
+        "eligible_artists": 303,
+        "eligible_tracks": 1782
+      },
+      "relaxed": {
+        "annotated_artists": 365,
+        "annotated_tracks": 2296,
+        "eligible_artists": 208,
+        "eligible_tracks": 1009
+      }
+    },
+    "mood_sad": {
+      "not_sad": {
+        "annotated_artists": 562,
+        "annotated_tracks": 4787,
+        "eligible_artists": 329,
+        "eligible_tracks": 2191
+      },
+      "sad": {
+        "annotated_artists": 277,
+        "annotated_tracks": 859,
+        "eligible_artists": 154,
+        "eligible_tracks": 366
+      }
+    },
+    "tonal_atonal": {
+      "atonal": {
+        "annotated_artists": 79,
+        "annotated_tracks": 410,
+        "eligible_artists": 39,
+        "eligible_tracks": 201
+      },
+      "tonal": {
+        "annotated_artists": 635,
+        "annotated_tracks": 7014,
+        "eligible_artists": 385,
+        "eligible_tracks": 3240
+      }
+    }
+  },
+  "inventory_source": "Jamendo v3 tracks metadata API; no audio downloaded",
+  "jamendo_metadata_records": 5143,
+  "mtg_repository_commit": "cafd8e20c265ed84f1e61f1c875327971f43a62f"
+}
