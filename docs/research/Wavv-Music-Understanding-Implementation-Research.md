@@ -58,7 +58,17 @@ Freeze DyMN04-AS, extract one 10-second mono, 32 kHz excerpt per selected track 
 | OGG | 1.50 MB | 98.2 kbps | 8.15 s | 0.052 s | 0.018 s | 0.9968 | 0.1117 |
 | FLAC | 9.60 MB | 616.5 kbps | 26.17 s | 0.047 s | 0.017 s | 1.0000 | 0.0000 |
 
-For this device's download/storage constraints, OGG is the current best balance: it is about the same size as 96 kbps MP3 and its feature/mel outputs were closer to FLAC; MP32 is the quality-first choice when its roughly 2.1x OGG file size is acceptable. Model inference took 0.055–0.062 s per format and is separate from preprocessing. These are single-track, single-window representation measurements with one download timing each, not a listening test or evidence of downstream classification accuracy. Confirm the choice on a small artist-diverse sample and compare validation metrics before locking it for training.
+This one-track run was a smoke test, not a reliable format ranking; its recommendation is superseded by the five-track follow-up below. Model inference took 0.055–0.062 s per format and is separate from preprocessing. These are single-track, single-window representation measurements with one download timing each, not a listening test or evidence of downstream classification accuracy.
+
+**Five-track follow-up (2026-09-24):** the follow-up sampled five download-allowed tracks from the pinned clean human-annotation set, with a seeded shuffle, one track per artist, and durations from 90 to 360 seconds. It omitted mp31; compared mp32, OGG, and FLAC; rotated format order across tracks; and used the same absolute 10-second midpoint window across formats for each track. All 15 temporary audio files were deleted after processing. Per-track results and cleanup evidence are in [the five-track report](../../music%20understanding/reports/audio_format_pilot_5track.json).
+
+| Format | Mean bitrate | Median size/min | Median download/min | Mean feature cosine vs. FLAC | Mean mel RMSE vs. FLAC |
+|---|---:|---:|---:|---:|---:|
+| MP32 | 200.9 kbps | 1.478 MB | 4.425 s | 0.9945 | 0.2276 |
+| OGG | 116.8 kbps | 0.857 MB | 2.885 s | 0.9962 | 0.0826 |
+| FLAC | 892.4 kbps | 6.608 MB | 15.818 s | 1.0000 | 0.0000 |
+
+Decode/resample plus the DyMN frontend averaged 0.071–0.072 s for the lossy formats; model inference added about 0.057 s. OGG had a higher feature cosine than MP32 on three of five tracks, a lower median feature distance, and lower mel error on all five. Its mean size per minute was about 42% lower than MP32. For this frozen-backbone input and device, select OGG for the next dataset-extraction pilot. This is still only five tracks and one window each: do not treat codec similarity as downstream task accuracy, and confirm task metrics on validation before training.
 
 **Precomputed-feature fit:** MTG supplies full-dataset mel files (229 GB) and a mood/theme subset (68 GB), but these are not inputs for our selected DyMN04-AS checkpoint. MTG's pinned mel recipe is mono 12 kHz, 512-sample FFT, 256-sample hop, and 96 bands; our verified DyMN frontend requires a 32 kHz waveform and computes its own 128-band Kaldi mel representation with different windowing, pre-emphasis, and normalization. There is no verified compatible precomputed DyMN feature set in this workspace. Use the checkpoint's pooled 384-value output, not MTG's mels or 527 AudioSet logits. Sources: [MTG mel implementation](https://github.com/MTG/mtg-jamendo-dataset/blob/cafd8e20c265ed84f1e61f1c875327971f43a62f/scripts/melspectrograms.py), [MTG audio/precomputed data sizes](https://github.com/MTG/mtg-jamendo-dataset#downloading-the-data), [verified Wavv backbone contract](../../music%20understanding/reports/backbone_contract.json).
 
