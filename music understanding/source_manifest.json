@@ -1,0 +1,47 @@
+{
+  "status": "pre-training-contract",
+  "model": {
+    "name": "DyMN04-AS",
+    "repository": "https://github.com/fschmid56/EfficientAT.git",
+    "code_commit": "a425fdce92572e602a1d5634799bd9f1f2efa806",
+    "code_license": "MIT",
+    "checkpoint_url": "https://github.com/fschmid56/EfficientAT/releases/download/v0.0.1/dymn04_as.pt",
+    "checkpoint_license": "not specified separately by the upstream source; user handles terms manually, not verified by this project",
+    "checkpoint_sha256": "49b0e63577021994257b3de2ac5f1686d71554b93c8149f9d2568ad5760b904e",
+    "checkpoint_size_bytes": 8086973,
+    "runtime_versions": {
+      "python": "3.12.10",
+      "torch": "2.14.0",
+      "torchvision": "0.29.0",
+      "torchaudio": "2.11.0"
+    },
+    "pretrained_task": "AudioSet 527-class audio tagging",
+    "wavv_task_accuracy_claim": false
+  },
+  "mtg_jamendo": {
+    "repository": "https://github.com/MTG/mtg-jamendo-dataset.git",
+    "commit": "cafd8e20c265ed84f1e61f1c875327971f43a62f",
+    "metadata_license": "CC-BY-NC-SA-4.0",
+    "usage": "non-commercial research and academic use only per upstream; individual audio terms are user-managed and not verified here",
+    "split_policy": "split-0 only; other numbered partitions are alternate splits and must not be combined",
+    "human_annotations": "track IDs are in split-0 test; selected tasks may use them after source reconciliation and a custom artist-grouped split, retiring the original split-0 test claim for reused IDs"
+  },
+  "deam": {
+    "dataset_page": "https://cvml.unige.ch/databases/DEAM/",
+    "manual": "https://cvml.unige.ch/databases/DEAM/manual.pdf",
+    "metadata_archive": "https://cvml.unige.ch/databases/DEAM/metadata.zip",
+    "annotation_archive": "https://cvml.unige.ch/databases/DEAM/DEAM_Annotations.zip",
+    "audio_downloaded": false,
+    "license": "source page describes Creative Commons licensed sound files; exact terms are user-managed and not verified by this project"
+  },
+  "device": {
+    "workstation": "Intel Core i5-1235U, 16 GB RAM (project specification)",
+    "android_candidate_from_latest_checked_dclap_report": {
+      "manufacturer": "vivo",
+      "model": "I2018",
+      "android_api": 33,
+      "runtime": "ONNX Runtime CPU provider in DCLAP benchmark",
+      "status": "provisional; no device connected for this audit and target confirmation is pending"
+    }
+  }
+}

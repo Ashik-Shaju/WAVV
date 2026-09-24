@@ -1,0 +1,183 @@
+{
+  "seed": 42,
+  "selection": "uniform track sample within the official split-0 partition; all metadata remains available for audits",
+  "splits": {
+    "test": {
+      "audio_missing": 1000,
+      "label_support": {
+        "genre": {
+          "alternative": 61,
+          "ambient": 140,
+          "chillout": 45,
+          "classical": 87,
+          "dance": 49,
+          "easylistening": 78,
+          "electronic": 269,
+          "experimental": 86,
+          "folk": 69,
+          "house": 24,
+          "indie": 51,
+          "jazz": 50,
+          "lounge": 27,
+          "newage": 24,
+          "orchestral": 52,
+          "pop": 147,
+          "poprock": 36,
+          "rock": 108,
+          "soundtrack": 159,
+          "techno": 37
+        },
+        "instruments": {
+          "acousticguitar": 48,
+          "bass": 93,
+          "computer": 37,
+          "drummachine": 20,
+          "drums": 106,
+          "electricguitar": 70,
+          "electricpiano": 12,
+          "guitar": 78,
+          "keyboard": 28,
+          "piano": 139,
+          "sampler": 13,
+          "strings": 21,
+          "synthesizer": 110,
+          "violin": 30,
+          "voice": 33
+        },
+        "mood_theme": {
+          "dark": 31,
+          "dream": 22,
+          "emotional": 43,
+          "energetic": 30,
+          "epic": 29,
+          "film": 59,
+          "happy": 32,
+          "inspiring": 23,
+          "love": 15,
+          "melodic": 23,
+          "relaxing": 22,
+          "uplifting": 14
+        }
+      },
+      "selected_tracks": 1000
+    },
+    "train": {
+      "audio_missing": 2500,
+      "label_support": {
+        "genre": {
+          "alternative": 161,
+          "ambient": 314,
+          "chillout": 177,
+          "classical": 249,
+          "dance": 131,
+          "easylistening": 235,
+          "electronic": 728,
+          "experimental": 160,
+          "folk": 120,
+          "house": 143,
+          "indie": 105,
+          "jazz": 89,
+          "lounge": 100,
+          "newage": 111,
+          "orchestral": 83,
+          "pop": 359,
+          "poprock": 121,
+          "rock": 294,
+          "soundtrack": 338,
+          "techno": 115
+        },
+        "instruments": {
+          "acousticguitar": 79,
+          "bass": 241,
+          "computer": 45,
+          "drummachine": 83,
+          "drums": 256,
+          "electricguitar": 178,
+          "electricpiano": 44,
+          "guitar": 234,
+          "keyboard": 97,
+          "piano": 318,
+          "sampler": 57,
+          "strings": 45,
+          "synthesizer": 339,
+          "violin": 67,
+          "voice": 61
+        },
+        "mood_theme": {
+          "dark": 44,
+          "dream": 35,
+          "emotional": 40,
+          "energetic": 65,
+          "epic": 40,
+          "film": 65,
+          "happy": 68,
+          "inspiring": 53,
+          "love": 30,
+          "melodic": 39,
+          "relaxing": 67,
+          "uplifting": 42
+        }
+      },
+      "selected_tracks": 2500
+    },
+    "validation": {
+      "audio_missing": 750,
+      "label_support": {
+        "genre": {
+          "alternative": 58,
+          "ambient": 105,
+          "chillout": 46,
+          "classical": 89,
+          "dance": 40,
+          "easylistening": 61,
+          "electronic": 201,
+          "experimental": 57,
+          "folk": 30,
+          "house": 23,
+          "indie": 34,
+          "jazz": 39,
+          "lounge": 39,
+          "newage": 34,
+          "orchestral": 35,
+          "pop": 109,
+          "poprock": 32,
+          "rock": 92,
+          "soundtrack": 117,
+          "techno": 27
+        },
+        "instruments": {
+          "acousticguitar": 27,
+          "bass": 90,
+          "computer": 55,
+          "drummachine": 35,
+          "drums": 85,
+          "electricguitar": 81,
+          "electricpiano": 33,
+          "guitar": 68,
+          "keyboard": 41,
+          "piano": 124,
+          "sampler": 19,
+          "strings": 28,
+          "synthesizer": 114,
+          "violin": 50,
+          "voice": 34
+        },
+        "mood_theme": {
+          "dark": 20,
+          "dream": 13,
+          "emotional": 18,
+          "energetic": 17,
+          "epic": 10,
+          "film": 17,
+          "happy": 30,
+          "inspiring": 10,
+          "love": 7,
+          "melodic": 29,
+          "relaxing": 15,
+          "uplifting": 8
+        }
+      },
+      "selected_tracks": 750
+    }
+  }
+}

@@ -1,0 +1,1264 @@
+{
+  "audited_on": "2026-09-24",
+  "cross_dataset_audio_duplicate_audit": {
+    "metadata_track_artist_matching": "DEAM metadata partitions and annotation IDs align; MTG-to-DEAM identity joins and exact/near-audio matching remain open",
+    "policy": "candidate matches stay grouped; no same recording may cross any train/validation/test boundary",
+    "status": "not complete; no audio downloaded; keep MTG and DEAM task datasets separate until duplicate checks can run"
+  },
+  "deam": {
+    "audio_downloaded": false,
+    "dynamic_annotation_alignment": {
+      "arousal": {
+        "first_timestamp_ms": 15000,
+        "sample_count": 1224,
+        "sample_interval_ms": 500,
+        "track_ids_match_metadata": true,
+        "tracks": 1802
+      },
+      "valence": {
+        "first_timestamp_ms": 15000,
+        "sample_count": 1223,
+        "sample_interval_ms": 500,
+        "track_ids_match_metadata": true,
+        "tracks": 1802
+      }
+    },
+    "license_status": "not verified by this project; user handles review manually and it does not block implementation",
+    "manual": "https://cvml.unige.ch/databases/DEAM/manual.pdf",
+    "metadata_archive_file_counts": {
+      "deam_annotations.zip": 3610,
+      "deam_metadata.zip": 3
+    },
+    "metadata_partition_track_counts": {
+      "metadata_2013.csv": {
+        "tracks": 744,
+        "unique_track_ids": 744
+      },
+      "metadata_2014.csv": {
+        "tracks": 1000,
+        "unique_track_ids": 1000
+      },
+      "metadata_2015.csv": {
+        "tracks": 58,
+        "unique_track_ids": 58
+      }
+    },
+    "published_tracks": {
+      "2014_development": 744,
+      "2014_evaluation": 1000,
+      "2015_evaluation": 58
+    }
+  },
+  "mtg_jamendo": {
+    "alternate_split_overlap_evidence": {
+      "split0_test_in_split1_test": 2263,
+      "split0_test_in_split1_train": 6328
+    },
+    "compact_v1_label_map": {
+      "genre": [
+        {
+          "label": "electronic",
+          "train_tracks": 10034
+        },
+        {
+          "label": "soundtrack",
+          "train_tracks": 4545
+        },
+        {
+          "label": "pop",
+          "train_tracks": 4523
+        },
+        {
+          "label": "ambient",
+          "train_tracks": 4185
+        },
+        {
+          "label": "rock",
+          "train_tracks": 3995
+        },
+        {
+          "label": "classical",
+          "train_tracks": 3361
+        },
+        {
+          "label": "easylistening",
+          "train_tracks": 2972
+        },
+        {
+          "label": "chillout",
+          "train_tracks": 2285
+        },
+        {
+          "label": "alternative",
+          "train_tracks": 2225
+        },
+        {
+          "label": "experimental",
+          "train_tracks": 2099
+        },
+        {
+          "label": "dance",
+          "train_tracks": 1702
+        },
+        {
+          "label": "indie",
+          "train_tracks": 1514
+        },
+        {
+          "label": "house",
+          "train_tracks": 1488
+        },
+        {
+          "label": "folk",
+          "train_tracks": 1399
+        },
+        {
+          "label": "techno",
+          "train_tracks": 1399
+        },
+        {
+          "label": "lounge",
+          "train_tracks": 1382
+        },
+        {
+          "label": "newage",
+          "train_tracks": 1331
+        },
+        {
+          "label": "poprock",
+          "train_tracks": 1316
+        },
+        {
+          "label": "jazz",
+          "train_tracks": 1296
+        },
+        {
+          "label": "orchestral",
+          "train_tracks": 1261
+        }
+      ],
+      "instruments": [
+        {
+          "label": "synthesizer",
+          "train_tracks": 4356
+        },
+        {
+          "label": "piano",
+          "train_tracks": 4194
+        },
+        {
+          "label": "drums",
+          "train_tracks": 3373
+        },
+        {
+          "label": "bass",
+          "train_tracks": 3121
+        },
+        {
+          "label": "guitar",
+          "train_tracks": 2915
+        },
+        {
+          "label": "electricguitar",
+          "train_tracks": 2309
+        },
+        {
+          "label": "keyboard",
+          "train_tracks": 1185
+        },
+        {
+          "label": "acousticguitar",
+          "train_tracks": 990
+        },
+        {
+          "label": "drummachine",
+          "train_tracks": 969
+        },
+        {
+          "label": "violin",
+          "train_tracks": 785
+        },
+        {
+          "label": "voice",
+          "train_tracks": 776
+        },
+        {
+          "label": "computer",
+          "train_tracks": 748
+        },
+        {
+          "label": "sampler",
+          "train_tracks": 713
+        },
+        {
+          "label": "electricpiano",
+          "train_tracks": 610
+        },
+        {
+          "label": "strings",
+          "train_tracks": 594
+        }
+      ],
+      "mood_theme": [
+        {
+          "label": "happy",
+          "train_tracks": 927
+        },
+        {
+          "label": "energetic",
+          "train_tracks": 857
+        },
+        {
+          "label": "relaxing",
+          "train_tracks": 763
+        },
+        {
+          "label": "film",
+          "train_tracks": 746
+        },
+        {
+          "label": "dark",
+          "train_tracks": 620
+        },
+        {
+          "label": "epic",
+          "train_tracks": 601
+        },
+        {
+          "label": "melodic",
+          "train_tracks": 598
+        },
+        {
+          "label": "inspiring",
+          "train_tracks": 561
+        },
+        {
+          "label": "emotional",
+          "train_tracks": 499
+        },
+        {
+          "label": "dream",
+          "train_tracks": 498
+        },
+        {
+          "label": "love",
+          "train_tracks": 493
+        },
+        {
+          "label": "uplifting",
+          "train_tracks": 449
+        }
+      ],
+      "selection_rule": "take the highest-support exact uploader tags from split-0 train only; ties sort alphabetically; no taxonomy crosswalk is inferred"
+    },
+    "human_annotation_membership": {
+      "test": 10671,
+      "train": 0,
+      "validation": 0
+    },
+    "human_annotation_parse_issues": {},
+    "human_annotation_source_status": "local bytes match the exact pinned upstream clean TSV SHA-256; published README support-count differences are recorded as upstream documentation drift; parsed TSV counts are canonical for manifests",
+    "human_annotation_tracks": 10671,
+    "human_excluded_special_labels": {
+      "gender": {
+        "instrumental": 6639
+      },
+      "voice_instrumental": {
+        "instrumental": 6410
+      }
+    },
+    "human_taxonomy_label_counts": {
+      "danceability": {
+        "danceable": 1698,
+        "not_danceable": 2759
+      },
+      "gender": {
+        "female": 1814,
+        "male": 260
+      },
+      "genre_dortmund": {
+        "alternative": 4,
+        "blues": 3,
+        "electronic": 363,
+        "folk_country": 16,
+        "funk_soul_rnb": 11,
+        "jazz": 17,
+        "pop": 29,
+        "rap_hiphop": 46,
+        "rock": 132
+      },
+      "genre_electronic": {
+        "ambient": 143,
+        "drum_and_bass": 4,
+        "house": 6,
+        "techno": 9,
+        "trance": 18
+      },
+      "genre_rosamerica": {
+        "classical": 118,
+        "dance": 118,
+        "hip_hop": 50,
+        "jazz": 20,
+        "pop": 80,
+        "rock": 187
+      },
+      "genre_tzanetakis": {
+        "blues": 5,
+        "classical": 115,
+        "country": 6,
+        "disco": 3,
+        "hip_hop": 52,
+        "jazz": 19,
+        "metal": 24,
+        "pop": 61,
+        "reggae": 7,
+        "rock": 119
+      },
+      "mood_acoustic": {
+        "acoustic": 2406,
+        "not_acoustic": 3969
+      },
+      "mood_aggressive": {
+        "aggressive": 822,
+        "not_aggressive": 6851
+      },
+      "mood_electronic": {
+        "electronic": 3935,
+        "not_electronic": 3155
+      },
+      "mood_happy": {
+        "happy": 1472,
+        "not_happy": 4209
+      },
+      "mood_party": {
+        "not_party": 6757,
+        "party": 711
+      },
+      "mood_relaxed": {
+        "not_relaxed": 3810,
+        "relaxed": 2296
+      },
+      "mood_sad": {
+        "not_sad": 4787,
+        "sad": 859
+      },
+      "tonal_atonal": {
+        "atonal": 410,
+        "tonal": 7014
+      },
+      "voice_instrumental": {
+        "voice": 2313
+      }
+    },
+    "human_taxonomy_support_tracks": {
+      "danceability": 4457,
+      "gender": 2074,
+      "genre_dortmund": 621,
+      "genre_electronic": 180,
+      "genre_rosamerica": 573,
+      "genre_tzanetakis": 411,
+      "mood_acoustic": 6375,
+      "mood_aggressive": 7673,
+      "mood_electronic": 7090,
+      "mood_happy": 5681,
+      "mood_party": 7468,
+      "mood_relaxed": 6106,
+      "mood_sad": 5646,
+      "tonal_atonal": 7424,
+      "voice_instrumental": 2313
+    },
+    "metadata_license": "CC-BY-NC-SA-4.0",
+    "published_vs_parsed_human_support_differences": {
+      "danceability": {
+        "parsed": 4457,
+        "published": 4476
+      },
+      "gender": {
+        "parsed": 2074,
+        "published": 7533
+      },
+      "genre_dortmund": {
+        "parsed": 621,
+        "published": 612
+      },
+      "mood_acoustic": {
+        "parsed": 6375,
+        "published": 6429
+      },
+      "mood_aggressive": {
+        "parsed": 7673,
+        "published": 7686
+      },
+      "mood_electronic": {
+        "parsed": 7090,
+        "published": 7143
+      },
+      "mood_happy": {
+        "parsed": 5681,
+        "published": 5702
+      },
+      "mood_party": {
+        "parsed": 7468,
+        "published": 7476
+      },
+      "mood_relaxed": {
+        "parsed": 6106,
+        "published": 6163
+      },
+      "mood_sad": {
+        "parsed": 5646,
+        "published": 5678
+      },
+      "tonal_atonal": {
+        "parsed": 7424,
+        "published": 8756
+      },
+      "voice_instrumental": {
+        "parsed": 2313,
+        "published": 2070
+      }
+    },
+    "repository_commit": "cafd8e20c265ed84f1e61f1c875327971f43a62f",
+    "split0": {
+      "test": {
+        "artists": 713,
+        "duplicate_track_rows": 0,
+        "tracks": 11565
+      },
+      "train": {
+        "artists": 2139,
+        "duplicate_track_rows": 0,
+        "tracks": 32859
+      },
+      "validation": {
+        "artists": 713,
+        "duplicate_track_rows": 0,
+        "tracks": 11101
+      }
+    },
+    "split0_pairwise_overlap": {
+      "train_x_test": {
+        "artists": 0,
+        "tracks": 0
+      },
+      "train_x_validation": {
+        "artists": 0,
+        "tracks": 0
+      },
+      "validation_x_test": {
+        "artists": 0,
+        "tracks": 0
+      }
+    },
+    "training_only_tag_counts": {
+      "genre": {
+        "60s": 72,
+        "70s": 83,
+        "80s": 150,
+        "90s": 258,
+        "acidjazz": 185,
+        "alternative": 2225,
+        "alternativerock": 121,
+        "ambient": 4185,
+        "atmospheric": 765,
+        "blues": 557,
+        "bluesrock": 46,
+        "bossanova": 65,
+        "breakbeat": 258,
+        "celtic": 187,
+        "chanson": 209,
+        "chillout": 2285,
+        "choir": 88,
+        "classical": 3361,
+        "classicrock": 106,
+        "club": 346,
+        "contemporary": 200,
+        "country": 371,
+        "dance": 1702,
+        "darkambient": 249,
+        "darkwave": 104,
+        "deephouse": 337,
+        "disco": 327,
+        "downtempo": 944,
+        "drumnbass": 329,
+        "dub": 271,
+        "dubstep": 377,
+        "easylistening": 2972,
+        "edm": 219,
+        "electronic": 10034,
+        "electronica": 225,
+        "electropop": 702,
+        "ethno": 263,
+        "eurodance": 161,
+        "experimental": 2099,
+        "folk": 1399,
+        "funk": 593,
+        "fusion": 310,
+        "groove": 115,
+        "grunge": 229,
+        "hard": 84,
+        "hardrock": 293,
+        "hiphop": 1200,
+        "house": 1488,
+        "idm": 147,
+        "improvisation": 180,
+        "indie": 1514,
+        "industrial": 395,
+        "instrumentalpop": 912,
+        "instrumentalrock": 401,
+        "jazz": 1296,
+        "jazzfusion": 159,
+        "latin": 374,
+        "lounge": 1382,
+        "medieval": 50,
+        "metal": 809,
+        "minimal": 372,
+        "newage": 1331,
+        "newwave": 102,
+        "orchestral": 1261,
+        "pop": 4523,
+        "popfolk": 1101,
+        "poprock": 1316,
+        "postrock": 255,
+        "progressive": 620,
+        "psychedelic": 444,
+        "punkrock": 417,
+        "rap": 515,
+        "reggae": 859,
+        "rnb": 261,
+        "rock": 3995,
+        "rocknroll": 206,
+        "singersongwriter": 421,
+        "soul": 183,
+        "soundtrack": 4545,
+        "swing": 99,
+        "symphonic": 482,
+        "synthpop": 495,
+        "techno": 1399,
+        "trance": 916,
+        "triphop": 616,
+        "world": 1209,
+        "worldfusion": 162
+      },
+      "instrument": {
+        "accordion": 208,
+        "acousticbassguitar": 106,
+        "acousticguitar": 990,
+        "bass": 3121,
+        "beat": 353,
+        "bell": 177,
+        "bongo": 84,
+        "brass": 149,
+        "cello": 451,
+        "clarinet": 71,
+        "classicalguitar": 339,
+        "computer": 748,
+        "doublebass": 213,
+        "drummachine": 969,
+        "drums": 3373,
+        "electricguitar": 2309,
+        "electricpiano": 610,
+        "flute": 371,
+        "guitar": 2915,
+        "harmonica": 125,
+        "harp": 254,
+        "horn": 163,
+        "keyboard": 1185,
+        "oboe": 156,
+        "orchestra": 283,
+        "organ": 96,
+        "pad": 87,
+        "percussion": 572,
+        "piano": 4194,
+        "pipeorgan": 156,
+        "rhodes": 146,
+        "sampler": 713,
+        "saxophone": 366,
+        "strings": 594,
+        "synthesizer": 4356,
+        "trombone": 143,
+        "trumpet": 305,
+        "viola": 184,
+        "violin": 785,
+        "voice": 776
+      },
+      "mood/theme": {
+        "action": 296,
+        "adventure": 264,
+        "advertising": 363,
+        "background": 404,
+        "ballad": 193,
+        "calm": 267,
+        "children": 152,
+        "christmas": 368,
+        "commercial": 191,
+        "cool": 170,
+        "corporate": 349,
+        "dark": 620,
+        "deep": 429,
+        "documentary": 339,
+        "drama": 253,
+        "dramatic": 195,
+        "dream": 498,
+        "emotional": 499,
+        "energetic": 857,
+        "epic": 601,
+        "fast": 62,
+        "film": 746,
+        "fun": 220,
+        "funny": 109,
+        "game": 169,
+        "groovy": 78,
+        "happy": 927,
+        "heavy": 98,
+        "holiday": 98,
+        "hopeful": 137,
+        "inspiring": 561,
+        "love": 493,
+        "meditative": 374,
+        "melancholic": 228,
+        "melodic": 598,
+        "motivational": 372,
+        "movie": 207,
+        "nature": 137,
+        "party": 127,
+        "positive": 376,
+        "powerful": 106,
+        "relaxing": 763,
+        "retro": 139,
+        "romantic": 363,
+        "sad": 375,
+        "sexy": 59,
+        "slow": 295,
+        "soft": 208,
+        "soundscape": 415,
+        "space": 362,
+        "sport": 201,
+        "summer": 261,
+        "trailer": 159,
+        "travel": 89,
+        "upbeat": 216,
+        "uplifting": 449
+      }
+    },
+    "usage": "non-commercial research and academic use only per upstream"
+  },
+  "phase_gates": {
+    "blockers": [
+      "Select human-label tasks using TSV-derived per-class counts and documented label semantics; gender includes instrumental answers and clean voice labels do not define binary negatives.",
+      "Create and audit artist-grouped fit/validation/test manifests for selected human labels and same-track uploader tags.",
+      "Audio is not downloaded and frozen-feature extraction is not implemented; these are required before training.",
+      "Verify Jamendo API ID matches and download-allowed coverage for the selected artist split; otherwise use a streamed archive fallback and measure its transfer requirements."
+    ],
+    "gate_0": "metadata, split, and frozen-backbone contracts pass; source terms are user-managed and do not block implementation",
+    "gate_1": "candidate weak-tag map is derived from split-0 train only; pinned TSV-derived human counts are recorded; human task selection and artist-grouped manifests remain incomplete",
+    "training_started": false
+  },
+  "source_hashes": {
+    "deam_annotations.zip": "809b0feb4ba6196c1eda9b2b7b33b892b11fa71457cfceb0d47e832ed1a5f15f",
+    "deam_metadata.zip": "3d1d5ab42e852803a770f2cfbd685c6b464e1ebe76f26b0e10954597902b90f8",
+    "mtg_human_clean.tsv": "9b060b3db785d475870ceb0682241782bf20053d751863fbd42e02cf11088e1d",
+    "mtg_raw_metadata.tsv": "bb1efa2876536cbe1a8b67db5dda15249ca144f0cff69e481b638803cbdc9aca",
+    "mtg_split0_test.tsv": "c80e43416e89afc0b2656848e9d4d6f076ca0426003d7e0148ac8cdc6254d366",
+    "mtg_split0_train.tsv": "3b6766ee0a0aea01fa2c2c34769cb3873c0adc04378bba35912edad37077f42b",
+    "mtg_split0_validation.tsv": "b93639bc4f716148e7a41e35e9a1d73058a0b9e65c1cc723b66e9e72726072a7",
+    "mtg_split1_test.tsv": "a57b48368908e3f8e637972eca2bcb813bf42997af893b1d4e7e1d178d7caa3f",
+    "mtg_split1_train.tsv": "e19e8a51c5b3d0f7d24597543c48c31dfe3baf4cb97d75ea78702cd639284bb9"
+  },
+  "tasks": {
+    "danceability": {
+      "evaluation_source": "held-out artist group from the same taxonomy-specific human annotations",
+      "fit_ready": false,
+      "human_label_counts": {
+        "danceable": 1698,
+        "not_danceable": 2759
+      },
+      "human_support_tracks": 4457,
+      "metric": "macro F1, balanced accuracy, confusion matrix",
+      "status": "candidate supervised binary task; use TSV-derived counts (the pinned README table differs) and freeze a separate artist-grouped split",
+      "training_source": "candidate: exact pinned MTG Music Classification Annotations TSV; dedicated artist split required"
+    },
+    "gender": {
+      "evaluation_source": "held-out artist group from the same taxonomy-specific annotations",
+      "fit_ready": false,
+      "human_label_counts": {
+        "female": 1814,
+        "male": 260
+      },
+      "human_support_tracks": 2074,
+      "metric": "macro F1, balanced accuracy, confusion matrix",
+      "status": "candidate taxonomy; exclude instrumental answers from the documented male/female target, then confirm class support and product relevance before adding the output",
+      "training_source": "candidate: exact pinned MTG Music Classification Annotations TSV; dedicated artist split required"
+    },
+    "genre": {
+      "final_weak_label_evaluation": "MTG-Jamendo split-0 test uploader tags",
+      "fit_ready": true,
+      "human_consensus_taxonomies": {
+        "genre_dortmund": 621,
+        "genre_electronic": 180,
+        "genre_rosamerica": 573,
+        "genre_tzanetakis": 411
+      },
+      "human_mapping_status": "separate taxonomy; no crosswalk is inferred",
+      "metric": "mAP, macro/micro F1, per-label support",
+      "test_support_for_v1_labels": {
+        "alternative": 660,
+        "ambient": 1839,
+        "chillout": 560,
+        "classical": 964,
+        "dance": 520,
+        "easylistening": 943,
+        "electronic": 3525,
+        "experimental": 1146,
+        "folk": 690,
+        "house": 357,
+        "indie": 600,
+        "jazz": 444,
+        "lounge": 341,
+        "newage": 297,
+        "orchestral": 631,
+        "pop": 1661,
+        "poprock": 422,
+        "rock": 1371,
+        "soundtrack": 1784,
+        "techno": 467
+      },
+      "training_source": "MTG-Jamendo split-0 train uploader tags (weak, multi-label)",
+      "training_tag_support_tracks": {
+        "60s": 72,
+        "70s": 83,
+        "80s": 150,
+        "90s": 258,
+        "acidjazz": 185,
+        "alternative": 2225,
+        "alternativerock": 121,
+        "ambient": 4185,
+        "atmospheric": 765,
+        "blues": 557,
+        "bluesrock": 46,
+        "bossanova": 65,
+        "breakbeat": 258,
+        "celtic": 187,
+        "chanson": 209,
+        "chillout": 2285,
+        "choir": 88,
+        "classical": 3361,
+        "classicrock": 106,
+        "club": 346,
+        "contemporary": 200,
+        "country": 371,
+        "dance": 1702,
+        "darkambient": 249,
+        "darkwave": 104,
+        "deephouse": 337,
+        "disco": 327,
+        "downtempo": 944,
+        "drumnbass": 329,
+        "dub": 271,
+        "dubstep": 377,
+        "easylistening": 2972,
+        "edm": 219,
+        "electronic": 10034,
+        "electronica": 225,
+        "electropop": 702,
+        "ethno": 263,
+        "eurodance": 161,
+        "experimental": 2099,
+        "folk": 1399,
+        "funk": 593,
+        "fusion": 310,
+        "groove": 115,
+        "grunge": 229,
+        "hard": 84,
+        "hardrock": 293,
+        "hiphop": 1200,
+        "house": 1488,
+        "idm": 147,
+        "improvisation": 180,
+        "indie": 1514,
+        "industrial": 395,
+        "instrumentalpop": 912,
+        "instrumentalrock": 401,
+        "jazz": 1296,
+        "jazzfusion": 159,
+        "latin": 374,
+        "lounge": 1382,
+        "medieval": 50,
+        "metal": 809,
+        "minimal": 372,
+        "newage": 1331,
+        "newwave": 102,
+        "orchestral": 1261,
+        "pop": 4523,
+        "popfolk": 1101,
+        "poprock": 1316,
+        "postrock": 255,
+        "progressive": 620,
+        "psychedelic": 444,
+        "punkrock": 417,
+        "rap": 515,
+        "reggae": 859,
+        "rnb": 261,
+        "rock": 3995,
+        "rocknroll": 206,
+        "singersongwriter": 421,
+        "soul": 183,
+        "soundtrack": 4545,
+        "swing": 99,
+        "symphonic": 482,
+        "synthpop": 495,
+        "techno": 1399,
+        "trance": 916,
+        "triphop": 616,
+        "world": 1209,
+        "worldfusion": 162
+      },
+      "v1_labels": [
+        {
+          "label": "electronic",
+          "train_tracks": 10034
+        },
+        {
+          "label": "soundtrack",
+          "train_tracks": 4545
+        },
+        {
+          "label": "pop",
+          "train_tracks": 4523
+        },
+        {
+          "label": "ambient",
+          "train_tracks": 4185
+        },
+        {
+          "label": "rock",
+          "train_tracks": 3995
+        },
+        {
+          "label": "classical",
+          "train_tracks": 3361
+        },
+        {
+          "label": "easylistening",
+          "train_tracks": 2972
+        },
+        {
+          "label": "chillout",
+          "train_tracks": 2285
+        },
+        {
+          "label": "alternative",
+          "train_tracks": 2225
+        },
+        {
+          "label": "experimental",
+          "train_tracks": 2099
+        },
+        {
+          "label": "dance",
+          "train_tracks": 1702
+        },
+        {
+          "label": "indie",
+          "train_tracks": 1514
+        },
+        {
+          "label": "house",
+          "train_tracks": 1488
+        },
+        {
+          "label": "folk",
+          "train_tracks": 1399
+        },
+        {
+          "label": "techno",
+          "train_tracks": 1399
+        },
+        {
+          "label": "lounge",
+          "train_tracks": 1382
+        },
+        {
+          "label": "newage",
+          "train_tracks": 1331
+        },
+        {
+          "label": "poprock",
+          "train_tracks": 1316
+        },
+        {
+          "label": "jazz",
+          "train_tracks": 1296
+        },
+        {
+          "label": "orchestral",
+          "train_tracks": 1261
+        }
+      ],
+      "validation_source": "MTG-Jamendo split-0 validation uploader tags",
+      "validation_support_for_v1_labels": {
+        "alternative": 876,
+        "ambient": 1546,
+        "chillout": 833,
+        "classical": 1277,
+        "dance": 605,
+        "easylistening": 918,
+        "electronic": 2921,
+        "experimental": 696,
+        "folk": 409,
+        "house": 324,
+        "indie": 518,
+        "jazz": 631,
+        "lounge": 536,
+        "newage": 574,
+        "orchestral": 542,
+        "pop": 1621,
+        "poprock": 434,
+        "rock": 1499,
+        "soundtrack": 1765,
+        "techno": 313
+      }
+    },
+    "instruments": {
+      "final_weak_label_evaluation": "MTG-Jamendo split-0 test instrument tags",
+      "fit_ready": true,
+      "human_consensus_taxonomies": {},
+      "human_mapping_status": "no human-validated instrument taxonomy in the annotation release",
+      "metric": "mAP, macro/micro F1, per-label support",
+      "test_support_for_v1_labels": {
+        "acousticguitar": 547,
+        "bass": 1155,
+        "computer": 689,
+        "drummachine": 233,
+        "drums": 1255,
+        "electricguitar": 839,
+        "electricpiano": 205,
+        "guitar": 806,
+        "keyboard": 359,
+        "piano": 1627,
+        "sampler": 154,
+        "strings": 300,
+        "synthesizer": 1421,
+        "violin": 377,
+        "voice": 326
+      },
+      "training_source": "MTG-Jamendo split-0 train uploader instrument tags (weak, multi-label)",
+      "training_tag_support_tracks": {
+        "accordion": 208,
+        "acousticbassguitar": 106,
+        "acousticguitar": 990,
+        "bass": 3121,
+        "beat": 353,
+        "bell": 177,
+        "bongo": 84,
+        "brass": 149,
+        "cello": 451,
+        "clarinet": 71,
+        "classicalguitar": 339,
+        "computer": 748,
+        "doublebass": 213,
+        "drummachine": 969,
+        "drums": 3373,
+        "electricguitar": 2309,
+        "electricpiano": 610,
+        "flute": 371,
+        "guitar": 2915,
+        "harmonica": 125,
+        "harp": 254,
+        "horn": 163,
+        "keyboard": 1185,
+        "oboe": 156,
+        "orchestra": 283,
+        "organ": 96,
+        "pad": 87,
+        "percussion": 572,
+        "piano": 4194,
+        "pipeorgan": 156,
+        "rhodes": 146,
+        "sampler": 713,
+        "saxophone": 366,
+        "strings": 594,
+        "synthesizer": 4356,
+        "trombone": 143,
+        "trumpet": 305,
+        "viola": 184,
+        "violin": 785,
+        "voice": 776
+      },
+      "v1_labels": [
+        {
+          "label": "synthesizer",
+          "train_tracks": 4356
+        },
+        {
+          "label": "piano",
+          "train_tracks": 4194
+        },
+        {
+          "label": "drums",
+          "train_tracks": 3373
+        },
+        {
+          "label": "bass",
+          "train_tracks": 3121
+        },
+        {
+          "label": "guitar",
+          "train_tracks": 2915
+        },
+        {
+          "label": "electricguitar",
+          "train_tracks": 2309
+        },
+        {
+          "label": "keyboard",
+          "train_tracks": 1185
+        },
+        {
+          "label": "acousticguitar",
+          "train_tracks": 990
+        },
+        {
+          "label": "drummachine",
+          "train_tracks": 969
+        },
+        {
+          "label": "violin",
+          "train_tracks": 785
+        },
+        {
+          "label": "voice",
+          "train_tracks": 776
+        },
+        {
+          "label": "computer",
+          "train_tracks": 748
+        },
+        {
+          "label": "sampler",
+          "train_tracks": 713
+        },
+        {
+          "label": "electricpiano",
+          "train_tracks": 610
+        },
+        {
+          "label": "strings",
+          "train_tracks": 594
+        }
+      ],
+      "validation_source": "MTG-Jamendo split-0 validation instrument tags",
+      "validation_support_for_v1_labels": {
+        "acousticguitar": 410,
+        "bass": 1450,
+        "computer": 643,
+        "drummachine": 562,
+        "drums": 1492,
+        "electricguitar": 1093,
+        "electricpiano": 467,
+        "guitar": 1083,
+        "keyboard": 500,
+        "piano": 1929,
+        "sampler": 203,
+        "strings": 384,
+        "synthesizer": 1719,
+        "violin": 675,
+        "voice": 502
+      }
+    },
+    "mood_theme": {
+      "final_weak_label_evaluation": "MTG-Jamendo split-0 test uploader tags",
+      "fit_ready": true,
+      "human_consensus_taxonomies": {
+        "mood_acoustic": 6375,
+        "mood_aggressive": 7673,
+        "mood_electronic": 7090,
+        "mood_happy": 5681,
+        "mood_party": 7468,
+        "mood_relaxed": 6106,
+        "mood_sad": 5646
+      },
+      "human_mapping_status": "keep seven clean binary taxonomies separate; no multi-class mood target is inferred",
+      "metric": "mAP, macro/micro F1, per-label support",
+      "test_support_for_v1_labels": {
+        "dark": 351,
+        "dream": 246,
+        "emotional": 415,
+        "energetic": 267,
+        "epic": 214,
+        "film": 569,
+        "happy": 338,
+        "inspiring": 180,
+        "love": 204,
+        "melodic": 247,
+        "relaxing": 309,
+        "uplifting": 105
+      },
+      "training_source": "MTG-Jamendo split-0 train uploader tags (weak, multi-label)",
+      "training_tag_support_tracks": {
+        "action": 296,
+        "adventure": 264,
+        "advertising": 363,
+        "background": 404,
+        "ballad": 193,
+        "calm": 267,
+        "children": 152,
+        "christmas": 368,
+        "commercial": 191,
+        "cool": 170,
+        "corporate": 349,
+        "dark": 620,
+        "deep": 429,
+        "documentary": 339,
+        "drama": 253,
+        "dramatic": 195,
+        "dream": 498,
+        "emotional": 499,
+        "energetic": 857,
+        "epic": 601,
+        "fast": 62,
+        "film": 746,
+        "fun": 220,
+        "funny": 109,
+        "game": 169,
+        "groovy": 78,
+        "happy": 927,
+        "heavy": 98,
+        "holiday": 98,
+        "hopeful": 137,
+        "inspiring": 561,
+        "love": 493,
+        "meditative": 374,
+        "melancholic": 228,
+        "melodic": 598,
+        "motivational": 372,
+        "movie": 207,
+        "nature": 137,
+        "party": 127,
+        "positive": 376,
+        "powerful": 106,
+        "relaxing": 763,
+        "retro": 139,
+        "romantic": 363,
+        "sad": 375,
+        "sexy": 59,
+        "slow": 295,
+        "soft": 208,
+        "soundscape": 415,
+        "space": 362,
+        "sport": 201,
+        "summer": 261,
+        "trailer": 159,
+        "travel": 89,
+        "upbeat": 216,
+        "uplifting": 449
+      },
+      "v1_labels": [
+        {
+          "label": "happy",
+          "train_tracks": 927
+        },
+        {
+          "label": "energetic",
+          "train_tracks": 857
+        },
+        {
+          "label": "relaxing",
+          "train_tracks": 763
+        },
+        {
+          "label": "film",
+          "train_tracks": 746
+        },
+        {
+          "label": "dark",
+          "train_tracks": 620
+        },
+        {
+          "label": "epic",
+          "train_tracks": 601
+        },
+        {
+          "label": "melodic",
+          "train_tracks": 598
+        },
+        {
+          "label": "inspiring",
+          "train_tracks": 561
+        },
+        {
+          "label": "emotional",
+          "train_tracks": 499
+        },
+        {
+          "label": "dream",
+          "train_tracks": 498
+        },
+        {
+          "label": "love",
+          "train_tracks": 493
+        },
+        {
+          "label": "uplifting",
+          "train_tracks": 449
+        }
+      ],
+      "validation_source": "MTG-Jamendo split-0 validation uploader tags",
+      "validation_support_for_v1_labels": {
+        "dark": 231,
+        "dream": 207,
+        "emotional": 357,
+        "energetic": 233,
+        "epic": 167,
+        "film": 187,
+        "happy": 392,
+        "inspiring": 136,
+        "love": 212,
+        "melodic": 368,
+        "relaxing": 278,
+        "uplifting": 139
+      }
+    },
+    "tonal_atonal": {
+      "evaluation_source": "held-out artist group from the same taxonomy-specific annotations",
+      "fit_ready": false,
+      "human_label_counts": {
+        "atonal": 410,
+        "tonal": 7014
+      },
+      "human_support_tracks": 7424,
+      "metric": "macro F1, balanced accuracy, confusion matrix",
+      "status": "candidate taxonomy; confirm class support and product relevance before adding the output",
+      "training_source": "candidate: exact pinned MTG Music Classification Annotations TSV; dedicated artist split required"
+    },
+    "valence_arousal": {
+      "audio_excerpt_alignment": "45-second excerpt offsets and dynamic-label timestamps must match; dynamic labels exclude first 15 seconds",
+      "fit_ready": false,
+      "metric": "MAE, RMSE, correlation against constant-mean baseline, per dimension",
+      "official_evaluation": "DEAM 2014 evaluation and 2015 evaluation sets remain untouched",
+      "published_partition_tracks": {
+        "2014_evaluation": 1000,
+        "2015_evaluation": 58,
+        "development": 744
+      },
+      "status": "metadata/annotation files are audited; audio rights and duplicate audit remain open",
+      "training_source": "DEAM 2014 development set only; fixed track-level train/validation split required"
+    },
+    "voice_instrumental": {
+      "final_weak_label_evaluation": "MTG-Jamendo split-0 test instrument tag 'voice'",
+      "fit_ready": true,
+      "human_consensus_status": "exact pinned TSV is hash-verified; clean consensus contains voice-only labels after special-answer exclusion, so it cannot supervise a binary vocal/instrumental task",
+      "human_label_counts": {
+        "voice": 2313
+      },
+      "human_support_tracks": 2313,
+      "metric": "mAP and average precision against held-out weak tags; report human voice-only examples separately",
+      "status": "the uploader voice tag is a weak fallback; defer a human binary head unless raw answers support a defensible negative class",
+      "test_positive_tracks": 326,
+      "training_positive_tracks": 776,
+      "training_source": "MTG-Jamendo split-0 instrument uploader tag 'voice' (weak positive; untagged tracks are weak negatives)",
+      "validation_positive_tracks": 502,
+      "validation_source": "MTG-Jamendo split-0 validation instrument tag 'voice'"
+    }
+  }
+}

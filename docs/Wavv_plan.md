@@ -100,8 +100,8 @@ Do not use MUSDB18-HQ stems for the core UHQ training path.
 ## 4.2 Music Understanding
 
 Primary:
-- curated MTG-Jamendo split-0 training tags (weak labels; use split-0 validation for selection)
-- human-validated MTG-derived annotations from split-0 test tracks for evaluation only
+- artist-grouped subset of MTG Music Classification Annotations for the taxonomies they cover, after reconciling the pinned TSV; reused split-0 test IDs lose the original test claim
+- MTG uploader tags from the same selected tracks for broader weak-label tasks, including instruments
 
 The numbered MTG-Jamendo partitions overlap and are alternative randomized splits; do not combine them.
 
@@ -229,7 +229,7 @@ Implement:
 - song-level aggregation
 - profile cache
 
-Follow the [Music Understanding implementation plan](Wavv_Music_Understanding_Implementation_Plan.md) for artifact pinning, label/split gates, and held-out evaluation. Do not train on the human-validated split-0 test annotations.
+Follow the [Music Understanding implementation plan](Wavv_Music_Understanding_Implementation_Plan.md) for artifact pinning, label/split gates, and held-out evaluation. Human annotations from split-0 test may be used only after reconciliation and an artist-grouped split; reused tracks lose their original split-0 test claim.
 
 Exit:
 - metrics are recorded for each task;

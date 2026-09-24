@@ -1,0 +1,39 @@
+{
+  "audio_missing": 57327,
+  "deam": {
+    "test_2014": {
+      "audio_missing": 1000,
+      "tracks": 1000
+    },
+    "test_2015": {
+      "audio_missing": 58,
+      "tracks": 58
+    },
+    "train": {
+      "audio_missing": 595,
+      "tracks": 595
+    },
+    "validation": {
+      "audio_missing": 149,
+      "tracks": 149
+    }
+  },
+  "deam_audio_root": "C:\\Users\\Bristo\\Wavv\\music understanding\\data\\audio\\deam",
+  "manifest_directory": "C:\\Users\\Bristo\\Wavv\\music understanding\\data\\manifests",
+  "mtg": {
+    "test": {
+      "audio_missing": 11565,
+      "tracks": 11565
+    },
+    "train": {
+      "audio_missing": 32859,
+      "tracks": 32859
+    },
+    "validation": {
+      "audio_missing": 11101,
+      "tracks": 11101
+    }
+  },
+  "mtg_audio_root": "C:\\Users\\Bristo\\Wavv\\music understanding\\data\\audio\\mtg_jamendo",
+  "seed": 42
+}

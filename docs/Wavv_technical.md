@@ -315,8 +315,9 @@ Train only tasks with valid labels. Missing task labels must be masked rather th
 ## 8.3 Data
 
 Primary:
-- curated MTG-Jamendo split-0 training tags (weak labels), with split-0 validation for selection
-- human-validated MTG-derived annotations from split-0 test tracks for held-out evaluation only; do not combine numbered MTG partitions
+- artist-grouped Music Classification Annotations from split-0 test tracks for the taxonomies they cover; using any annotated ID for fitting/tuning retires its original split-0 test claim
+- MTG uploader tags on the same selected IDs for broader weak-label tasks, including instruments; keep human and weak-label scores separate
+- numbered MTG partitions are alternate overlapping splits and must not be combined
 
 Emotion:
 - DEAM for valence/arousal

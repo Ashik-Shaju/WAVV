@@ -1,0 +1,69 @@
+{
+  "verified_on": "2026-09-23",
+  "source_commit": "a425fdce92572e602a1d5634799bd9f1f2efa806",
+  "source_license": "MIT",
+  "runtime_versions": {
+    "python": "3.12.10",
+    "torch": "2.14.0+cpu",
+    "torchvision": "0.29.0+cpu",
+    "torchaudio": "2.11.0+cpu"
+  },
+  "checkpoint": {
+    "url": "https://github.com/fschmid56/EfficientAT/releases/download/v0.0.1/dymn04_as.pt",
+    "path_local_ignored": "vendor\\EfficientAT\\resources\\dymn04_as.pt",
+    "size_bytes": 8086973,
+    "sha256": "49b0e63577021994257b3de2ac5f1686d71554b93c8149f9d2568ad5760b904e",
+    "license": "not specified separately upstream; do not redistribute pending confirmation"
+  },
+  "fixture": {
+    "kind": "deterministic 10-second three-tone mono PCM16 generated in memory",
+    "sample_rate": 32000,
+    "sample_count": 320000,
+    "pcm16_sha256": "208b833124df2882fe3b0b908ef8d6bd481a7e90e617754466b66f2d75bb4eeb"
+  },
+  "preprocessing": {
+    "source": "EfficientAT models/preprocess.py AugmentMelSTFT in eval mode",
+    "sample_rate_hz": 32000,
+    "channels": 1,
+    "preemphasis": [
+      -0.97,
+      1.0
+    ],
+    "n_fft": 1024,
+    "window_samples": 800,
+    "hop_samples": 320,
+    "mel_bins": 128,
+    "mel_filterbank": "torchaudio.compliance.kaldi.get_mel_banks",
+    "f_min_hz": 0,
+    "f_max_hz": 15000,
+    "power": 2,
+    "log_epsilon": 1e-05,
+    "normalization": "(ln(mel + 1e-5) + 4.5) / 5",
+    "window_seconds": 10,
+    "window_policy": "fixed 10-second window for this baseline; full-song aggregation is deferred"
+  },
+  "outputs": {
+    "mel_shape": [
+      1,
+      1,
+      128,
+      1000
+    ],
+    "logit_shape": [
+      1,
+      527
+    ],
+    "pooled_feature_shape": [
+      1,
+      384
+    ],
+    "finite": true,
+    "repeatable": true
+  },
+  "runtime_warnings": [
+    "Don't use ConvNormActivation directly, please use Conv2dNormActivation and Conv3dNormActivation instead.",
+    "`torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.",
+    "stft with return_complex=False is deprecated. In a future pytorch release, stft will return complex tensors for all inputs, and return_complex=False will raise an error.\nNote: you can still call torch.view_as_real on the complex output to recover the old return format. (Triggered internally at C:\\actions-runner\\_work\\pytorch\\pytorch\\aten\\src\\ATen\\native\\SpectralOps.cpp:898.)"
+  ],
+  "interpretation": "527 logits are AudioSet outputs and are not Wavv labels; pooled final feature is the frozen-feature baseline candidate"
+}

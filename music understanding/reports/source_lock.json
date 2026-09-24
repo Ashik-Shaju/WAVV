@@ -1,0 +1,51 @@
+{
+  "fetched_on": "2026-09-23",
+  "files": {
+    "deam_annotations.zip": {
+      "sha256": "809b0feb4ba6196c1eda9b2b7b33b892b11fa71457cfceb0d47e832ed1a5f15f",
+      "size_bytes": 4735283,
+      "url": "https://cvml.unige.ch/databases/DEAM/DEAM_Annotations.zip"
+    },
+    "deam_metadata.zip": {
+      "sha256": "3d1d5ab42e852803a770f2cfbd685c6b464e1ebe76f26b0e10954597902b90f8",
+      "size_bytes": 344760,
+      "url": "https://cvml.unige.ch/databases/DEAM/metadata.zip"
+    },
+    "mtg_human_clean.tsv": {
+      "sha256": "9b060b3db785d475870ceb0682241782bf20053d751863fbd42e02cf11088e1d",
+      "size_bytes": 4267428,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/derived/music-classification-annotations/music-classification-annotations-clean.tsv"
+    },
+    "mtg_raw_metadata.tsv": {
+      "sha256": "bb1efa2876536cbe1a8b67db5dda15249ca144f0cff69e481b638803cbdc9aca",
+      "size_bytes": 7848074,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/data/raw.meta.tsv"
+    },
+    "mtg_split0_test.tsv": {
+      "sha256": "c80e43416e89afc0b2656848e9d4d6f076ca0426003d7e0148ac8cdc6254d366",
+      "size_bytes": 1611903,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/data/splits/split-0/autotagging-test.tsv"
+    },
+    "mtg_split0_train.tsv": {
+      "sha256": "3b6766ee0a0aea01fa2c2c34769cb3873c0adc04378bba35912edad37077f42b",
+      "size_bytes": 4461782,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/data/splits/split-0/autotagging-train.tsv"
+    },
+    "mtg_split0_validation.tsv": {
+      "sha256": "b93639bc4f716148e7a41e35e9a1d73058a0b9e65c1cc723b66e9e72726072a7",
+      "size_bytes": 1680437,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/data/splits/split-0/autotagging-validation.tsv"
+    },
+    "mtg_split1_test.tsv": {
+      "sha256": "a57b48368908e3f8e637972eca2bcb813bf42997af893b1d4e7e1d178d7caa3f",
+      "size_bytes": 1605812,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/data/splits/split-1/autotagging-test.tsv"
+    },
+    "mtg_split1_train.tsv": {
+      "sha256": "e19e8a51c5b3d0f7d24597543c48c31dfe3baf4cb97d75ea78702cd639284bb9",
+      "size_bytes": 4603620,
+      "url": "https://raw.githubusercontent.com/MTG/mtg-jamendo-dataset/cafd8e20c265ed84f1e61f1c875327971f43a62f/data/splits/split-1/autotagging-train.tsv"
+    }
+  },
+  "mtg_repository_commit": "cafd8e20c265ed84f1e61f1c875327971f43a62f"
+}

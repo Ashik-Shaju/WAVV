@@ -119,9 +119,9 @@ Initial policy:
 Selective upper-layer fine-tuning is an experiment only after the frozen baseline.
 
 ## D-011 — MTG-Jamendo is the primary categorical Music Understanding source
-**Status:** Accepted
+**Status:** Superseded by D-043
 
-Train categorical heads from curated MTG-Jamendo split-0 training tags, treating them as weak labels. Use split-0 validation for selection and reserve its human-validated test annotations for independent evaluation only. Numbered partitions overlap and are alternative randomized splits; do not combine them. The human annotations cover selected tasks, not the full Wavv label set or instrument taxonomy. Record split and label mappings in the dataset manifest.
+Original rule: train categorical heads from curated split-0 training tags and reserve the human-validated annotations for evaluation only.
 
 DEAM is the primary auxiliary source for continuous valence/arousal.
 
@@ -431,6 +431,15 @@ The currently reviewed specifications are:
 - UHQ enhancement specification
 - DCLAP quantization/text architecture specification
 - recommendation/behavioral dataset specification
+
+## D-043 — Use artist-held-out human labels for covered tasks
+**Status:** Accepted
+
+For the CPU-constrained Music Understanding baseline, use the exact hash-verified pinned MTG annotation TSV and record its support-count differences from the README as upstream documentation drift. Select only taxonomies with clear label semantics and usable class/artist support. Build a track- and artist-disjoint fit/validation/test split from the annotated split-0 test IDs; tracks used for fitting or tuning are no longer part of the original split-0 test claim. Do not combine numbered MTG partitions.
+
+Prefer human consensus labels for covered tasks. Reuse the same selected audio IDs' MTG uploader tags for broader weak-tag tasks, including instruments, so one audio download serves both. Start with a few-hundred-track audio/CPU timing pilot. Then grow the training partition only as needed, with validation-only data scaling until the smallest subset passing the per-task support and validation gates is reached; lock final test artists throughout. Do not claim a fixed sample cap yields validated quality. Use mono `audio-low` and the frozen DyMN04-AS feature path first; do not fine-tune the backbone.
+
+**Reproducible comparison:** with the same track/artist split, audio encoding, deterministic 10-second window policy, frozen pooled features, and linear-head baseline, record per-taxonomy metrics and support at successive training-set sizes. Keep human and uploader-tag scores separate because their label definitions differ. Compare each task with its prevalence/majority baseline; expand only where validation or class support fails. Freeze the TSV-derived label contract and artist-grouped manifests before downloading beyond the timing pilot.
 
 ---
 
