@@ -1,6 +1,6 @@
 # Music Understanding: constrained first baseline
 
-Status: paused by user on 2026-09-25; 728/800 cached features are audited and 72 remain.
+Status: pre-training pipeline complete on 2026-09-25; Gate 2A passed with all 800 features. Training has not started.
 
 ## Goal
 

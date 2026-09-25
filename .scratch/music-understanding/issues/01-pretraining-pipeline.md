@@ -1,7 +1,7 @@
 # Complete the pre-training feature pipeline
 
 Type: task
-Status: paused by user on 2026-09-25; 728/800 features are cached locally and audited; 72 remain.
+Status: resolved on 2026-09-25; all 800 features are cached locally and audited. Training remains out of scope.
 
 ## Scope
 
@@ -18,7 +18,7 @@ Freeze the 800-track artist-disjoint manifest, acquire OGG per track with immedi
 
 ## Evidence
 
-See `music understanding/reports/jamendo_availability.json`, `music understanding/reports/mtg_human_manifest.json`, and `music understanding/reports/feature_extraction.json` when full extraction completes.
+See `music understanding/reports/jamendo_availability.json`, `music understanding/reports/mtg_human_manifest.json`, and `music understanding/reports/feature_extraction.json` for the completed extraction evidence.
 
 ## Resume checkpoint
 
@@ -29,3 +29,4 @@ Set `JAMENDO_CLIENT_ID` in that PowerShell process; the repository does not stor
 ## Comments
 
 - 2026-09-25: Resumed extraction and paused at the user's request after manifest entry 728 (`track_1164054`). The local cache contains 728 mapped finite 384-D rows, SQLite integrity is `ok`, 72 IDs remain, and the interrupted temporary OGG was deleted. Resume the command above; it skips cached IDs. Training has not started.
+- 2026-09-25: Completed manifest extraction at 800/800. Final audit confirmed exact manifest hash and ID alignment, disjoint artists, finite 384-D features, repeatability checks, SQLite integrity `ok`, and zero temporary audio. See `music understanding/reports/feature_extraction.json`. Training has not started.
