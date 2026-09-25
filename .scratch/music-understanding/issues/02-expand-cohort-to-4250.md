@@ -37,4 +37,4 @@ cd 'C:\Users\Bristo\Wavv\music understanding'
 
 The initial seed-and-download command has already run once; do not repeat `--reuse-cache`. If the process stops before completion, check the checkpoint and ensure no extractor process is still running, then rerun `scripts\extract_mtg_features.py` without `--reuse-cache`. SQLite commits each completed row and the report checkpoint tracks progress. Training remains for a later session.
 
-Current run: hidden Python process PID `11480`, started 2026-09-25 18:25:58 Asia/Colombo. At the last checkpoint it had 802/4,250 rows, including all 800 verified seed rows and two new rows. Logs are in `%TEMP%\wavv-mu-4250-20260925-182558.out.log` and `%TEMP%\wavv-mu-4250-20260925-182558.err.log`.
+Current run: hidden Python process PID `11480`, started 2026-09-25 18:25:58 Asia/Colombo. At the 18:35:05 checkpoint it had 853/4,250 rows, including all 800 verified seed rows and 53 new rows. The early live rate suggests about 9.7 hours remain if it holds. Logs are in `%TEMP%\wavv-mu-4250-20260925-182558.out.log` and `%TEMP%\wavv-mu-4250-20260925-182558.err.log`.
