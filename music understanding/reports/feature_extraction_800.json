@@ -1,0 +1,41 @@
+{
+  "completed_on": "2026-09-25",
+  "model": "frozen DyMN04-AS pooled final feature",
+  "source_commit": "a425fdce92572e602a1d5634799bd9f1f2efa806",
+  "checkpoint_sha256": "49b0e63577021994257b3de2ac5f1686d71554b93c8149f9d2568ad5760b904e",
+  "manifest_sha256": "ec17cb3d1b7e0ee9f3f5d8c3c272b5f98fcf1699bcfe1514fb4906e9fed49be1",
+  "candidate_inventory_sha256": "8dedce1f0d9fa2890007d1833d777c0577e168dbb5677d502d8f64a94f612185",
+  "availability_report_sha256": "d5008930ae77b4a40bbb7de028093a90bd6219b9eda0c6a2448b02fae8552eb4",
+  "seed": 42,
+  "window": {
+    "seconds": 10,
+    "policy": "ffmpeg resample to mono 32 kHz, then pad/crop the deterministic midpoint excerpt to exactly 320000 samples",
+    "sample_rate_hz": 32000,
+    "channels": 1
+  },
+  "feature_shape_per_track": [
+    384
+  ],
+  "feature_dtype": "little-endian float32",
+  "selected_for_this_run": {
+    "fit": 560,
+    "validation": 120,
+    "test": 120
+  },
+  "feature_cache_rows": 800,
+  "manifest_rows": 800,
+  "full_manifest_complete": true,
+  "cached_id_split_artist_mapping_matches_manifest": true,
+  "permission_snapshot_audited_on": "2026-09-24",
+  "permission_checked_by_per_track_download_endpoint": true,
+  "downloaded_ogg_bytes_this_run": 245900948,
+  "mean_download_seconds_per_new_track_this_run": 6.962400125000004,
+  "mean_decode_and_inference_seconds_per_new_track_this_run": 0.30452986111110447,
+  "wall_seconds_this_run": 523.542,
+  "repeatability_checked_for_every_new_feature": true,
+  "all_cached_features_finite_and_384d": true,
+  "source_audio_retained": false,
+  "feature_cache_path": "data\\features\\mtg_dymn04as_800.sqlite",
+  "feature_cache_size_bytes": 1679360,
+  "training_started": false
+}

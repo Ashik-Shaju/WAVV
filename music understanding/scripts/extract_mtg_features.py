@@ -174,10 +174,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Download each selected OGG temporarily, extract pooled features, and delete it; never trains.")
     parser.add_argument("--client-id-env", default="JAMENDO_CLIENT_ID")
     parser.add_argument("--limit", type=int, help="Deterministic timing subset across fit/validation/test; omit to finish the full manifest")
-    parser.add_argument("--output", type=Path, default=FEATURES / "mtg_dymn04as_800.sqlite")
+    parser.add_argument("--output", type=Path, default=FEATURES / "mtg_dymn04as_4250.sqlite")
+    parser.add_argument("--reuse-cache", type=Path, help="Seed a new cache from a compatible, smaller completed feature cache")
     args = parser.parse_args()
+    args.output = args.output.resolve()
+    if args.reuse_cache is not None:
+        args.reuse_cache = args.reuse_cache.resolve()
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be positive")
+    if args.reuse_cache is not None:
+        if args.limit is not None:
+            raise SystemExit("--reuse-cache applies only to a full-manifest extraction")
+        if args.output.resolve() == args.reuse_cache.resolve():
+            raise SystemExit("--output and --reuse-cache must be different files")
+        if args.output.exists():
+            raise SystemExit("--reuse-cache requires a new output cache; resume an existing cache without this option")
     client_id = os.environ.get(args.client_id_env)
     if not client_id:
         raise SystemExit(f"Set {args.client_id_env} for this process; its value is never written to artifacts")
@@ -250,13 +261,81 @@ def main() -> None:
         if prior and prior[0] != value:
             raise SystemExit(f"Existing feature cache {key} does not match current source contract")
         connection.execute("INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)", (key, value))
+
+    if args.reuse_cache is not None:
+        if not args.reuse_cache.is_file():
+            raise SystemExit(f"Reuse cache does not exist: {args.reuse_cache}")
+        old_connection = sqlite3.connect(args.reuse_cache.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            if old_connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise SystemExit("Reuse cache failed SQLite integrity_check")
+            old_meta = dict(old_connection.execute("SELECT key,value FROM metadata"))
+            for key, value in expected_meta.items():
+                if key != "manifest_sha256" and old_meta.get(key) != value:
+                    raise SystemExit(f"Reuse cache {key} does not match current source contract")
+            old_rows = old_connection.execute(
+                "SELECT track_id,split,jamendo_track_id,artist_id,duration_seconds,window_start_seconds,feature FROM features"
+            ).fetchall()
+        finally:
+            old_connection.close()
+
+        expected_rows = {
+            str(row["track_id"]): (str(row["split"]), str(row["jamendo_track_id"]), str(row["artist_id"]))
+            for split_rows in rows_by_split.values()
+            for row in split_rows
+        }
+        for track_id, split, jamendo_id, artist_id, _, _, blob in old_rows:
+            if track_id not in expected_rows or expected_rows[track_id] != (split, jamendo_id, artist_id):
+                raise SystemExit(f"Reuse cache row does not match the expanded manifest: {track_id}")
+            if len(blob) != FEATURE_DIM * 4 or not torch.isfinite(torch.frombuffer(bytearray(blob), dtype=torch.float32)).all():
+                raise SystemExit(f"Reuse cache contains an invalid feature vector: {track_id}")
+        connection.executemany("INSERT INTO features VALUES(?,?,?,?,?,?,?)", old_rows)
+        connection.commit()
+        print(f"Reused {len(old_rows)} verified feature rows from {args.reuse_cache}")
+
     connection.commit()
 
     start_all = time.perf_counter()
     byte_counts: list[int] = []
     download_times: list[float] = []
     processing_times: list[float] = []
+    last_processed_track = None
+
+    def save_checkpoint(state: str) -> None:
+        if args.limit is not None:
+            return
+        manifest_count = sum(map(len, rows_by_split.values()))
+        cached_count = connection.execute("SELECT COUNT(*) FROM features").fetchone()[0]
+        checkpoint = {
+            "checkpoint_date": date.today().isoformat(),
+            "state": state,
+            "manifest_sha256": manifest_sha,
+            "candidate_inventory_sha256": candidate_sha,
+            "availability_report_sha256": availability_sha,
+            "manifest_rows": manifest_count,
+            "cached_rows": cached_count,
+            "feature_cache_rows": cached_count,
+            "remaining_rows": manifest_count - cached_count,
+            "full_manifest_complete": cached_count == manifest_count,
+            "cache_path_local_ignored": str(args.output.resolve().relative_to(ROOT)),
+            "last_processed_track_id": last_processed_track,
+            "temporary_audio_files": len(list(TEMP_AUDIO.glob("wavv_mu_*.ogg"))),
+            "source_audio_retained": False,
+            "feature_shape_per_track": [FEATURE_DIM],
+            "training_started": False,
+            "completion_report": "reports/feature_extraction.json",
+        }
+        checkpoint_path = ROOT / "reports" / "feature_extraction_checkpoint.json"
+        report_paths = [checkpoint_path]
+        if state != "pretraining_pipeline_complete":
+            report_paths.append(ROOT / "reports" / "feature_extraction.json")
+        for report_path in report_paths:
+            temporary_path = report_path.with_suffix(".json.tmp")
+            temporary_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
+            temporary_path.replace(report_path)
+
     try:
+        save_checkpoint("feature_extraction_in_progress")
         for index, row in enumerate(rows, start=1):
             track_id = str(row["track_id"])
             exists = connection.execute("SELECT 1 FROM features WHERE track_id=?", (track_id,)).fetchone()
@@ -293,6 +372,8 @@ def main() -> None:
                 print(f"Extracted {index}/{len(rows)} {track_id}")
             finally:
                 audio_path.unlink(missing_ok=True)
+            last_processed_track = track_id
+            save_checkpoint("feature_extraction_in_progress")
 
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
@@ -360,7 +441,11 @@ def main() -> None:
         else:
             report_path = ROOT / "reports" / "feature_extraction.json"
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        save_checkpoint("pretraining_pipeline_complete" if complete else "feature_extraction_incomplete")
         print(json.dumps({"report": str(report_path), "feature_cache_rows": len(cached_ids), "full_manifest_complete": complete}, indent=2))
+    except BaseException:
+        save_checkpoint("feature_extraction_interrupted")
+        raise
     finally:
         connection.close()
 

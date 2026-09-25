@@ -399,16 +399,28 @@ def weak_label_map(selected_by_split: dict[str, list[dict[str, object]]]) -> dic
         )
         eligible = []
         for label in candidates:
-            support = {
-                split: {
-                    "tracks": counts[split]["tracks"][label],
-                    "artists": len(counts[split]["artists"][label]),
+            support = {}
+            for split in SPLITS:
+                rows = selected_by_split[split]
+                positive_artists = set(counts[split]["artists"][label])
+                negative_rows = [row for row in rows if label not in row["uploader_tags"].get(category, [])]
+                negative_artists = {str(row["artist_id"]) for row in negative_rows}
+                support[split] = {
+                    "positive": {
+                        "tracks": counts[split]["tracks"][label],
+                        "artists": len(positive_artists),
+                    },
+                    "negative": {
+                        "tracks": len(negative_rows),
+                        "artists": len(negative_artists),
+                    },
                 }
-                for split in SPLITS
-            }
             if all(
-                support[split]["tracks"] >= SUPPORT_FLOORS[split]["tracks"]
-                and support[split]["artists"] >= SUPPORT_FLOORS[split]["artists"]
+                all(
+                    support[split][polarity][measure] >= SUPPORT_FLOORS[split][measure]
+                    for polarity in ("positive", "negative")
+                    for measure in ("tracks", "artists")
+                )
                 for split in SPLITS
             ):
                 eligible.append({"label": label, "support": support})
@@ -535,7 +547,7 @@ def main() -> None:
     inventory_parser.add_argument("--client-id-env", default="JAMENDO_CLIENT_ID")
     inventory_parser.add_argument("--batch-size", type=int, default=50, choices=range(1, 51))
     manifest_parser = subparsers.add_parser("manifest", help="Create a capped artist-disjoint fit/validation/test manifest")
-    manifest_parser.add_argument("--max-tracks", type=int, default=800, help="Initial low-resource cap; 4,250 is only an optional post-validation expansion ceiling")
+    manifest_parser.add_argument("--max-tracks", type=int, default=4250, help="Maximum eligible human-annotated tracks to include")
     manifest_parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args()
 

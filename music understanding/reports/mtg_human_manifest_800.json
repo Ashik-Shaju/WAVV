@@ -1,0 +1,427 @@
+{
+  "annotation_sha256": "9b060b3db785d475870ceb0682241782bf20053d751863fbd42e02cf11088e1d",
+  "artist_overlap": false,
+  "artist_split_ratios": {
+    "fit": 0.7,
+    "test": 0.15,
+    "validation": 0.15
+  },
+  "availability_audited_on": "2026-09-24",
+  "availability_report_sha256": "d5008930ae77b4a40bbb7de028093a90bd6219b9eda0c6a2448b02fae8552eb4",
+  "built_on": "2026-09-24",
+  "candidate_inventory_sha256": "8dedce1f0d9fa2890007d1833d777c0577e168dbb5677d502d8f64a94f612185",
+  "eligible_candidate_tracks": 4915,
+  "human_candidate_status": {
+    "fit": {
+      "danceability": "retain",
+      "gender": "defer: male 25 tracks/17 artists",
+      "mood_acoustic": "retain",
+      "mood_aggressive": "retain",
+      "mood_electronic": "retain",
+      "mood_happy": "retain",
+      "mood_party": "retain",
+      "mood_relaxed": "retain",
+      "mood_sad": "retain",
+      "tonal_atonal": "defer: atonal 13 tracks/10 artists"
+    },
+    "test": {
+      "danceability": "retain",
+      "gender": "defer: female 29 tracks/13 artists; male 5 tracks/3 artists",
+      "mood_acoustic": "retain",
+      "mood_aggressive": "retain",
+      "mood_electronic": "retain",
+      "mood_happy": "retain",
+      "mood_party": "retain",
+      "mood_relaxed": "retain",
+      "mood_sad": "retain",
+      "tonal_atonal": "defer: atonal 6 tracks/1 artists"
+    },
+    "validation": {
+      "danceability": "retain",
+      "gender": "defer: female 26 tracks/11 artists; male 3 tracks/2 artists",
+      "mood_acoustic": "retain",
+      "mood_aggressive": "retain",
+      "mood_electronic": "retain",
+      "mood_happy": "retain",
+      "mood_party": "retain",
+      "mood_relaxed": "retain",
+      "mood_sad": "retain",
+      "tonal_atonal": "defer: atonal 1 tracks/1 artists"
+    }
+  },
+  "human_class_support": {
+    "danceability": {
+      "fit": {
+        "danceable": {
+          "artists": 65,
+          "tracks": 139
+        },
+        "not_danceable": {
+          "artists": 101,
+          "tracks": 167
+        }
+      },
+      "test": {
+        "danceable": {
+          "artists": 19,
+          "tracks": 41
+        },
+        "not_danceable": {
+          "artists": 17,
+          "tracks": 39
+        }
+      },
+      "validation": {
+        "danceable": {
+          "artists": 19,
+          "tracks": 39
+        },
+        "not_danceable": {
+          "artists": 18,
+          "tracks": 37
+        }
+      }
+    },
+    "gender": {
+      "fit": {
+        "female": {
+          "artists": 58,
+          "tracks": 104
+        },
+        "male": {
+          "artists": 17,
+          "tracks": 25
+        }
+      },
+      "test": {
+        "female": {
+          "artists": 13,
+          "tracks": 29
+        },
+        "male": {
+          "artists": 3,
+          "tracks": 5
+        }
+      },
+      "validation": {
+        "female": {
+          "artists": 11,
+          "tracks": 26
+        },
+        "male": {
+          "artists": 2,
+          "tracks": 3
+        }
+      }
+    },
+    "mood_acoustic": {
+      "fit": {
+        "acoustic": {
+          "artists": 70,
+          "tracks": 159
+        },
+        "not_acoustic": {
+          "artists": 127,
+          "tracks": 227
+        }
+      },
+      "test": {
+        "acoustic": {
+          "artists": 17,
+          "tracks": 35
+        },
+        "not_acoustic": {
+          "artists": 21,
+          "tracks": 50
+        }
+      },
+      "validation": {
+        "acoustic": {
+          "artists": 15,
+          "tracks": 33
+        },
+        "not_acoustic": {
+          "artists": 23,
+          "tracks": 51
+        }
+      }
+    },
+    "mood_aggressive": {
+      "fit": {
+        "aggressive": {
+          "artists": 62,
+          "tracks": 114
+        },
+        "not_aggressive": {
+          "artists": 169,
+          "tracks": 317
+        }
+      },
+      "test": {
+        "aggressive": {
+          "artists": 17,
+          "tracks": 30
+        },
+        "not_aggressive": {
+          "artists": 29,
+          "tracks": 70
+        }
+      },
+      "validation": {
+        "aggressive": {
+          "artists": 12,
+          "tracks": 37
+        },
+        "not_aggressive": {
+          "artists": 31,
+          "tracks": 63
+        }
+      }
+    },
+    "mood_electronic": {
+      "fit": {
+        "electronic": {
+          "artists": 108,
+          "tracks": 222
+        },
+        "not_electronic": {
+          "artists": 100,
+          "tracks": 202
+        }
+      },
+      "test": {
+        "electronic": {
+          "artists": 17,
+          "tracks": 48
+        },
+        "not_electronic": {
+          "artists": 21,
+          "tracks": 44
+        }
+      },
+      "validation": {
+        "electronic": {
+          "artists": 27,
+          "tracks": 57
+        },
+        "not_electronic": {
+          "artists": 19,
+          "tracks": 42
+        }
+      }
+    },
+    "mood_happy": {
+      "fit": {
+        "happy": {
+          "artists": 73,
+          "tracks": 126
+        },
+        "not_happy": {
+          "artists": 142,
+          "tracks": 260
+        }
+      },
+      "test": {
+        "happy": {
+          "artists": 17,
+          "tracks": 30
+        },
+        "not_happy": {
+          "artists": 19,
+          "tracks": 61
+        }
+      },
+      "validation": {
+        "happy": {
+          "artists": 19,
+          "tracks": 31
+        },
+        "not_happy": {
+          "artists": 26,
+          "tracks": 61
+        }
+      }
+    },
+    "mood_party": {
+      "fit": {
+        "not_party": {
+          "artists": 171,
+          "tracks": 320
+        },
+        "party": {
+          "artists": 45,
+          "tracks": 108
+        }
+      },
+      "test": {
+        "not_party": {
+          "artists": 25,
+          "tracks": 60
+        },
+        "party": {
+          "artists": 13,
+          "tracks": 30
+        }
+      },
+      "validation": {
+        "not_party": {
+          "artists": 26,
+          "tracks": 56
+        },
+        "party": {
+          "artists": 11,
+          "tracks": 30
+        }
+      }
+    },
+    "mood_relaxed": {
+      "fit": {
+        "not_relaxed": {
+          "artists": 125,
+          "tracks": 252
+        },
+        "relaxed": {
+          "artists": 76,
+          "tracks": 152
+        }
+      },
+      "test": {
+        "not_relaxed": {
+          "artists": 25,
+          "tracks": 60
+        },
+        "relaxed": {
+          "artists": 17,
+          "tracks": 33
+        }
+      },
+      "validation": {
+        "not_relaxed": {
+          "artists": 23,
+          "tracks": 57
+        },
+        "relaxed": {
+          "artists": 19,
+          "tracks": 37
+        }
+      }
+    },
+    "mood_sad": {
+      "fit": {
+        "not_sad": {
+          "artists": 142,
+          "tracks": 267
+        },
+        "sad": {
+          "artists": 73,
+          "tracks": 113
+        }
+      },
+      "test": {
+        "not_sad": {
+          "artists": 26,
+          "tracks": 59
+        },
+        "sad": {
+          "artists": 12,
+          "tracks": 30
+        }
+      },
+      "validation": {
+        "not_sad": {
+          "artists": 34,
+          "tracks": 66
+        },
+        "sad": {
+          "artists": 16,
+          "tracks": 31
+        }
+      }
+    },
+    "tonal_atonal": {
+      "fit": {
+        "atonal": {
+          "artists": 10,
+          "tracks": 13
+        },
+        "tonal": {
+          "artists": 192,
+          "tracks": 371
+        }
+      },
+      "test": {
+        "atonal": {
+          "artists": 1,
+          "tracks": 6
+        },
+        "tonal": {
+          "artists": 36,
+          "tracks": 84
+        }
+      },
+      "validation": {
+        "atonal": {
+          "artists": 1,
+          "tracks": 1
+        },
+        "tonal": {
+          "artists": 35,
+          "tracks": 80
+        }
+      }
+    }
+  },
+  "inventory_eligible_track_count": 4915,
+  "manifest_sha256": "ec17cb3d1b7e0ee9f3f5d8c3c272b5f98fcf1699bcfe1514fb4906e9fed49be1",
+  "max_tracks": 800,
+  "mtg_repository_commit": "cafd8e20c265ed84f1e61f1c875327971f43a62f",
+  "original_split0_test_claim_retired": true,
+  "retained_human_tasks": [
+    "danceability",
+    "mood_acoustic",
+    "mood_aggressive",
+    "mood_electronic",
+    "mood_happy",
+    "mood_party",
+    "mood_relaxed",
+    "mood_sad"
+  ],
+  "seed": 42,
+  "selected_artist_groups": {
+    "fit": 251,
+    "test": 41,
+    "validation": 47
+  },
+  "selected_tracks": {
+    "fit": 560,
+    "test": 120,
+    "validation": 120
+  },
+  "source_audio_downloaded": false,
+  "split_manifest_sha256": {
+    "fit": "5ecb862b1fafe648e55e1c47af9579585dd6a2c14a93945282e4cceeae837fc3",
+    "test": "ddcba506b53b327e4f88ced90e179cda146f08d89a82bae9f5c0f75a183b8599",
+    "validation": "702e6bf10e68ffdd91c348ea19eaa07d05b6133de130c1cedf3640f90368c0a0"
+  },
+  "task_support_floor": {
+    "fit": {
+      "artists": 20,
+      "tracks": 100
+    },
+    "test": {
+      "artists": 10,
+      "tracks": 30
+    },
+    "validation": {
+      "artists": 10,
+      "tracks": 30
+    }
+  },
+  "track_overlap": false,
+  "weak_label_map": {
+    "genre": [],
+    "instrument": [],
+    "mood/theme": []
+  },
+  "weak_tag_policy": "absence means not tagged by uploader, not confirmed acoustic absence"
+}
