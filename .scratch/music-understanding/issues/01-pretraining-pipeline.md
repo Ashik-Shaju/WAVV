@@ -1,7 +1,7 @@
 # Complete the pre-training feature pipeline
 
 Type: task
-Status: paused by user on 2026-09-25; 193/800 features are cached locally and audited.
+Status: paused by user on 2026-09-25; 728/800 features are cached locally and audited; 72 remain.
 
 ## Scope
 
@@ -25,3 +25,7 @@ See `music understanding/reports/jamendo_availability.json`, `music understandin
 Set `JAMENDO_CLIENT_ID` in that PowerShell process; the repository does not store credentials.
 
 `music understanding/reports/feature_extraction_checkpoint.json` records the verified local cache state. Resume with `cd 'C:\Users\Bristo\Wavv\music understanding'` and `.\.venv\Scripts\python.exe scripts\extract_mtg_features.py`; the extractor skips cached track IDs. No training has started.
+
+## Comments
+
+- 2026-09-25: Resumed extraction and paused at the user's request after manifest entry 728 (`track_1164054`). The local cache contains 728 mapped finite 384-D rows, SQLite integrity is `ok`, 72 IDs remain, and the interrupted temporary OGG was deleted. Resume the command above; it skips cached IDs. Training has not started.

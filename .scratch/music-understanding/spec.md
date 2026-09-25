@@ -1,6 +1,6 @@
 # Music Understanding: constrained first baseline
 
-Status: paused by user on 2026-09-25; resume from 193/800 cached features.
+Status: paused by user on 2026-09-25; 728/800 cached features are audited and 72 remain.
 
 ## Goal
 
