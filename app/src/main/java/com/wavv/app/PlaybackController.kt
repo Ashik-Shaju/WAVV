@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.random.Random
 
-enum class QueueMode { Intelligent, Shuffle, Off }
+enum class QueueMode { Shuffle, Off }
 
 data class PlaybackState(
     val song: Song? = null,
@@ -23,7 +23,7 @@ data class PlaybackState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val queue: List<Song> = emptyList(),
-    val queueMode: QueueMode = QueueMode.Intelligent,
+    val queueMode: QueueMode = QueueMode.Off,
     val errorMessage: String? = null,
 )
 
@@ -167,8 +167,7 @@ class PlaybackController(context: Context) {
         val player = controller ?: return
         when (mode) {
             QueueMode.Shuffle -> applyQueueOrder(shuffleUpcoming(readQueue(player), player.currentMediaItemIndex, System.nanoTime()))
-            // Ranking is intentionally disabled; both non-shuffle modes restore managed order.
-            QueueMode.Intelligent, QueueMode.Off -> applyQueueOrder(managedQueue)
+            QueueMode.Off -> applyQueueOrder(managedQueue)
         }
         _state.value = _state.value.copy(queue = readQueue(player), queueMode = mode)
     }

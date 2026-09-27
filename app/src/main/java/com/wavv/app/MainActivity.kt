@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +21,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -87,6 +87,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Album
@@ -109,7 +111,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
-import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
@@ -117,7 +118,6 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.SmartDisplay
-import androidx.compose.material.icons.filled.Subject
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -146,6 +146,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -193,12 +194,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.mediarouter.media.MediaControlIntent
+import androidx.mediarouter.media.MediaRouteSelector
+import androidx.mediarouter.media.MediaRouter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlin.math.max
+import kotlin.math.roundToInt
 import java.util.Locale
 
 private val WavvBackground = Color(0xFF0A0A0A)
@@ -502,7 +507,9 @@ private fun WavvContent(
         backLibrary()
     }
 
-    Box(Modifier.fillMaxSize().background(WavvBackground)) {
+    SharedTransitionLayout(Modifier.fillMaxSize()) {
+        val sharedTransitionScope = this
+        Box(Modifier.fillMaxSize().background(WavvBackground)) {
         if (showLibrary) {
             val tabOffsetPx = (8 * LocalDensity.current.density).toInt()
             AnimatedContent(
@@ -581,6 +588,8 @@ private fun WavvContent(
                 onPrevious = onPrevious,
                 onNext = onNext,
                 onOpen = { showPlayer = true },
+                sharedTransitionScope = sharedTransitionScope,
+                playerVisible = showPlayer,
             )
         }
         if (showLibrary) BottomNav(tab, activeSong?.albumArtUri, { tab = it }, Modifier.align(Alignment.BottomCenter))
@@ -613,6 +622,8 @@ private fun WavvContent(
                     onMoveQueueItem = onMoveQueueItem,
                     onPlayNext = onPlayNext,
                     playlists = playlists,
+                    sharedTransitionScope = sharedTransitionScope,
+                    playerVisible = showPlayer,
                     onAddSongToPlaylist = onAddSongToPlaylist,
                     onCreatePlaylist = { songId -> createPlaylistSongId = songId; createPlaylistName = ""; showCreatePlaylist = true },
                     onNavigateToAlbum = { song -> navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.artist)); tab = Tab.Library; showPlayer = false; showQueue = false },
@@ -673,6 +684,7 @@ private fun WavvContent(
                 confirmButton = { TextButton(onClick = { onDeletePlaylist(playlist.id); deletePlaylist = null }) { Text("Delete") } },
                 dismissButton = { TextButton(onClick = { deletePlaylist = null }) { Text("Cancel") } },
             )
+        }
         }
     }
 }
@@ -1144,16 +1156,22 @@ private fun CategoryCard(label: String, color: Color, onClick: () -> Unit, modif
     Box(
         modifier.height(100.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(color)
-            .clickable(onClick = onClick),
+            .background(Brush.verticalGradient(listOf(color.copy(.82f), color, color.copy(.72f))))
+            .clickable(role = Role.Button, onClick = onClick),
     ) {
         Box(
-            Modifier.align(Alignment.CenterEnd).offset(x = 18.dp).size(96.dp)
-                .background(Color.White.copy(alpha = .1f), CircleShape),
+            Modifier.align(Alignment.CenterEnd).offset(x = 20.dp).size(118.dp)
+                .background(Brush.radialGradient(listOf(Color.White.copy(.27f), color.copy(.4f), Color.Transparent)), CircleShape),
         )
         Box(
-            Modifier.align(Alignment.CenterEnd).offset(x = (-20).dp, y = 20.dp).size(48.dp)
-                .background(Color.Black.copy(alpha = .12f), CircleShape),
+            Modifier.align(Alignment.CenterEnd).offset(x = (-22).dp, y = 19.dp).size(46.dp)
+                .border(1.dp, Color.White.copy(.16f), CircleShape),
+        )
+        Icon(
+            Icons.Default.MusicNote,
+            contentDescription = null,
+            tint = Color.White.copy(.24f),
+            modifier = Modifier.align(Alignment.CenterEnd).offset(x = 5.dp).size(64.dp),
         )
         Box(
             Modifier.fillMaxSize().background(
@@ -2058,7 +2076,7 @@ private fun BottomNav(active: Tab, artwork: String?, onChange: (Tab) -> Unit, mo
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean) {
     val height by animateDpAsState(if (expanded) 144.dp else 70.dp, tween(520, easing = WavvMotionEasing), label = "player bar height")
     val cornerRadius by animateDpAsState(if (expanded) 30.dp else 999.dp, tween(320, easing = WavvMotionEasing), label = "player bar corners")
     val shape = RoundedCornerShape(cornerRadius)
@@ -2082,16 +2100,20 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, m
             if (big) {
                 Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.SpaceBetween) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        AlbumArt(song.albumArtUri, Modifier.size(50.dp), song.title, 11.dp)
+                        Box(Modifier.size(50.dp).sharedPlayerArtwork(sharedTransitionScope, song.id, !playerVisible && big == expanded)) {
+                            AlbumArt(song.albumArtUri, Modifier.fillMaxSize(), song.title, 11.dp)
+                        }
                         TrackText(song, Modifier.weight(1f), 15.sp)
                         IconButton(onClick = onLike) { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Like", tint = if (liked) WavvPink else Color.White.copy(.55f), modifier = Modifier.size(20.dp)) }
                     }
-                    PlayerProgress(state, song, showUhq = false)
+                    PlayerProgress(state, song)
                     PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 38.dp)
                 }
             } else {
                 Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AlbumArt(song.albumArtUri, Modifier.size(48.dp), song.title, 10.dp)
+                    Box(Modifier.size(48.dp).sharedPlayerArtwork(sharedTransitionScope, song.id, !playerVisible && big == expanded)) {
+                        AlbumArt(song.albumArtUri, Modifier.fillMaxSize(), song.title, 10.dp)
+                    }
                     TrackText(song, Modifier.weight(1f), 14.sp)
                     IconButton(onClick = onToggle) { Icon(if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (state.isPlaying) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(22.dp)) }
                         IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White.copy(.6f), modifier = Modifier.size(20.dp)) }
@@ -2108,6 +2130,15 @@ private fun TrackText(song: Song, modifier: Modifier = Modifier, titleSize: Text
         Text(song.artist, color = Color.White.copy(.5f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
+
+@Composable
+private fun Modifier.sharedPlayerArtwork(scope: SharedTransitionScope, songId: Long, visible: Boolean): Modifier =
+    with(scope) {
+        sharedElementWithCallerManagedVisibility(
+            rememberSharedContentState(key = "player-art-$songId"),
+            visible = visible,
+        )
+    }
 
 @Composable
 private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, iconSize: Dp) {
@@ -2152,6 +2183,8 @@ private fun FullPlayer(
     onCreatePlaylist: (Long) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
+    sharedTransitionScope: SharedTransitionScope,
+    playerVisible: Boolean,
 ) {
     var showLyrics by remember(song.id) { mutableStateOf(false) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
@@ -2220,10 +2253,12 @@ private fun FullPlayer(
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onClose) { Icon(Icons.Default.ArrowDownward, contentDescription = "Close player", tint = Color.White.copy(.75f)) }
                 Text("NOW PLAYING", color = Color.White.copy(.35f), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                IconButton(onClick = onShowQueue) { Icon(Icons.Default.QueueMusic, "Queue", Modifier.size(24.dp), tint = Color.White.copy(.75f)) }
+                IconButton(onClick = onShowQueue) { Icon(Icons.AutoMirrored.Filled.QueueMusic, "Queue", Modifier.size(24.dp), tint = Color.White.copy(.75f)) }
             }
             Spacer(Modifier.height(32.dp))
-            AlbumArt(song.albumArtUri, Modifier.size(expandedArt), song.title, if (state.isPlaying) 20.dp else 16.dp)
+            Box(Modifier.size(expandedArt).sharedPlayerArtwork(sharedTransitionScope, song.id, playerVisible)) {
+                AlbumArt(song.albumArtUri, Modifier.fillMaxSize(), song.title, if (state.isPlaying) 20.dp else 16.dp)
+            }
             Spacer(Modifier.weight(1f))
             Column(Modifier.fillMaxWidth().alpha(if (showQueue) 0f else 1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -2231,10 +2266,10 @@ private fun FullPlayer(
                     IconButton(onClick = onLike) { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Like", tint = if (liked) WavvPink else Color.White, modifier = Modifier.size(26.dp)) }
                     IconButton(onClick = { showTrackOptions = true }) { Icon(Icons.Default.MoreVert, "More", Modifier.size(24.dp), tint = Color.White.copy(.7f)) }
                 }
-                PlayerProgress(state, song, showUhq = true, onSeek = onSeek)
+                PlayerProgress(state, song, onSeek = onSeek)
                 PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 40.dp)
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    IconButton(onClick = { showLyrics = true }) { Icon(Icons.Default.Subject, "Lyrics", Modifier.size(24.dp), tint = Color.White.copy(.8f)) }
+                    IconButton(onClick = { showLyrics = true }) { Icon(Icons.AutoMirrored.Filled.Subject, "Lyrics", Modifier.size(24.dp), tint = Color.White.copy(.8f)) }
                     IconButton(onClick = { showOutputs = true }) { Icon(Icons.Default.Cast, "Audio output", Modifier.size(24.dp), tint = Color.White.copy(.8f)) }
                     IconButton(onClick = onCycleLoop) {
                         Icon(
@@ -2327,59 +2362,62 @@ private fun FullPlayer(
 }
 
 @Composable
-private fun PlayerProgress(state: PlaybackState, song: Song, showUhq: Boolean, onSeek: (Long) -> Unit = {}) {
+private fun PlayerProgress(state: PlaybackState, song: Song, onSeek: (Long) -> Unit = {}) {
     val duration = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
     val position = state.positionMs.coerceIn(0L, duration)
     Column(Modifier.fillMaxWidth()) {
         Slider(value = position.toFloat(), onValueChange = { onSeek(it.toLong()) }, valueRange = 0f..duration.toFloat(), modifier = Modifier.fillMaxWidth().height(20.dp), colors = SliderDefaults.colors(thumbColor = Color(0xFFFFAE46), activeTrackColor = Color(0xFFFFAE46), inactiveTrackColor = Color.White.copy(.22f)))
         Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(formatTime(position), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            if (showUhq) Surface(shape = RoundedCornerShape(5.dp), color = Color.White.copy(.1f), border = BorderStroke(1.dp, Color.White.copy(.18f))) { Text("UHQ", Modifier.padding(horizontal = 7.dp, vertical = 2.dp), color = Color.White.copy(.7f), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+            Spacer(Modifier.width(12.dp))
             Text("-" + formatTime((duration - position).coerceAtLeast(0L)), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
-private data class AudioOutputRoute(
-    val id: Int,
-    val name: String,
-    val detail: String,
-    val isBluetooth: Boolean,
-)
-
-private fun readAudioOutputRoutes(context: Context): List<AudioOutputRoute> {
-    val builtIn = AudioOutputRoute(-1, "This device", "Built-in audio", false)
-    val manager = context.getSystemService(AudioManager::class.java)
-    val external = runCatching {
-        manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).asSequence()
-            .filter { it.isSink }
-            .mapNotNull { device ->
-                val (kind, isBluetooth) = when (device.type) {
-                    AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired audio" to false
-                    AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB audio" to false
-                    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-                    AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER,
-                    AudioDeviceInfo.TYPE_BLE_BROADCAST -> "Bluetooth" to true
-                    AudioDeviceInfo.TYPE_HDMI, AudioDeviceInfo.TYPE_HDMI_ARC, AudioDeviceInfo.TYPE_HDMI_EARC -> "HDMI audio" to false
-                    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> return@mapNotNull null
-                    else -> "Connected audio" to false
-                }
-                val name = device.productName?.toString()?.takeIf(String::isNotBlank) ?: kind
-                AudioOutputRoute(device.id, name, "$kind · connected", isBluetooth)
-            }
-            .distinctBy(AudioOutputRoute::id)
-            .toList()
-    }.getOrDefault(emptyList())
-    return listOf(builtIn) + external
-}
-
 @Composable
 private fun AudioOutputPanel(song: Song, onClose: () -> Unit) {
     val context = LocalContext.current
-    var outputs by remember { mutableStateOf(readAudioOutputRoutes(context)) }
-    val openBluetoothSettings: () -> Unit = {
-        runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
-            .onFailure { Toast.makeText(context, "Bluetooth settings aren't available on this device.", Toast.LENGTH_SHORT).show() }
+    val router = remember(context) { MediaRouter.getInstance(context.applicationContext) }
+    val selector = remember {
+        MediaRouteSelector.Builder()
+            .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
+            .build()
+    }
+    var outputs by remember(router, selector) { mutableStateOf(emptyList<MediaRouter.RouteInfo>()) }
+    DisposableEffect(router, selector) {
+        fun refreshRoutes() {
+            outputs = (router.routes.filter { it.isEnabled && it.matchesSelector(selector) } + router.selectedRoute)
+                .distinctBy { it.id }
+        }
+        val callback = object : MediaRouter.Callback() {
+            override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                refreshRoutes()
+            }
+
+            override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                refreshRoutes()
+            }
+
+            override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                refreshRoutes()
+            }
+
+            override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
+                refreshRoutes()
+            }
+
+            override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
+                refreshRoutes()
+            }
+
+            override fun onRouteVolumeChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                refreshRoutes()
+            }
+        }
+        router.addCallback(selector, callback, MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY)
+        refreshRoutes()
+        onDispose { router.removeCallback(callback) }
     }
     WavvBottomSheet(onDismissRequest = onClose, maxHeight = 560.dp) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2388,36 +2426,52 @@ private fun AudioOutputPanel(song: Song, onClose: () -> Unit) {
                 Text("Audio output", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
                 Text(song.title, color = Color.White.copy(.62f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            TextButton(onClick = { outputs = readAudioOutputRoutes(context) }) { Text("Refresh") }
         }
         Text(
-            "Android routes playback automatically. Connect or switch devices in system settings.",
+            "Choose an audio route currently available to Android.",
             Modifier.padding(top = 14.dp, bottom = 12.dp),
             color = Color.White.copy(.56f),
             fontSize = 13.sp,
             lineHeight = 18.sp,
         )
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-            outputs.forEach { output ->
+            outputs.forEach { route ->
+                val selected = route.isSelected
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(CircleShape)
-                        .background(Color.White.copy(.07f))
-                        .border(1.dp, Color.White.copy(.08f), CircleShape)
-                        .then(if (output.isBluetooth) Modifier.clickable(role = Role.Button, onClick = openBluetoothSettings) else Modifier)
+                        .background(if (selected) WavvPink.copy(.16f) else Color.White.copy(.07f))
+                        .border(1.dp, if (selected) WavvPink.copy(.4f) else Color.White.copy(.08f), CircleShape)
+                        .clickable(enabled = route.isEnabled, role = Role.Button, onClick = route::select)
                         .padding(horizontal = 16.dp, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(13.dp),
                 ) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White.copy(.82f), modifier = Modifier.size(21.dp))
+                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = if (selected) WavvPink else Color.White.copy(.82f), modifier = Modifier.size(21.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(output.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(output.detail, color = Color.White.copy(.48f), fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
+                        Text(route.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            route.description?.takeIf(String::isNotBlank)
+                                ?: if (route.isBluetooth) "Bluetooth audio" else "Audio output",
+                            color = Color.White.copy(.48f),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
                     }
-                    if (output.isBluetooth) Icon(Icons.Default.ChevronRight, contentDescription = "Open Bluetooth settings", tint = Color.White.copy(.35f))
+                    if (selected) Icon(Icons.Default.Check, contentDescription = "Currently selected", tint = WavvPink)
+                }
+                if (selected && route.volumeHandling == MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE && route.volumeMax > 0) {
+                    Slider(
+                        value = route.volume.toFloat() / route.volumeMax,
+                        onValueChange = { route.requestSetVolume((it * route.volumeMax).roundToInt()) },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        colors = SliderDefaults.colors(thumbColor = WavvPink, activeTrackColor = WavvPink),
+                    )
                 }
             }
+            if (outputs.isEmpty()) {
+                Text("No compatible audio outputs are currently available.", Modifier.padding(16.dp), color = Color.White.copy(.55f))
+            }
         }
-        TextButton(onClick = openBluetoothSettings, modifier = Modifier.fillMaxWidth()) { Text("Open Bluetooth settings") }
     }
 }
 
@@ -2526,12 +2580,8 @@ private fun QueuePanel(
         ) {
             IconButton(onClick = { onQueueMode(queueMode.next()) }, modifier = Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(.1f))) {
                 Icon(
-                    when (queueMode) {
-                        QueueMode.Intelligent -> Icons.Default.Tune
-                        QueueMode.Shuffle -> Icons.Default.Shuffle
-                        QueueMode.Off -> Icons.AutoMirrored.Filled.PlaylistPlay
-                    },
-                    contentDescription = "Queue mode: ${queueMode.name}. Tap to change",
+                    if (queueMode == QueueMode.Shuffle) Icons.Default.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
+                    contentDescription = if (queueMode == QueueMode.Shuffle) "Shuffle is on. Tap to turn it off" else "Shuffle is off. Tap to turn it on",
                     tint = if (queueMode == QueueMode.Off) Color.White.copy(.5f) else Color.White,
                 )
             }
@@ -2573,11 +2623,7 @@ private fun QueuePanel(
     }
 }
 
-private fun QueueMode.next() = when (this) {
-    QueueMode.Intelligent -> QueueMode.Shuffle
-    QueueMode.Shuffle -> QueueMode.Off
-    QueueMode.Off -> QueueMode.Intelligent
-}
+private fun QueueMode.next() = if (this == QueueMode.Off) QueueMode.Shuffle else QueueMode.Off
 
 @Composable
 private fun LyricsPanel(song: Song, positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit, onClose: () -> Unit) {
@@ -2650,7 +2696,6 @@ private fun LyricsPanel(song: Song, positionMs: Long, durationMs: Long, onSeek: 
             PlayerProgress(
                 state = PlaybackState(positionMs = positionMs, durationMs = durationMs),
                 song = song,
-                showUhq = false,
                 onSeek = onSeek,
             )
         }
