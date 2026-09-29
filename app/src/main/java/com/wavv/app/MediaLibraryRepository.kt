@@ -23,6 +23,7 @@ sealed interface LibrarySource {
     data object AllDevice : LibrarySource
     data class Files(val uris: List<String>) : LibrarySource
     data class Folder(val uri: String) : LibrarySource
+    data class Folders(val uris: List<String>) : LibrarySource
 }
 
 class MediaLibraryRepository(context: Context) {
@@ -43,22 +44,31 @@ class MediaLibraryRepository(context: Context) {
                     onProgress(index + 1, source.uris.size)
                 }
             }.sortedBy(Song::title)
-            is LibrarySource.Folder -> buildList {
-                val treeUri = Uri.parse(source.uri)
-                var completed = 0
-                collectFolder(
-                    treeUri = treeUri,
-                    documentId = DocumentsContract.getTreeDocumentId(treeUri),
-                    songs = this,
-                    visited = mutableSetOf(),
-                    onAudioProcessed = {
-                        completed += 1
-                        onProgress(completed, null)
-                    },
-                )
-            }.distinctBy(Song::uri).sortedBy(Song::title)
+            is LibrarySource.Folder -> loadFolders(listOf(source.uri), onProgress)
+            is LibrarySource.Folders -> loadFolders(source.uris, onProgress)
         }
     }
+
+    private suspend fun loadFolders(
+        rawUris: List<String>,
+        onProgress: suspend (completed: Int, total: Int?) -> Unit,
+    ): List<Song> = buildList {
+        var completed = 0
+        rawUris.distinct().forEach { rawUri ->
+            coroutineContext.ensureActive()
+            val treeUri = Uri.parse(rawUri)
+            collectFolder(
+                treeUri = treeUri,
+                documentId = DocumentsContract.getTreeDocumentId(treeUri),
+                songs = this,
+                visited = mutableSetOf(),
+                onAudioProcessed = {
+                    completed += 1
+                    onProgress(completed, null)
+                },
+            )
+        }
+    }.distinctBy(Song::uri).sortedBy(Song::title)
 
     private suspend fun loadDeviceSongs(
         onProgress: suspend (completed: Int, total: Int?) -> Unit,
@@ -100,12 +110,24 @@ class MediaLibraryRepository(context: Context) {
                 val sizeColumn = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
                 val modifiedColumn = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
                 val mimeColumn = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                val albumArtwork = mutableMapOf<Long, String?>()
                 var completed = 0
 
                 while (cursor.moveToNext()) {
                     coroutineContext.ensureActive()
                     val id = cursor.getLong(idColumn)
                     val albumId = cursor.getLong(albumIdColumn)
+                    val mediaUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI.buildUpon()
+                        .appendPath(id.toString())
+                        .build()
+                    val artworkKey = albumId.takeIf { it > 0L } ?: -id
+                    val artUri = if (albumArtwork.containsKey(artworkKey)) {
+                        albumArtwork[artworkKey]
+                    } else {
+                        (extractEmbeddedArtwork(mediaUri)
+                            ?: albumArtUri(albumId).takeIf { albumId > 0L }?.toString())
+                            .also { albumArtwork[artworkKey] = it }
+                    }
                     add(
                         Song(
                             id = id,
@@ -113,11 +135,8 @@ class MediaLibraryRepository(context: Context) {
                             artist = cursor.getString(artistColumn).orFallback("Unknown artist"),
                             album = cursor.getString(albumColumn).orFallback("Unknown album"),
                             durationMs = cursor.getLong(durationColumn),
-                            uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI.buildUpon()
-                                .appendPath(id.toString())
-                                .build()
-                                .toString(),
-                            albumArtUri = albumArtUri(albumId).takeIf { albumId > 0L }?.toString(),
+                            uri = mediaUri.toString(),
+                            albumArtUri = artUri,
                             fileSizeBytes = cursor.getLongOrZero(sizeColumn),
                             modifiedAt = cursor.getLongOrZero(modifiedColumn) * 1_000L,
                             codec = cursor.getStringOrNull(mimeColumn)?.substringAfterLast('/')?.ifBlank { null },
@@ -134,6 +153,18 @@ class MediaLibraryRepository(context: Context) {
 
     private fun albumArtUri(albumId: Long) =
         Uri.parse("content://media/external/audio/albumart/$albumId")
+
+    private fun extractEmbeddedArtwork(mediaUri: Uri): String? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(metadataContext, mediaUri)
+            cacheEmbeddedArtwork(retriever.embeddedPicture)
+        } catch (_: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
+    }
 
     private suspend fun collectFolder(
         treeUri: Uri,

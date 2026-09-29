@@ -79,6 +79,19 @@ class LibraryViewModel(
         return true
     }
 
+    fun addFolder(uri: Uri): Boolean {
+        if (!sourceStore.addFolder(uri)) return false
+        cancelIndexing()
+        _source.value = sourceStore.read()
+        return true
+    }
+
+    fun removeFolder(uri: String) {
+        sourceStore.removeFolder(uri)
+        cancelIndexing()
+        _source.value = sourceStore.read()
+    }
+
     fun clearSource() {
         sourceStore.clear()
         cancelIndexing()

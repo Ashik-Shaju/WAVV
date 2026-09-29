@@ -119,7 +119,14 @@ class PlaybackController(context: Context) {
     }
 
     fun previous() {
-        controller?.takeIf { it.hasPreviousMediaItem() }?.seekToPreviousMediaItem()
+        val player = controller ?: return
+        if (player.currentPosition > PREVIOUS_RESTART_THRESHOLD_MS) {
+            player.seekTo(0L)
+        } else if (player.hasPreviousMediaItem()) {
+            player.seekToPreviousMediaItem()
+        } else {
+            player.seekTo(0L)
+        }
     }
 
     fun playNext(song: Song) {
@@ -256,6 +263,10 @@ class PlaybackController(context: Context) {
                 .build(),
         )
         .build()
+
+    private companion object {
+        const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
+    }
 }
 
 internal fun <T> moveQueueItem(items: List<T>, fromIndex: Int, toIndex: Int): List<T> {
