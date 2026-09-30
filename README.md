@@ -17,10 +17,10 @@ git lfs pull
 
 If Gradle cannot find the Android SDK, open the project in Android Studio or set `ANDROID_HOME`/`ANDROID_SDK_ROOT`. The local `local.properties` file is intentionally not tracked.
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. The app's bundled model assets use Git LFS; `git lfs pull` is required for semantic search. Room generates its schema snapshot under `app/schemas/` during the build.
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`; install it with `adb install -r app/build/outputs/apk/debug/app-debug.apk`. The app's bundled model assets use Git LFS; `git lfs pull` is required for semantic search and Music Understanding. Room generates its schema snapshot under `app/schemas/` during the build.
 
 ## Third-party notices
 
-Review `app/src/main/assets/dclap/v1/THIRD_PARTY_NOTICES.txt` and `app/src/main/assets/licenses/Nunito-OFL.txt` before redistributing a build. The release variant currently uses debug signing for local testing and is not configured for production distribution.
+Review the third-party notices under `app/src/main/assets/dclap/v1/`, `app/src/main/assets/music-understanding/v1/`, and `app/src/main/assets/licenses/` before redistributing a build. The release variant currently uses debug signing for local testing and is not configured for production distribution.
 
 There is currently no root-level license for Wavv's own source code.

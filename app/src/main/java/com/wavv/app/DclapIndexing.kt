@@ -18,7 +18,10 @@ class DclapIndexWorker(appContext: Context, workerParams: WorkerParameters) : Co
         val store = LibraryStore(WavvDatabase.get(applicationContext))
         return try {
             indexDclapSongs(applicationContext, store) { completed, total ->
-                setProgress(workDataOf(KEY_COMPLETED to completed, KEY_TOTAL to total))
+                setProgress(workDataOf(KEY_PHASE to PHASE_DCLAP, KEY_COMPLETED to completed, KEY_TOTAL to total))
+            }
+            indexMusicUnderstandingSongs(applicationContext, store) { completed, total ->
+                setProgress(workDataOf(KEY_PHASE to PHASE_MUSIC_UNDERSTANDING, KEY_COMPLETED to completed, KEY_TOTAL to total))
             }
             Result.success()
         } catch (error: CancellationException) {
@@ -35,6 +38,9 @@ class DclapIndexWorker(appContext: Context, workerParams: WorkerParameters) : Co
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
         const val KEY_ERROR = "error"
+        const val KEY_PHASE = "phase"
+        const val PHASE_DCLAP = "dclap"
+        const val PHASE_MUSIC_UNDERSTANDING = "music_understanding"
     }
 }
 

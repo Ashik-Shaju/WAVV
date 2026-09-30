@@ -343,7 +343,6 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
             libraryViewModel.selectAllDevice()
         }
     }
-    val requestNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val chooseAllDevice = {
         if (ContextCompat.checkSelfPermission(context, audioPermission()) == PackageManager.PERMISSION_GRANTED) {
             pendingAllDevice = false
@@ -424,11 +423,6 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
             onChooseSource = libraryViewModel::clearSource,
             onPlay = { song, queue ->
                 libraryViewModel.recordPlaybackEvent("play", song.id, selectionSource = "manual_select")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
                 playbackController.play(song, queue)
             },
             onTogglePlayback = {
@@ -1160,21 +1154,58 @@ private fun SearchScreen(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = if (hasNowPlaying) 256.dp else 160.dp),
             ) {
-                if (query.isNotBlank() || selectedGenre != null) {
+                if (selectedGenre != null) {
                     item {
-                        ShelfLabel(selectedGenre?.let { "$it · ${genreSongs.size} songs" } ?: if (semanticSearchComplete) "Semantic results" else "Results")
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(selectedGenre.orEmpty(), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                "All genres",
+                                Modifier.clickable(role = Role.Button) {
+                                    selectedGenre = null
+                                    focused = false
+                                }.padding(8.dp),
+                                color = WavvPink,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                    if (genreSongs.isEmpty()) {
+                        item {
+                            Text(
+                                "No tracks are tagged with this genre.",
+                                Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                                color = WavvMuted,
+                                fontSize = 14.sp,
+                            )
+                        }
+                    }
+                    itemsIndexed(genreSongs, key = { _, song -> song.id }) { index, song ->
+                        SearchResultRow(song, onPlay)
+                        if (index != genreSongs.lastIndex) Hairline()
+                    }
+                } else if (query.isNotBlank()) {
+                    item {
+                        ShelfLabel(if (semanticSearchComplete) "Semantic results" else "Results")
                         Spacer(Modifier.height(4.dp))
                     }
-                    if (selectedGenre == null && semanticLoading) item { CircularProgressIndicator(color = WavvPink, modifier = Modifier.padding(horizontal = 20.dp).size(18.dp)) }
-                    val results = if (selectedGenre != null) genreSongs else searchResults.orEmpty()
-                    itemsIndexed(results, key = { _, song -> song.id }) { index, song ->
+                    if (semanticLoading) item { CircularProgressIndicator(color = WavvPink, modifier = Modifier.padding(horizontal = 20.dp).size(18.dp)) }
+                    itemsIndexed(searchResults.orEmpty(), key = { _, song -> song.id }) { index, song ->
                         SearchResultRow(song, onPlay)
-                        if (index != results.lastIndex) Hairline()
+                        if (index != searchResults.orEmpty().lastIndex) Hairline()
                     }
                 } else if (!focused) {
                     item {
                         BrowseCategories(songs) { category ->
                             selectedGenre = category
+                            query = ""
+                            focused = false
+                            focusManager.clearFocus()
+                            onQueryChange("")
                         }
                     }
                 } else {
@@ -1190,7 +1221,7 @@ private fun SearchScreen(
                 query,
                 { query = it; selectedGenre = null; onQueryChange(it) },
                 focused,
-                { focused = it },
+                { focused = it; if (it) selectedGenre = null },
                 focusManager,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = if (hasNowPlaying) 184.dp else 88.dp),
                 showClear = selectedGenre != null,
@@ -1213,7 +1244,7 @@ private fun SearchResultRow(song: Song, onPlay: (Song) -> Unit) {
 
 @Composable
 private fun BrowseCategories(songs: List<Song>, onChooseCategory: (String) -> Unit) {
-    val categories = remember(songs) { songsByGenre(songs) }
+    val categories = remember(songs) { genreCategories(songs) }
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             "BROWSE CATEGORIES",
@@ -1224,13 +1255,12 @@ private fun BrowseCategories(songs: List<Song>, onChooseCategory: (String) -> Un
             letterSpacing = .4.sp,
         )
         if (categories.isEmpty()) {
-            Text("Add genre tags to your audio files to browse by category.", Modifier.padding(4.dp), color = Color.White.copy(.45f), fontSize = 13.sp)
+            Text("No genre tags with artwork were found in your library.", Modifier.padding(4.dp), color = Color.White.copy(.45f), fontSize = 13.sp)
         } else {
             categories.chunked(2).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    row.forEach { (label, taggedSongs) ->
-                        val coverTrack = taggedSongs.firstOrNull { !it.albumArtUri.isNullOrBlank() } ?: taggedSongs.first()
-                        CategoryCard(label, coverTrack, onClick = { onChooseCategory(label) }, modifier = Modifier.weight(1f))
+                    row.forEach { category ->
+                        CategoryCard(category, onClick = { onChooseCategory(category.name) }, modifier = Modifier.weight(1f))
                     }
                     if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
@@ -1240,17 +1270,17 @@ private fun BrowseCategories(songs: List<Song>, onChooseCategory: (String) -> Un
 }
 
 @Composable
-private fun CategoryCard(label: String, song: Song, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun CategoryCard(category: GenreCategory, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier.height(100.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable(role = Role.Button, onClick = onClick),
     ) {
-        AlbumArt(song, Modifier.fillMaxSize(), label, 12.dp)
+        AlbumArt(category.artwork, Modifier.fillMaxSize(), contentDescription = null, radius = 12.dp)
         Box(
             Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, .35f to Color.Black.copy(.14f), 1f to Color.Black.copy(.84f))),
         )
-        Text(label, Modifier.align(Alignment.BottomStart).fillMaxWidth(.9f).padding(start = 12.dp, bottom = 12.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-.3).sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(category.name, Modifier.align(Alignment.BottomStart).fillMaxWidth(.9f).padding(start = 12.dp, bottom = 12.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-.3).sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -2543,6 +2573,10 @@ private fun FullPlayer(
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatTime(position), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
+                    Row(Modifier.clip(CircleShape).background(Color.White.copy(.15f)).border(1.dp, Color.White.copy(.3f), CircleShape).padding(horizontal = 9.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Image(androidx.compose.ui.res.painterResource(R.drawable.uhq_mark), null, Modifier.size(13.dp))
+                        Text("UHQ", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.1.sp)
+                    }
                     Text("-${formatTime(duration - position)}", color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
                 }
             }

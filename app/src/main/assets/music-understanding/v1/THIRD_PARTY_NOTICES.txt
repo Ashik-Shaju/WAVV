@@ -1,0 +1,3 @@
+DyMN04-AS inference reference implementation: EfficientAT, commit a425fdce92572e602a1d5634799bd9f1f2efa806.
+The reference implementation is licensed under MIT; see LICENSE-EfficientAT.txt.
+The Wavv model bundle includes custom fine-tuned tagging heads. The project owner confirms redistribution rights for this bundle; the MIT license applies to the reference implementation, not to the model weights.

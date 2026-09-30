@@ -73,7 +73,13 @@ class MediaLibraryRepository(context: Context) {
     private suspend fun loadDeviceSongs(
         onProgress: suspend (completed: Int, total: Int?) -> Unit,
     ): List<Song> {
-        val genres = runCatching { readDeviceGenres() }.getOrDefault(emptyMap())
+        val genres = try {
+            readDeviceGenres()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyMap()
+        }
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
@@ -143,7 +149,8 @@ class MediaLibraryRepository(context: Context) {
                             codec = cursor.getStringOrNull(mimeColumn)?.substringAfterLast('/')?.ifBlank { null },
                             container = cursor.getStringOrNull(mimeColumn),
                             metadataSource = "embedded",
-                            genre = genres[id],
+                            genre = genres[id]?.firstOrNull(),
+                            genres = genres[id].orEmpty(),
                         ),
                     )
                     completed += 1
@@ -156,18 +163,20 @@ class MediaLibraryRepository(context: Context) {
     private fun albumArtUri(albumId: Long) =
         Uri.parse("content://media/external/audio/albumart/$albumId")
 
-    private fun readDeviceGenres(): Map<Long, String> = buildMap {
+    private suspend fun readDeviceGenres(): Map<Long, List<String>> {
+        val genresByAudioId = mutableMapOf<Long, MutableList<String>>()
         val cursor = contentResolver.query(
             MediaStore.Audio.Genres.EXTERNAL_CONTENT_URI,
             arrayOf(MediaStore.Audio.Genres._ID, MediaStore.Audio.Genres.NAME),
             null,
             null,
             null,
-        ) ?: return@buildMap
+        ) ?: return emptyMap()
         cursor.use {
             val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Genres._ID)
             val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Genres.NAME)
             while (cursor.moveToNext()) {
+                coroutineContext.ensureActive()
                 val genreId = cursor.getLong(idColumn)
                 val name = cursor.getString(nameColumn)?.trim().orEmpty()
                 if (name.isBlank()) continue
@@ -179,9 +188,15 @@ class MediaLibraryRepository(context: Context) {
                     null,
                 )?.use { members ->
                     val audioIdColumn = members.getColumnIndexOrThrow(MediaStore.Audio.Genres.Members.AUDIO_ID)
-                    while (members.moveToNext()) putIfAbsent(members.getLong(audioIdColumn), name)
+                    while (members.moveToNext()) {
+                        coroutineContext.ensureActive()
+                        genresByAudioId.getOrPut(members.getLong(audioIdColumn)) { mutableListOf() }.add(name)
+                    }
                 }
             }
+        }
+        return genresByAudioId.mapValues { (_, names) ->
+            names.distinctBy { it.lowercase(java.util.Locale.ROOT) }
         }
     }
 
@@ -286,6 +301,7 @@ class MediaLibraryRepository(context: Context) {
                 sampleRate = sampleRate,
                 metadataSource = metadataSource,
                 genre = genre,
+                genres = parseGenreMetadata(genre),
             )
         } catch (error: CancellationException) {
             throw error
@@ -307,6 +323,7 @@ class MediaLibraryRepository(context: Context) {
                 sampleRate = sampleRate,
                 metadataSource = metadataSource,
                 genre = genre,
+                genres = parseGenreMetadata(genre),
             )
         } finally {
             retriever.release()

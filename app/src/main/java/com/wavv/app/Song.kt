@@ -16,6 +16,7 @@ data class Song(
     val channels: Int? = null,
     val metadataSource: String = "unknown",
     val genre: String? = null,
+    val genres: List<String> = emptyList(),
 )
 
 data class UserPlaylist(

@@ -122,8 +122,9 @@ private object DclapModelInstaller {
     }
 }
 
-private class AudioPcmDecoder(private val context: Context) {
-    suspend fun decode(uri: Uri): FloatArray {
+internal class AudioPcmDecoder(private val context: Context) {
+    suspend fun decode(uri: Uri, targetSampleRate: Int = TARGET_SAMPLE_RATE, bandLimitedResampling: Boolean = false): FloatArray {
+        require(targetSampleRate > 0)
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(context, uri, null)
@@ -141,7 +142,7 @@ private class AudioPcmDecoder(private val context: Context) {
                 codec.configure(inputFormat, null, null, 0)
                 codec.start()
                 started = true
-                return decodePcm(extractor, codec, sourceRate, sourceChannels)
+                return decodePcm(extractor, codec, sourceRate, sourceChannels, targetSampleRate, bandLimitedResampling)
             } finally {
                 if (started) runCatching { codec.stop() }
                 codec.release()
@@ -156,6 +157,8 @@ private class AudioPcmDecoder(private val context: Context) {
         codec: MediaCodec,
         sourceRate: Int,
         sourceChannels: Int,
+        targetSampleRate: Int,
+        bandLimitedResampling: Boolean,
     ): FloatArray {
         val output = FloatAccumulator()
         val info = MediaCodec.BufferInfo()
@@ -193,7 +196,13 @@ private class AudioPcmDecoder(private val context: Context) {
                 }
             }
         }
-        return resample(output.toArray(), sourceRate, TARGET_SAMPLE_RATE)
+        val samples = output.toArray()
+        val decodedSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE, sourceRate)
+        return if (bandLimitedResampling) {
+            bandLimitedAudioResample(samples, decodedSampleRate, targetSampleRate)
+        } else {
+            resample(samples, decodedSampleRate, targetSampleRate)
+        }
     }
 
     private fun appendPcm(
@@ -204,12 +213,32 @@ private class AudioPcmDecoder(private val context: Context) {
     ) {
         val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT, sourceChannels)
         val encoding = format.getInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-        val bytesPerSample = if (encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+        require(channels > 0) { "Invalid decoded PCM channel count" }
+        val bytesPerSample = when (encoding) {
+            AudioFormat.ENCODING_PCM_8BIT -> 1
+            AudioFormat.ENCODING_PCM_16BIT -> 2
+            AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
+            AudioFormat.ENCODING_PCM_32BIT, AudioFormat.ENCODING_PCM_FLOAT -> 4
+            else -> error("Unsupported decoded PCM encoding: $encoding")
+        }
         require(buffer.remaining() % (channels * bytesPerSample) == 0) { "Invalid decoded PCM buffer" }
         while (buffer.remaining() >= channels * bytesPerSample) {
             var mono = 0f
             repeat(channels) {
-                mono += if (encoding == AudioFormat.ENCODING_PCM_FLOAT) buffer.float else buffer.short / 32768f
+                mono += when (encoding) {
+                    AudioFormat.ENCODING_PCM_8BIT -> ((buffer.get().toInt() and 0xff) - 128) / 128f
+                    AudioFormat.ENCODING_PCM_16BIT -> buffer.short / 32768f
+                    AudioFormat.ENCODING_PCM_24BIT_PACKED -> {
+                        val raw = (buffer.get().toInt() and 0xff) or
+                            ((buffer.get().toInt() and 0xff) shl 8) or
+                            ((buffer.get().toInt() and 0xff) shl 16)
+                        val signed = if (raw and 0x800000 != 0) raw or -0x1000000 else raw
+                        signed / 8_388_608f
+                    }
+                    AudioFormat.ENCODING_PCM_32BIT -> buffer.int / 2_147_483_648f
+                    AudioFormat.ENCODING_PCM_FLOAT -> buffer.float
+                    else -> error("Unsupported decoded PCM encoding: $encoding")
+                }
             }
             output.add(mono / channels)
         }
@@ -245,6 +274,51 @@ private class AudioPcmDecoder(private val context: Context) {
     }
 }
 
+internal fun radix2Fft(real: FloatArray, imaginary: FloatArray) {
+    require(real.size == imaginary.size && real.isNotEmpty() && real.size.countOneBits() == 1)
+    var j = 0
+    for (i in real.indices) {
+        if (i < j) {
+            val realValue = real[i]
+            real[i] = real[j]
+            real[j] = realValue
+            val imaginaryValue = imaginary[i]
+            imaginary[i] = imaginary[j]
+            imaginary[j] = imaginaryValue
+        }
+        var bit = real.size shr 1
+        while (j and bit != 0) {
+            j = j xor bit
+            bit = bit shr 1
+        }
+        j = j xor bit
+    }
+    var length = 2
+    while (length <= real.size) {
+        val angle = -2.0 * PI / length
+        val stepReal = cos(angle).toFloat()
+        val stepImaginary = sin(angle).toFloat()
+        for (start in real.indices step length) {
+            var currentReal = 1f
+            var currentImaginary = 0f
+            for (offset in 0 until length / 2) {
+                val even = start + offset
+                val odd = even + length / 2
+                val oddReal = real[odd] * currentReal - imaginary[odd] * currentImaginary
+                val oddImaginary = real[odd] * currentImaginary + imaginary[odd] * currentReal
+                real[odd] = real[even] - oddReal
+                imaginary[odd] = imaginary[even] - oddImaginary
+                real[even] += oddReal
+                imaginary[even] += oddImaginary
+                val nextReal = currentReal * stepReal - currentImaginary * stepImaginary
+                currentImaginary = currentReal * stepImaginary + currentImaginary * stepReal
+                currentReal = nextReal
+            }
+        }
+        length = length shl 1
+    }
+}
+
 private object DclapPreprocessor {
     private const val SAMPLE_RATE = 48_000
     private const val N_FFT = 2_048
@@ -275,7 +349,7 @@ private object DclapPreprocessor {
                 real[index] = padded[offset + index] * hann[index]
                 imaginary[index] = 0f
             }
-            fft(real, imaginary)
+            radix2Fft(real, imaginary)
             for (bin in power.indices) power[bin] = real[bin] * real[bin] + imaginary[bin] * imaginary[bin]
             for (mel in 0 until N_MELS) {
                 var value = 0.0
@@ -287,50 +361,6 @@ private object DclapPreprocessor {
             offset += MEL_HOP
         }
         return output
-    }
-
-    private fun fft(real: FloatArray, imaginary: FloatArray) {
-        var j = 0
-        for (i in real.indices) {
-            if (i < j) {
-                val realValue = real[i]
-                real[i] = real[j]
-                real[j] = realValue
-                val imaginaryValue = imaginary[i]
-                imaginary[i] = imaginary[j]
-                imaginary[j] = imaginaryValue
-            }
-            var bit = real.size shr 1
-            while (j and bit != 0) {
-                j = j xor bit
-                bit = bit shr 1
-            }
-            j = j xor bit
-        }
-        var length = 2
-        while (length <= real.size) {
-            val angle = -2.0 * PI / length
-            val stepReal = cos(angle).toFloat()
-            val stepImaginary = sin(angle).toFloat()
-            for (start in real.indices step length) {
-                var currentReal = 1f
-                var currentImaginary = 0f
-                for (offset in 0 until length / 2) {
-                    val even = start + offset
-                    val odd = even + length / 2
-                    val oddReal = real[odd] * currentReal - imaginary[odd] * currentImaginary
-                    val oddImaginary = real[odd] * currentImaginary + imaginary[odd] * currentReal
-                    real[odd] = real[even] - oddReal
-                    imaginary[odd] = imaginary[even] - oddImaginary
-                    real[even] += oddReal
-                    imaginary[even] += oddImaginary
-                    val nextReal = currentReal * stepReal - currentImaginary * stepImaginary
-                    currentImaginary = currentReal * stepImaginary + currentImaginary * stepReal
-                    currentReal = nextReal
-                }
-            }
-            length = length shl 1
-        }
     }
 
     private fun reflect(source: FloatArray, index: Int): Float {

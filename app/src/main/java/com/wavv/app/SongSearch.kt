@@ -29,15 +29,18 @@ private fun Song.matches(query: String): Boolean =
     title.contains(query, ignoreCase = true) ||
         artist.contains(query, ignoreCase = true) ||
         album.contains(query, ignoreCase = true) ||
-        genre?.contains(query, ignoreCase = true) == true
+        genreNames().any { it.contains(query, ignoreCase = true) }
 
 internal fun songsByGenre(songs: List<Song>): List<Pair<String, List<Song>>> =
-    songs.mapNotNull { song ->
-        song.genre?.trim()?.takeIf(String::isNotEmpty)?.let { it.lowercase(Locale.ROOT) to (it to song) }
+    songs.flatMap { song ->
+        song.genreNames().map { name -> name.lowercase(Locale.ROOT) to (name to song) }
     }.groupBy { it.first }
         .values
         .map { taggedSongs -> taggedSongs.first().second.first to taggedSongs.map { it.second.second } }
         .sortedBy { it.first.lowercase(Locale.ROOT) }
 
-internal fun songsForGenre(songs: List<Song>, genre: String): List<Song> =
-    songs.filter { it.genre?.trim()?.equals(genre.trim(), ignoreCase = true) == true }
+internal fun songsForGenre(songs: List<Song>, genre: String): List<Song> {
+    val normalizedGenre = genre.trim()
+    if (normalizedGenre.isEmpty()) return emptyList()
+    return songs.filter { song -> song.genreNames().any { it.equals(normalizedGenre, ignoreCase = true) } }
+}

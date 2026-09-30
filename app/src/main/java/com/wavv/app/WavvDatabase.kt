@@ -1,6 +1,7 @@
 package com.wavv.app
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -29,6 +30,7 @@ data class SongEntity(
     val channels: Int?,
     val metadataSource: String,
     val genre: String?,
+    @ColumnInfo(defaultValue = "'[]'") val genresJson: String = "[]",
     val isFavorite: Boolean = false,
     val lastPlayedAt: Long? = null,
 )
@@ -85,6 +87,16 @@ data class SongEmbeddingEntity(
     val dtype: String,
     val normalized: Boolean,
     val vector: ByteArray,
+    val updatedAt: Long,
+)
+
+@Entity(tableName = "music_understanding_results")
+data class MusicUnderstandingResultEntity(
+    @PrimaryKey val songId: Long,
+    val modelId: String,
+    val sourceSizeBytes: Long,
+    val sourceModifiedAt: Long,
+    val tagsJson: String,
     val updatedAt: Long,
 )
 
@@ -150,6 +162,9 @@ interface PlaylistDao {
 
 @Dao
 interface AnalysisJobDao {
+    @Query("SELECT * FROM analysis_jobs WHERE songId = :songId AND jobType = :jobType")
+    suspend fun get(songId: Long, jobType: String): AnalysisJobEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(jobs: List<AnalysisJobEntity>)
 
@@ -175,9 +190,21 @@ interface SongEmbeddingDao {
     suspend fun deleteMissingSongs()
 }
 
+@Dao
+interface MusicUnderstandingDao {
+    @Query("SELECT * FROM music_understanding_results WHERE songId = :songId")
+    suspend fun get(songId: Long): MusicUnderstandingResultEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(result: MusicUnderstandingResultEntity)
+
+    @Query("DELETE FROM music_understanding_results WHERE songId NOT IN (SELECT id FROM songs)")
+    suspend fun deleteMissingSongs()
+}
+
 @Database(
-    entities = [SongEntity::class, ListeningEventEntity::class, PlaylistEntity::class, PlaylistItemEntity::class, AnalysisJobEntity::class, SongEmbeddingEntity::class],
-    version = 5,
+    entities = [SongEntity::class, ListeningEventEntity::class, PlaylistEntity::class, PlaylistItemEntity::class, AnalysisJobEntity::class, SongEmbeddingEntity::class, MusicUnderstandingResultEntity::class],
+    version = 6,
     exportSchema = true,
 )
 abstract class WavvDatabase : RoomDatabase() {
@@ -186,6 +213,7 @@ abstract class WavvDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
     abstract fun analysisJobDao(): AnalysisJobDao
     abstract fun songEmbeddingDao(): SongEmbeddingDao
+    abstract fun musicUnderstandingDao(): MusicUnderstandingDao
     companion object {
         @Volatile
         private var instance: WavvDatabase? = null
@@ -195,7 +223,7 @@ abstract class WavvDatabase : RoomDatabase() {
                 context.applicationContext,
                 WavvDatabase::class.java,
                 "wavv.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
         }
 
         private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -251,6 +279,25 @@ abstract class WavvDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE songs ADD COLUMN genre TEXT")
             }
         }
+
+        private val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN genresJson TEXT NOT NULL DEFAULT '[]'")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS music_understanding_results (
+                        songId INTEGER NOT NULL,
+                        modelId TEXT NOT NULL,
+                        sourceSizeBytes INTEGER NOT NULL,
+                        sourceModifiedAt INTEGER NOT NULL,
+                        tagsJson TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        PRIMARY KEY(songId)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
     }
 }
 
@@ -268,6 +315,7 @@ class LibraryStore(private val database: WavvDatabase) {
                 },
             )
             database.songEmbeddingDao().deleteMissingSongs()
+            database.musicUnderstandingDao().deleteMissingSongs()
             database.analysisJobDao().upsertAll(
                 songs.map { song ->
                     AnalysisJobEntity(song.id, METADATA_JOB, COMPLETED, updatedAt = System.currentTimeMillis())
@@ -289,6 +337,12 @@ class LibraryStore(private val database: WavvDatabase) {
     suspend fun getEmbedding(songId: Long): SongEmbeddingEntity? = database.songEmbeddingDao().get(songId)
 
     suspend fun saveEmbedding(embedding: SongEmbeddingEntity) = database.songEmbeddingDao().upsert(embedding)
+
+    suspend fun getMusicUnderstanding(songId: Long): MusicUnderstandingResultEntity? =
+        database.musicUnderstandingDao().get(songId)
+
+    suspend fun saveMusicUnderstanding(result: MusicUnderstandingResultEntity) =
+        database.musicUnderstandingDao().upsert(result)
 
     suspend fun saveAnalysis(songId: Long, jobType: String, status: String, error: String? = null) {
         database.analysisJobDao().upsert(
@@ -448,6 +502,7 @@ private fun Song.toEntity(isFavorite: Boolean) = SongEntity(
     channels = channels,
     metadataSource = metadataSource,
     genre = genre,
+    genresJson = org.json.JSONArray().apply { genreNames().forEach { put(it) } }.toString(),
     isFavorite = isFavorite,
 )
 
@@ -467,4 +522,8 @@ private fun SongEntity.toSong() = Song(
     channels = channels,
     metadataSource = metadataSource,
     genre = genre,
+    genres = runCatching {
+        val storedGenres = org.json.JSONArray(genresJson)
+        List(storedGenres.length()) { index -> storedGenres.getString(index) }
+    }.getOrDefault(emptyList()),
 )
