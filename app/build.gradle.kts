@@ -23,10 +23,6 @@ android {
             isMinifyEnabled = false
             // Temporary device-install signing; replace with the production keystore before release.
             signingConfig = signingConfigs.getByName("debug")
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
         }
     }
 
