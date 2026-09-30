@@ -1139,7 +1139,8 @@ private fun SearchScreen(
         if (query.isNotBlank()) onQueryChange(query)
     }
     LaunchedEffect(songs, selectedGenre) {
-        if (selectedGenre != null && songsForGenre(songs, selectedGenre).isEmpty()) {
+        val genre = selectedGenre
+        if (genre != null && songsForGenre(songs, genre).isEmpty()) {
             selectedGenre = null
         }
     }

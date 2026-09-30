@@ -274,13 +274,13 @@ abstract class WavvDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+        internal val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE songs ADD COLUMN genre TEXT")
             }
         }
 
-        private val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+        internal val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE songs ADD COLUMN genresJson TEXT NOT NULL DEFAULT '[]'")
                 db.execSQL(

@@ -2,14 +2,17 @@ DCLAP model bundle
 
 AudioMuse-AI-DCLAP audio model
 License: GNU Affero General Public License v3.0 (AGPL-3.0)
+License text: LICENSE-AGPL-3.0.txt
 Source: https://github.com/NeptuneHub/AudioMuse-AI-DCLAP
 
 LAION CLAP text head, dynamically quantized per-channel to INT8
 Original model license: CC0 1.0
+License text: LICENSE-CLAP-CC0-1.0.txt
 Source: https://github.com/LAION-AI/CLAP
 
 RoBERTa byte-level tokenizer vocabulary and merges
 License: MIT
+License text: LICENSE-Roberta-MIT.txt
 Source: https://huggingface.co/FacebookAI/roberta-base
 
 The model files are bundled as separate, identifiable assets. Consult the

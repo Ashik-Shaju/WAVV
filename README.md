@@ -17,7 +17,11 @@ git lfs pull
 
 If Gradle cannot find the Android SDK, open the project in Android Studio or set `ANDROID_HOME`/`ANDROID_SDK_ROOT`. The local `local.properties` file is intentionally not tracked.
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`; install it with `adb install -r app/build/outputs/apk/debug/app-debug.apk`. The app's bundled model assets use Git LFS; `git lfs pull` is required for semantic search and Music Understanding. Room generates its schema snapshot under `app/schemas/` during the build.
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`; install it with `adb install -r app/build/outputs/apk/debug/app-debug.apk`. The app's bundled model assets use Git LFS; `git lfs pull` is required for semantic search and Music Understanding. Room schema snapshots under `app/schemas/` document the database versions and support migration tests.
+
+## Tests
+
+Run unit tests with `.\gradlew.bat :app:testDebugUnitTest`. Run Android instrumentation tests on a connected emulator or device with `.\gradlew.bat :app:connectedDebugAndroidTest`. The DCLAP device-library smoke test is skipped unless audio-library access is granted and at least one local audio file is available.
 
 ## Third-party notices
 
