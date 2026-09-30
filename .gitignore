@@ -1,0 +1,26 @@
+# Android / Gradle
+.gradle/
+.kotlin/
+build/
+app/build/
+app/schemas/
+local.properties
+.idea/
+*.iml
+*.apk
+*.aab
+
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Local exports and machine data
+*.hprof
+*.log
+Thumbs.db
+Desktop.ini
