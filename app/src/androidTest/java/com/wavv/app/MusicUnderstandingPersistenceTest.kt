@@ -84,6 +84,32 @@ class MusicUnderstandingPersistenceTest {
         }
     }
 
+    @Test
+    fun fatalAnalysisFailureIsRecordedBeforeItEscapes() = runBlocking {
+        val database = inMemoryDatabase()
+        try {
+            val store = LibraryStore(database)
+            val song = song("content://com.wavv.test/fatal")
+            store.replaceSongs(listOf(song))
+            val failure = OutOfMemoryError("simulated allocation failure")
+
+            try {
+                store.runAnalysisJob(song.id, "dclap") { throw failure }
+                throw AssertionError("Fatal analysis error was swallowed")
+            } catch (actual: OutOfMemoryError) {
+                assertTrue(actual === failure)
+            }
+
+            val status = database.analysisJobDao().get(song.id, "dclap")
+            assertNotNull(status)
+            assertEquals("failed", status?.status)
+            assertNotNull(status?.lastError)
+            assertTrue(status?.lastError?.contains("fatal", ignoreCase = true) == true)
+        } finally {
+            database.close()
+        }
+    }
+
     private fun inMemoryDatabase() = Room.inMemoryDatabaseBuilder(context, WavvDatabase::class.java)
         .allowMainThreadQueries()
         .build()

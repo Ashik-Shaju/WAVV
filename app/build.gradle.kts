@@ -44,6 +44,7 @@ android {
 }
 
 dependencies {
+    implementation(platform(libs.kotlinx.serialization.bom))
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

@@ -17,7 +17,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,12 +36,23 @@ internal class MusicUnderstandingModel(context: Context) : Closeable {
     private val runtime = createSession(bundle.backbone)
 
     suspend fun analyze(uri: Uri): MusicAnalysis = withContext(Dispatchers.Default) {
-        val samples = AudioPcmDecoder(bundle.context).decode(
+        val probabilities = MeanProbabilityPool(bundle.heads.size)
+        val analysisContext = currentCoroutineContext()
+        AudioPcmDecoder(bundle.context).decodeWindows(
             uri = uri,
             targetSampleRate = MUSIC_UNDERSTANDING_SAMPLE_RATE,
             bandLimitedResampling = true,
-        )
-        analyzePcm(samples)
+            windowSizeSamples = MUSIC_UNDERSTANDING_WINDOW_SAMPLES,
+            hopSizeSamples = MUSIC_UNDERSTANDING_WINDOW_SAMPLES,
+            alignLastWindow = false,
+        ) { samples, validSamples ->
+            analysisContext.ensureActive()
+            val features = encodeWindow(samples, validSamples)
+            probabilities.add(tagger.probabilities(features), validSamples)
+        }
+        analysisContext.ensureActive()
+        val pooled = probabilities.finish()
+        MusicAnalysis(bundle.modelId, pooled, tagger.tags(pooled))
     }
 
     suspend fun analyzePcm(samples: FloatArray): MusicAnalysis {
@@ -165,8 +175,7 @@ internal suspend fun indexMusicUnderstandingSongs(
                 onProgress(index + 1, songs.size)
                 return@forEachIndexed
             }
-            store.saveAnalysis(song.id, MUSIC_UNDERSTANDING_JOB, ANALYSIS_RUNNING)
-            try {
+            store.runAnalysisJob(song.id, MUSIC_UNDERSTANDING_JOB) {
                 val analysis = model.analyze(Uri.parse(song.uri))
                 store.saveMusicUnderstanding(
                     MusicUnderstandingResultEntity(
@@ -177,16 +186,6 @@ internal suspend fun indexMusicUnderstandingSongs(
                         tagsJson = analysis.tags.toJson(),
                         updatedAt = System.currentTimeMillis(),
                     ),
-                )
-                store.saveAnalysis(song.id, MUSIC_UNDERSTANDING_JOB, ANALYSIS_COMPLETED)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                store.saveAnalysis(
-                    song.id,
-                    MUSIC_UNDERSTANDING_JOB,
-                    ANALYSIS_FAILED,
-                    (error.message ?: error::class.simpleName ?: "Analysis failed").take(MAX_ERROR_LENGTH),
                 )
             }
             onProgress(index + 1, songs.size)
@@ -212,10 +211,6 @@ internal fun List<MusicTag>.toJson(): String = JSONArray().apply {
 }.toString()
 
 private const val MUSIC_UNDERSTANDING_JOB = "music_understanding"
-private const val ANALYSIS_RUNNING = "running"
-private const val ANALYSIS_COMPLETED = "completed"
-private const val ANALYSIS_FAILED = "failed"
-private const val MAX_ERROR_LENGTH = 512
 
 private class MusicUnderstandingBundle(
     val context: Context,

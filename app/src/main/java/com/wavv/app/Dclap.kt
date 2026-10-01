@@ -22,10 +22,8 @@ import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -39,6 +37,7 @@ private const val TEXT_MODEL = "clap_text_model.int8.dynamic.per_channel.onnx"
 private const val AUDIO_SHA256 = "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971"
 private const val AUDIO_EXTERNAL_DATA_SHA256 = "2a735b23c2aad7b12d9ffc85334cebcc659c07696d2ff60e2e378da28b6df657"
 private const val TEXT_SHA256 = "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985"
+private const val DCLAP_SAMPLE_RATE = 48_000
 private const val DCLAP_SEGMENT_SAMPLES = 480_000
 private const val DCLAP_SEGMENT_HOP = 240_000
 
@@ -123,8 +122,24 @@ private object DclapModelInstaller {
 }
 
 internal class AudioPcmDecoder(private val context: Context) {
-    suspend fun decode(uri: Uri, targetSampleRate: Int = TARGET_SAMPLE_RATE, bandLimitedResampling: Boolean = false): FloatArray {
+    suspend fun decodeWindows(
+        uri: Uri,
+        targetSampleRate: Int,
+        bandLimitedResampling: Boolean,
+        windowSizeSamples: Int,
+        hopSizeSamples: Int,
+        alignLastWindow: Boolean,
+        emitEmptyWindow: Boolean = false,
+        onWindow: suspend (FloatArray, Int) -> Unit,
+    ) {
         require(targetSampleRate > 0)
+        val windows = PcmWindowCollector(
+            windowSizeSamples = windowSizeSamples,
+            hopSizeSamples = hopSizeSamples,
+            alignLastWindow = alignLastWindow,
+            emitEmptyWindow = emitEmptyWindow,
+            onWindow = onWindow,
+        )
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(context, uri, null)
@@ -136,13 +151,22 @@ internal class AudioPcmDecoder(private val context: Context) {
             val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: error("Audio MIME type missing")
             val sourceRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val sourceChannels = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            require(sourceRate > 0 && sourceChannels > 0) { "Invalid source audio format" }
             val codec = MediaCodec.createDecoderByType(mime)
             var started = false
             try {
                 codec.configure(inputFormat, null, null, 0)
                 codec.start()
                 started = true
-                return decodePcm(extractor, codec, sourceRate, sourceChannels, targetSampleRate, bandLimitedResampling)
+                decodePcm(
+                    extractor,
+                    codec,
+                    sourceRate,
+                    sourceChannels,
+                    targetSampleRate,
+                    bandLimitedResampling,
+                    windows,
+                )
             } finally {
                 if (started) runCatching { codec.stop() }
                 codec.release()
@@ -159,12 +183,16 @@ internal class AudioPcmDecoder(private val context: Context) {
         sourceChannels: Int,
         targetSampleRate: Int,
         bandLimitedResampling: Boolean,
-    ): FloatArray {
-        val output = FloatAccumulator()
+        windows: PcmWindowCollector,
+    ) {
         val info = MediaCodec.BufferInfo()
         var inputDone = false
         var outputDone = false
         var outputFormat = MediaFormat.createAudioFormat("audio/raw", sourceRate, sourceChannels)
+        var outputSampleRate = sourceRate
+        var decodedSampleCount = 0L
+        var resampler = createResampler(outputSampleRate, targetSampleRate, bandLimitedResampling, windows)
+        val monoSamples = FloatArray(PCM_MONO_CHUNK_SAMPLES)
         while (!outputDone) {
             currentCoroutineContext().ensureActive()
             if (!inputDone) {
@@ -183,34 +211,56 @@ internal class AudioPcmDecoder(private val context: Context) {
             }
             when (val outputIndex = codec.dequeueOutputBuffer(info, TIMEOUT_US)) {
                 MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
-                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> outputFormat = codec.outputFormat
+                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    outputFormat = codec.outputFormat
+                    val changedSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE, sourceRate)
+                    require(changedSampleRate > 0) { "Invalid decoded sample rate" }
+                    check(decodedSampleCount == 0L || changedSampleRate == outputSampleRate) {
+                        "Decoded sample rate changed while streaming audio"
+                    }
+                    if (changedSampleRate != outputSampleRate) {
+                        outputSampleRate = changedSampleRate
+                        resampler = createResampler(outputSampleRate, targetSampleRate, bandLimitedResampling, windows)
+                    }
+                }
                 else -> if (outputIndex >= 0) {
                     val buffer = codec.getOutputBuffer(outputIndex)
                     if (buffer != null && info.size > 0) {
                         buffer.position(info.offset)
                         buffer.limit(info.offset + info.size)
-                        appendPcm(buffer.slice().order(ByteOrder.LITTLE_ENDIAN), outputFormat, sourceChannels, output)
+                        decodedSampleCount += appendPcm(
+                            buffer.slice().order(ByteOrder.LITTLE_ENDIAN),
+                            outputFormat,
+                            sourceChannels,
+                            monoSamples,
+                            resampler,
+                        )
                     }
                     outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     codec.releaseOutputBuffer(outputIndex, false)
                 }
             }
         }
-        val samples = output.toArray()
-        val decodedSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE, sourceRate)
-        return if (bandLimitedResampling) {
-            bandLimitedAudioResample(samples, decodedSampleRate, targetSampleRate)
-        } else {
-            resample(samples, decodedSampleRate, targetSampleRate)
-        }
+        resampler.finish()
+        windows.finish()
     }
 
-    private fun appendPcm(
+    private fun createResampler(
+        sourceRate: Int,
+        targetRate: Int,
+        bandLimitedResampling: Boolean,
+        windows: PcmWindowCollector,
+    ) = StreamingAudioResampler(sourceRate, targetRate, bandLimitedResampling) { samples, count ->
+        windows.append(samples, count = count)
+    }
+
+    private suspend fun appendPcm(
         buffer: ByteBuffer,
         format: MediaFormat,
         sourceChannels: Int,
-        output: FloatAccumulator,
-    ) {
+        monoSamples: FloatArray,
+        resampler: StreamingAudioResampler,
+    ): Long {
         val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT, sourceChannels)
         val encoding = format.getInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
         require(channels > 0) { "Invalid decoded PCM channel count" }
@@ -222,6 +272,8 @@ internal class AudioPcmDecoder(private val context: Context) {
             else -> error("Unsupported decoded PCM encoding: $encoding")
         }
         require(buffer.remaining() % (channels * bytesPerSample) == 0) { "Invalid decoded PCM buffer" }
+        var monoCount = 0
+        var sampleCount = 0L
         while (buffer.remaining() >= channels * bytesPerSample) {
             var mono = 0f
             repeat(channels) {
@@ -240,37 +292,20 @@ internal class AudioPcmDecoder(private val context: Context) {
                     else -> error("Unsupported decoded PCM encoding: $encoding")
                 }
             }
-            output.add(mono / channels)
+            monoSamples[monoCount++] = mono / channels
+            sampleCount++
+            if (monoCount == monoSamples.size) {
+                resampler.write(monoSamples, count = monoCount)
+                monoCount = 0
+            }
         }
-    }
-
-    private fun resample(input: FloatArray, sourceRate: Int, targetRate: Int): FloatArray {
-        if (input.isEmpty() || sourceRate == targetRate) return input
-        val outputSize = (input.size.toDouble() * targetRate / sourceRate).roundToIntSafe()
-        return FloatArray(outputSize) { index ->
-            val sourcePosition = index.toDouble() * sourceRate / targetRate
-            val left = sourcePosition.toInt().coerceAtMost(input.lastIndex)
-            val right = (left + 1).coerceAtMost(input.lastIndex)
-            val fraction = (sourcePosition - left).toFloat()
-            input[left] + (input[right] - input[left]) * fraction
-        }
-    }
-
-    private class FloatAccumulator {
-        private var values = FloatArray(16_384)
-        private var size = 0
-
-        fun add(value: Float) {
-            if (size == values.size) values = values.copyOf(values.size * 2)
-            values[size++] = value
-        }
-
-        fun toArray(): FloatArray = values.copyOf(size)
+        if (monoCount > 0) resampler.write(monoSamples, count = monoCount)
+        return sampleCount
     }
 
     private companion object {
-        const val TARGET_SAMPLE_RATE = 48_000
         const val TIMEOUT_US = 10_000L
+        const val PCM_MONO_CHUNK_SAMPLES = 4_096
     }
 }
 
@@ -320,23 +355,14 @@ internal fun radix2Fft(real: FloatArray, imaginary: FloatArray) {
 }
 
 private object DclapPreprocessor {
-    private const val SAMPLE_RATE = 48_000
     private const val N_FFT = 2_048
     private const val MEL_HOP = 480
     private const val N_MELS = 128
     private val melFilters = melFilters()
     private val hann = FloatArray(N_FFT) { index -> (0.5 - 0.5 * cos(2.0 * PI * index / N_FFT)).toFloat() }
 
-    fun windows(audio: FloatArray): Sequence<FloatArray> {
-        val starts = dclapWindowStarts(audio.size)
-        return starts.asSequence().map { start ->
-            val segment = FloatArray(DCLAP_SEGMENT_SAMPLES)
-            audio.copyInto(segment, 0, start, min(audio.size, start + DCLAP_SEGMENT_SAMPLES))
-            logMel(segment)
-        }
-    }
-
-    private fun logMel(segment: FloatArray): FloatArray {
+    fun logMel(segment: FloatArray): FloatArray {
+        require(segment.size == DCLAP_SEGMENT_SAMPLES)
         val output = FloatArray(N_MELS * 1001)
         val padded = FloatArray(segment.size + N_FFT) { index -> reflect(segment, index - N_FFT / 2) }
         val real = FloatArray(N_FFT)
@@ -376,7 +402,7 @@ private object DclapPreprocessor {
         val minMel = hzToMel(0.0)
         val maxMel = hzToMel(14_000.0)
         val points = DoubleArray(N_MELS + 2) { index -> melToHz(minMel + (maxMel - minMel) * index / (N_MELS + 1)) }
-        val bins = points.map { floor((N_FFT + 1) * it / SAMPLE_RATE).toInt().coerceIn(0, N_FFT / 2) }
+        val bins = points.map { floor((N_FFT + 1) * it / DCLAP_SAMPLE_RATE).toInt().coerceIn(0, N_FFT / 2) }
         return Array(N_MELS) { mel ->
             val filter = FloatArray(N_FFT / 2 + 1)
             val left = bins[mel]
@@ -413,11 +439,19 @@ private class DclapAudioEncoder(model: File) : Closeable {
     }
 
     suspend fun encode(context: Context, uri: Uri): FloatArray = withContext(Dispatchers.Default) {
-        val audio = AudioPcmDecoder(context).decode(uri)
-        val windows = DclapPreprocessor.windows(audio)
         val sum = FloatArray(512)
-        windows.forEach { window ->
-            coroutineContext.ensureActive()
+        val inferenceContext = coroutineContext
+        AudioPcmDecoder(context).decodeWindows(
+            uri = uri,
+            targetSampleRate = DCLAP_SAMPLE_RATE,
+            bandLimitedResampling = false,
+            windowSizeSamples = DCLAP_SEGMENT_SAMPLES,
+            hopSizeSamples = DCLAP_SEGMENT_HOP,
+            alignLastWindow = true,
+            emitEmptyWindow = true,
+        ) { segment, _ ->
+            inferenceContext.ensureActive()
+            val window = DclapPreprocessor.logMel(segment)
             OnnxTensor.createTensor(environment, FloatBuffer.wrap(window), longArrayOf(1, 1, 128, 1001)).use { input ->
                 session.run(mapOf("mel_spectrogram" to input)).use { result ->
                     val values = ((result[0].value as Array<*>).single() as FloatArray)
@@ -579,8 +613,7 @@ internal suspend fun indexDclapSongs(
                 onProgress(index + 1, songs.size)
                 return@forEachIndexed
             }
-            store.saveAnalysis(song.id, "dclap", "running")
-            try {
+            store.runAnalysisJob(song.id, "dclap") {
                 val vector = encoder.encode(context, Uri.parse(song.uri))
                 store.saveEmbedding(
                     SongEmbeddingEntity(
@@ -595,11 +628,6 @@ internal suspend fun indexDclapSongs(
                         updatedAt = System.currentTimeMillis(),
                     ),
                 )
-                store.saveAnalysis(song.id, "dclap", "completed")
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                store.saveAnalysis(song.id, "dclap", "failed", error.message?.take(512) ?: error::class.simpleName)
             }
             onProgress(index + 1, songs.size)
         }
@@ -620,5 +648,3 @@ private fun FloatArray.toByteArray(): ByteArray {
     bytes.asFloatBuffer().put(this)
     return bytes.array()
 }
-
-private fun Double.roundToIntSafe(): Int = toLong().coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()

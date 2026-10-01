@@ -12,6 +12,9 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.PrimaryKey
 import androidx.room.withTransaction
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 @Entity(tableName = "songs")
 data class SongEntity(
@@ -348,6 +351,22 @@ class LibraryStore(private val database: WavvDatabase) {
         database.analysisJobDao().upsert(
             AnalysisJobEntity(songId, jobType, status, lastError = error, updatedAt = System.currentTimeMillis()),
         )
+    }
+
+    suspend fun runAnalysisJob(songId: Long, jobType: String, analyze: suspend () -> Unit) {
+        saveAnalysis(songId, jobType, "running")
+        try {
+            analyze()
+            saveAnalysis(songId, jobType, "completed")
+        } catch (error: CancellationException) {
+            withContext(NonCancellable) { runCatching { saveAnalysis(songId, jobType, "cancelled") } }
+            throw error
+        } catch (error: Exception) {
+            saveAnalysis(songId, jobType, "failed", (error.message ?: error::class.simpleName ?: "Analysis failed").take(512))
+        } catch (error: Error) {
+            withContext(NonCancellable) { runCatching { saveAnalysis(songId, jobType, "failed", "Fatal analysis error") } }
+            throw error
+        }
     }
 
     suspend fun searchEmbeddings(query: FloatArray, songs: List<Song>, limit: Int): List<Song> {
