@@ -245,8 +245,11 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.math.PI
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -2286,7 +2289,10 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop, 
                 ),
             ),
         )
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(5.dp)) {
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().padding(5.dp)
+                .anchoredDraggable(dragState, Orientation.Horizontal, flingBehavior = flingBehavior),
+        ) {
             val itemWidth = maxWidth / tabs.size
             val itemWidthPx = with(LocalDensity.current) { itemWidth.toPx() }
             Box(
@@ -2302,8 +2308,7 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop, 
                                 active,
                             )
                         }
-                    }
-                    .anchoredDraggable(dragState, Orientation.Horizontal, flingBehavior = flingBehavior),
+                    },
             ) {
                 Box(
                     Modifier.align(Alignment.CenterStart)
@@ -2316,6 +2321,18 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop, 
                         }
                         .fillMaxWidth(1f / tabs.size)
                         .fillMaxHeight()
+                        .graphicsLayer {
+                            val offset = dragState.offset
+                            val position = if (offset.isFinite() && itemWidthPx > 0f) {
+                                offset / itemWidthPx
+                            } else {
+                                activeIndex.toFloat()
+                            }
+                            val progress = position - floor(position)
+                            val stretch = sin(progress * PI).toFloat().coerceIn(0f, 1f)
+                            scaleX = 1f + stretch * .14f
+                            scaleY = 1f - stretch * .06f
+                        }
                         .shadow(8.dp, CircleShape)
                         .drawBackdrop(
                             backdrop = backdrop,
