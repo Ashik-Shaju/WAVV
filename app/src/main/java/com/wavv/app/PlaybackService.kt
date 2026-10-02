@@ -1,6 +1,7 @@
 package com.wavv.app
 
 import android.content.Context
+import android.content.Intent
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -39,6 +40,11 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
+
+    @OptIn(markerClass = [UnstableApi::class])
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        pauseAllPlayersAndStopSelf()
+    }
 
     override fun onDestroy() {
         mediaSession?.release()

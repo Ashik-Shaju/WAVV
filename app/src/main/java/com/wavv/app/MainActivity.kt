@@ -56,6 +56,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -166,6 +172,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -193,6 +200,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
@@ -219,12 +227,21 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.max
@@ -321,6 +338,16 @@ class MainActivity : ComponentActivity() {
             )
             WavvApp(libraryViewModel, playbackController)
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        playbackController.connect()
+    }
+
+    override fun onStop() {
+        playbackController.disconnect()
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -554,13 +581,19 @@ private fun WavvContent(
         libraryDestination = if (libraryDestination.isDetail) previousLibraryDestination else LibraryDestination()
     }
 
-    BackHandler(enabled = showLibrary && tab == Tab.Library && !showPlayer && libraryDestination.page != LibraryPage.Main) {
-        backLibrary()
+    BackHandler(enabled = showPlayer || (showLibrary && tab != Tab.Home)) {
+        when {
+            showPlayer -> closePlayer()
+            tab == Tab.Library && libraryDestination.page != LibraryPage.Main -> backLibrary()
+            else -> tab = Tab.Home
+        }
     }
 
     SharedTransitionLayout(Modifier.fillMaxSize()) {
         val sharedTransitionScope = this
+        val navBackdrop = rememberLayerBackdrop()
         Box(Modifier.fillMaxSize().background(WavvBackground)) {
+        Box(Modifier.fillMaxSize().layerBackdrop(navBackdrop)) {
         if (showLibrary) {
             val tabOffsetPx = (8 * LocalDensity.current.density).toInt()
             AnimatedContent(
@@ -650,7 +683,8 @@ private fun WavvContent(
                 sharedArtworkTransitionActive = sharedArtworkTransitionActive,
             )
         }
-        if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+        }
+        if (showLibrary) BottomNav(tab, { tab = it }, navBackdrop, Modifier.align(Alignment.BottomCenter))
         AnimatedVisibility(
             visible = showPlayer,
             enter = fadeIn(tween(180)) + slideInVertically(tween(620, easing = WavvMotionEasing)) { it },
@@ -2188,34 +2222,140 @@ private fun SettingsBlock(settings: List<ProfileSetting>, onSelect: (ProfileSett
 }
 
 @Composable
-private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, modifier: Modifier = Modifier) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop, modifier: Modifier = Modifier) {
     val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
     val activeIndex = tabs.indexOfFirst { it.first == active }
+    val dragState = remember { AnchoredDraggableState(active) }
+    val currentActive by rememberUpdatedState(active)
+    val currentOnChange by rememberUpdatedState(onChange)
+    val tabSpring = spring<Float>(
+        dampingRatio = Spring.DampingRatioLowBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    val flingBehavior = AnchoredDraggableDefaults.flingBehavior(
+        state = dragState,
+        positionalThreshold = { distance -> distance * .32f },
+        animationSpec = tabSpring,
+    )
+    LaunchedEffect(dragState) {
+        snapshotFlow { dragState.settledValue }.drop(1).collect { settledTab ->
+            if (settledTab != currentActive) currentOnChange(settledTab)
+        }
+    }
+    LaunchedEffect(active) {
+        if (dragState.targetValue != active) dragState.animateTo(active, tabSpring)
+    }
     Box(
         modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 12.dp)
+            .shadow(20.dp, CircleShape)
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { CircleShape },
+                effects = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        vibrancy()
+                        blur(8.dp.toPx())
+                    }
+                },
+                onDrawSurface = { drawRect(Color(0x881A1920)) },
+            )
             .clip(CircleShape)
-            .background(WavvFrostedGlass)
-            .border(1.dp, Color.White.copy(.16f), CircleShape),
+            .border(
+                1.dp,
+                Brush.verticalGradient(0f to Color.White.copy(.28f), 1f to Color.White.copy(.06f)),
+                CircleShape,
+            ),
     ) {
         Box(
             Modifier.matchParentSize().background(
-                Brush.verticalGradient(0f to Color.White.copy(.06f), 1f to Color.Transparent),
+                Brush.verticalGradient(
+                    0f to Color.White.copy(.12f),
+                    .42f to Color.Transparent,
+                    1f to Color.Black.copy(.2f),
+                ),
+            ),
+        )
+        Box(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth(.7f).height(1.dp).background(
+                Brush.horizontalGradient(
+                    0f to Color.Transparent,
+                    .5f to Color.White.copy(.48f),
+                    1f to Color.Transparent,
+                ),
             ),
         )
         BoxWithConstraints(Modifier.fillMaxWidth().padding(5.dp)) {
             val itemWidth = maxWidth / tabs.size
-            val highlightOffset by animateDpAsState(
-                targetValue = itemWidth * activeIndex,
-                animationSpec = tween(320, easing = WavvScreenEasing),
-                label = "tab highlight position",
-            )
-            Box(Modifier.matchParentSize()) {
+            val itemWidthPx = with(LocalDensity.current) { itemWidth.toPx() }
+            Box(
+                Modifier.matchParentSize()
+                    .onSizeChanged { size ->
+                        if (size.width > 0) {
+                            dragState.updateAnchors(
+                                DraggableAnchors {
+                                    tabs.forEachIndexed { index, (tab, _) ->
+                                        tab at (size.width.toFloat() * index / tabs.size)
+                                    }
+                                },
+                                active,
+                            )
+                        }
+                    }
+                    .anchoredDraggable(dragState, Orientation.Horizontal, flingBehavior = flingBehavior),
+            ) {
                 Box(
-                    Modifier.align(Alignment.CenterStart).offset(x = highlightOffset).width(itemWidth).fillMaxHeight()
+                    Modifier.align(Alignment.CenterStart)
+                        .offset {
+                            val offset = dragState.offset
+                            IntOffset(
+                                x = if (offset.isFinite()) offset.roundToInt() else (itemWidthPx * activeIndex).roundToInt(),
+                                y = 0,
+                            )
+                        }
+                        .fillMaxWidth(1f / tabs.size)
+                        .fillMaxHeight()
+                        .shadow(8.dp, CircleShape)
+                        .drawBackdrop(
+                            backdrop = backdrop,
+                            shape = { CircleShape },
+                            effects = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    vibrancy()
+                                    blur(2.dp.toPx())
+                                    lens(
+                                        refractionHeight = 14.dp.toPx(),
+                                        refractionAmount = 22.dp.toPx(),
+                                        depthEffect = true,
+                                        chromaticAberration = true,
+                                    )
+                                }
+                            },
+                            onDrawSurface = {
+                                drawRect(Color.White.copy(.10f))
+                                drawRect(WavvPink.copy(.10f))
+                            },
+                        )
                         .clip(CircleShape)
-                        .background(Color(0x1FFFEBE0))
-                        .border(1.dp, Color.White.copy(.1f), CircleShape),
-                )
+                        .border(
+                            1.dp,
+                            Brush.verticalGradient(
+                                0f to Color.White.copy(.38f),
+                                1f to Color.White.copy(.1f),
+                            ),
+                            CircleShape,
+                        ),
+                ) {
+                    Box(
+                        Modifier.align(Alignment.TopCenter).fillMaxWidth(.58f).height(1.dp).background(
+                            Brush.horizontalGradient(
+                                0f to Color.Transparent,
+                                .5f to Color.White.copy(.62f),
+                                1f to Color.Transparent,
+                            ),
+                        ),
+                    )
+                }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 tabs.forEach { (tab, label) ->
@@ -2438,7 +2578,9 @@ private fun FullPlayer(
     var playerDragOffset by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
     val gestureScope = rememberCoroutineScope()
-    BackHandler(enabled = showLyrics) { showLyrics = false }
+    BackHandler(enabled = showLyrics || showQueue) {
+        if (showLyrics) showLyrics = false else onHideQueue()
+    }
     val nextTitle = state.queue.firstOrNull { it.id != song.id }?.title ?: "Next Up"
     LaunchedEffect(showQueue, nextTitle) {
         while (isActive && !showQueue) {

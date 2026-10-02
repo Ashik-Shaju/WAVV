@@ -10,6 +10,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,10 +35,7 @@ class PlaybackController(context: Context) {
     private var catalog: Map<Long, Song> = emptyMap()
     private var managedQueue: List<Song> = emptyList()
     private var released = false
-    private val controllerFuture = MediaController.Builder(
-        appContext,
-        SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java)),
-    ).buildAsync()
+    private var controllerFuture: ListenableFuture<MediaController>? = null
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
@@ -70,10 +68,19 @@ class PlaybackController(context: Context) {
         }
     }
 
-    init {
-        controllerFuture.addListener({
-            if (released) return@addListener
-            val connectedController = runCatching { controllerFuture.get() }.getOrNull() ?: return@addListener
+    fun connect() {
+        if (released || controllerFuture != null) return
+        val future = MediaController.Builder(
+            appContext,
+            SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java)),
+        ).buildAsync()
+        controllerFuture = future
+        future.addListener({
+            if (released || controllerFuture !== future) return@addListener
+            val connectedController = runCatching { future.get() }.getOrNull() ?: run {
+                controllerFuture = null
+                return@addListener
+            }
             controller = connectedController
             connectedController.addListener(listener)
             syncControllerState(connectedController)
@@ -201,9 +208,15 @@ class PlaybackController(context: Context) {
 
     fun release() {
         released = true
+        disconnect()
+    }
+
+    fun disconnect() {
+        val future = controllerFuture ?: return
+        controllerFuture = null
         controller?.removeListener(listener)
-        MediaController.releaseFuture(controllerFuture)
         controller = null
+        MediaController.releaseFuture(future)
     }
 
     private fun syncControllerState(currentController: MediaController) {

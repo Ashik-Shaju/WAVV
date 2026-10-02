@@ -55,6 +55,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.icons.extended)
+    implementation(libs.kyant.backdrop)
 
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
