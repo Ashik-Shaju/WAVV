@@ -155,18 +155,21 @@ internal suspend fun indexMusicUnderstandingSongs(
     context: Context,
     store: LibraryStore,
     onProgress: suspend (completed: Int, total: Int) -> Unit = { _, _ -> },
-) {
+): AnalysisIndexResult {
     currentCoroutineContext().ensureActive()
     val songs = store.getSongs()
     onProgress(0, songs.size)
     currentCoroutineContext().ensureActive()
-    if (songs.isEmpty()) return
+    if (songs.isEmpty()) return AnalysisIndexResult()
     val bundleAvailable = try {
         context.assets.open("music-understanding/v1/manifest.json").use { true }
     } catch (_: IOException) {
         false
     }
-    if (!bundleAvailable) return
+    if (!bundleAvailable) {
+        return AnalysisIndexResult(unavailableMessage = "The bundled music-understanding model is missing.")
+    }
+    var failedOperations = 0
     MusicUnderstandingModel(context).use { model ->
         songs.forEachIndexed { index, song ->
             currentCoroutineContext().ensureActive()
@@ -175,7 +178,7 @@ internal suspend fun indexMusicUnderstandingSongs(
                 onProgress(index + 1, songs.size)
                 return@forEachIndexed
             }
-            store.runAnalysisJob(song.id, MUSIC_UNDERSTANDING_JOB) {
+            val failure = store.runAnalysisJob(song.id, MUSIC_UNDERSTANDING_JOB) {
                 val analysis = model.analyze(Uri.parse(song.uri))
                 store.saveMusicUnderstanding(
                     MusicUnderstandingResultEntity(
@@ -188,13 +191,17 @@ internal suspend fun indexMusicUnderstandingSongs(
                     ),
                 )
             }
+            if (failure is IOException) throw failure
+            if (failure != null) failedOperations += 1
             onProgress(index + 1, songs.size)
         }
     }
+    return AnalysisIndexResult(failedOperations = failedOperations)
 }
 
 private fun MusicUnderstandingResultEntity.isCurrent(song: Song, modelId: String): Boolean =
-    this.modelId == modelId && sourceSizeBytes == song.fileSizeBytes && sourceModifiedAt == song.modifiedAt
+    this.modelId == modelId &&
+        sourceFingerprintMatches(sourceSizeBytes, sourceModifiedAt, song.fileSizeBytes, song.modifiedAt)
 
 internal fun List<MusicTag>.toJson(): String = JSONArray().apply {
     forEach { tag ->

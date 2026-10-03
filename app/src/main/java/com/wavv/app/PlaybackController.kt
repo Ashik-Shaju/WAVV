@@ -2,6 +2,9 @@ package com.wavv.app
 
 import android.content.Context
 import android.content.ComponentName
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -29,19 +32,33 @@ data class PlaybackState(
 )
 
 class PlaybackController(context: Context) {
+    private data class PendingPlay(
+        val song: Song,
+        val queue: List<Song>,
+        val recommendedSongIds: Set<Long>,
+        val selectionSource: String,
+        val recommendationId: String?,
+    )
+
     private val appContext = context.applicationContext
     private var controller: MediaController? = null
-    private var pendingPlay: Pair<Song, List<Song>>? = null
+    private var pendingPlay: PendingPlay? = null
+    private val playbackStartConfirmation = PlaybackStartConfirmation()
+    private var onPlaybackStarted: ((Song) -> Unit)? = null
     private var catalog: Map<Long, Song> = emptyMap()
     private var managedQueue: List<Song> = emptyList()
     private var released = false
     private var controllerFuture: ListenableFuture<MediaController>? = null
+    private val retryPolicy = ControllerReconnectPolicy()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val reconnect = Runnable(::connectAttempt)
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.value = _state.value.copy(isPlaying = isPlaying)
+            if (isPlaying) confirmRequestedPlaybackStart()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -49,10 +66,12 @@ class PlaybackController(context: Context) {
             if (song != null) {
                 _state.value = _state.value.copy(
                     song = song,
+                    isPlaying = controller?.isPlaying == true,
                     positionMs = 0L,
                     durationMs = controller?.duration.takeIf { it != null && it > 0L } ?: song.durationMs,
                     errorMessage = null,
                 )
+                confirmRequestedPlaybackStart()
             }
         }
 
@@ -61,6 +80,7 @@ class PlaybackController(context: Context) {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            playbackStartConfirmation.cancel()
             _state.value = _state.value.copy(
                 isPlaying = false,
                 errorMessage = playbackErrorMessage(error.errorCode, error.message),
@@ -69,26 +89,63 @@ class PlaybackController(context: Context) {
     }
 
     fun connect() {
-        if (released || controllerFuture != null) return
-        val future = MediaController.Builder(
-            appContext,
-            SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java)),
-        ).buildAsync()
+        if (released || controllerFuture != null || controller != null) return
+        mainHandler.removeCallbacks(reconnect)
+        retryPolicy.reset()
+        connectAttempt()
+    }
+
+    private fun connectAttempt() {
+        if (released || controllerFuture != null || controller != null) return
+        val future = try {
+            MediaController.Builder(
+                appContext,
+                SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java)),
+            ).buildAsync()
+        } catch (_: Exception) {
+            scheduleReconnectOrReportFailure()
+            return
+        }
         controllerFuture = future
         future.addListener({
             if (released || controllerFuture !== future) return@addListener
             val connectedController = runCatching { future.get() }.getOrNull() ?: run {
-                controllerFuture = null
+                scheduleReconnectOrReportFailure(future)
                 return@addListener
             }
+            retryPolicy.reset()
             controller = connectedController
             connectedController.addListener(listener)
+            _state.value = _state.value.copy(errorMessage = null)
             syncControllerState(connectedController)
-            pendingPlay?.let { (song, queue) ->
+            pendingPlay?.let { pending ->
                 pendingPlay = null
-                play(song, queue)
+                play(
+                    pending.song,
+                    pending.queue,
+                    pending.recommendedSongIds,
+                    pending.selectionSource,
+                    pending.recommendationId,
+                )
             }
         }, ContextCompat.getMainExecutor(appContext))
+    }
+
+    private fun scheduleReconnectOrReportFailure(future: ListenableFuture<MediaController>? = null) {
+        if (future != null) {
+            if (controllerFuture !== future) return
+            controllerFuture = null
+            MediaController.releaseFuture(future)
+        }
+        val retryDelayMs = retryPolicy.nextDelayMs()
+        if (retryDelayMs != null) {
+            mainHandler.postDelayed(reconnect, retryDelayMs)
+        } else {
+            _state.value = _state.value.copy(
+                isPlaying = false,
+                errorMessage = "Unable to connect to playback service. Try again.",
+            )
+        }
     }
 
     fun updateCatalog(songs: List<Song>) {
@@ -96,24 +153,46 @@ class PlaybackController(context: Context) {
         controller?.let(::syncControllerState)
     }
 
-    fun play(song: Song, queue: List<Song>) {
+    fun setPlaybackStartedListener(listener: ((Song) -> Unit)?) {
+        onPlaybackStarted = listener
+    }
+
+    fun play(
+        song: Song,
+        queue: List<Song>,
+        recommendedSongIds: Set<Long> = emptySet(),
+        selectionSource: String = "manual",
+        recommendationId: String? = null,
+    ) {
+        if (queue.isEmpty()) return
         val currentController = controller ?: run {
-            pendingPlay = song to queue
+            pendingPlay = PendingPlay(song, queue, recommendedSongIds, selectionSource, recommendationId)
+            connect()
             return
         }
-        if (queue.isEmpty()) return
+        playbackStartConfirmation.request(song.id)
         managedQueue = queue
         val startIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-        currentController.setMediaItems(queue.map(::mediaItem), startIndex, 0L)
-        currentController.prepare()
-        currentController.play()
         _state.value = PlaybackState(
             song = song,
-            isPlaying = true,
+            isPlaying = false,
             durationMs = song.durationMs,
             queue = queue,
-            errorMessage = null,
         )
+        currentController.setMediaItems(
+            queue.map { queuedSong ->
+                val source = when {
+                    queuedSong.id == song.id -> selectionSource
+                    queuedSong.id in recommendedSongIds -> "autoplay_recommendation"
+                    else -> "queue"
+                }
+                mediaItem(queuedSong, source, recommendationId.takeIf { queuedSong.id in recommendedSongIds || queuedSong.id == song.id })
+            },
+            startIndex,
+            0L,
+        )
+        currentController.prepare()
+        currentController.play()
     }
 
     fun toggle() {
@@ -143,7 +222,7 @@ class PlaybackController(context: Context) {
         val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
         if (existing != null) player.removeMediaItem(existing)
         val insertionIndex = (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
-        player.addMediaItem(insertionIndex, mediaItem(song))
+        player.addMediaItem(insertionIndex, mediaItem(song, "queue"))
         val managed = managedQueue.filterNot { it.id == song.id }.toMutableList()
         val managedCurrentIndex = managed.indexOfFirst { it.id == currentId }
         managed.add(if (managedCurrentIndex < 0) managed.size else managedCurrentIndex + 1, song)
@@ -155,7 +234,7 @@ class PlaybackController(context: Context) {
     fun addToQueue(song: Song) {
         val player = controller ?: return
         if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) return
-        player.addMediaItem(mediaItem(song))
+        player.addMediaItem(mediaItem(song, "queue"))
         managedQueue = managedQueue + song
         _state.value = _state.value.copy(queue = readQueue(player))
     }
@@ -212,11 +291,13 @@ class PlaybackController(context: Context) {
     }
 
     fun disconnect() {
-        val future = controllerFuture ?: return
+        mainHandler.removeCallbacks(reconnect)
+        retryPolicy.reset()
+        val future = controllerFuture
         controllerFuture = null
         controller?.removeListener(listener)
         controller = null
-        MediaController.releaseFuture(future)
+        if (future != null) MediaController.releaseFuture(future)
     }
 
     private fun syncControllerState(currentController: MediaController) {
@@ -235,6 +316,12 @@ class PlaybackController(context: Context) {
 
     private fun syncQueue(player: MediaController) {
         _state.value = _state.value.copy(queue = readQueue(player))
+    }
+
+    private fun confirmRequestedPlaybackStart() {
+        val currentSongId = controller?.currentMediaItem?.mediaId?.toLongOrNull()
+        playbackStartConfirmation.confirm(controller?.isPlaying == true, currentSongId)
+            ?.let { songId -> catalog[songId]?.let { onPlaybackStarted?.invoke(it) } }
     }
 
     private fun readQueue(player: MediaController): List<Song> = (0 until player.mediaItemCount)
@@ -265,7 +352,7 @@ class PlaybackController(context: Context) {
         )
     }
 
-    private fun mediaItem(song: Song) = MediaItem.Builder()
+    private fun mediaItem(song: Song, selectionSource: String = "queue", recommendationId: String? = null) = MediaItem.Builder()
         .setMediaId(song.id.toString())
         .setUri(song.uri)
         .setMediaMetadata(
@@ -273,6 +360,10 @@ class PlaybackController(context: Context) {
                 .setTitle(song.title)
                 .setArtist(song.artist)
                 .setAlbumTitle(song.album)
+                .setExtras(Bundle().apply {
+                    putString(MEDIA_EXTRA_SELECTION_SOURCE, selectionSource)
+                    recommendationId?.let { putString(MEDIA_EXTRA_RECOMMENDATION_ID, it) }
+                })
                 .build(),
         )
         .build()
@@ -282,9 +373,53 @@ class PlaybackController(context: Context) {
     }
 }
 
+internal const val MEDIA_EXTRA_SELECTION_SOURCE = "com.wavv.app.SELECTION_SOURCE"
+internal const val MEDIA_EXTRA_RECOMMENDATION_ID = "com.wavv.app.RECOMMENDATION_ID"
+
+internal class PlaybackStartConfirmation {
+    private var requestedSongId: Long? = null
+
+    fun request(songId: Long) {
+        requestedSongId = songId
+    }
+
+    fun confirm(isPlaying: Boolean, currentSongId: Long?): Long? {
+        val requested = requestedSongId ?: return null
+        if (!isPlaying || requested != currentSongId) return null
+        requestedSongId = null
+        return requested
+    }
+
+    fun cancel() {
+        requestedSongId = null
+    }
+}
+
+internal class ControllerReconnectPolicy(
+    private val delaysMs: List<Long> = listOf(300L, 900L, 2_000L),
+) {
+    private var retries = 0
+
+    fun nextDelayMs(): Long? {
+        if (retries >= delaysMs.size) return null
+        return delaysMs[retries++]
+    }
+
+    fun reset() {
+        retries = 0
+    }
+}
+
 internal fun <T> moveQueueItem(items: List<T>, fromIndex: Int, toIndex: Int): List<T> {
     if (fromIndex !in items.indices || toIndex !in items.indices || fromIndex == toIndex) return items
     return items.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+}
+
+internal fun nextQueuedSongs(queue: List<Song>, currentSongId: Long, limit: Int = 3): List<Song> {
+    if (limit <= 0) return emptyList()
+    val currentIndex = queue.indexOfFirst { it.id == currentSongId }
+    if (currentIndex < 0) return emptyList()
+    return queue.drop(currentIndex + 1).take(limit)
 }
 
 internal fun <T> shuffleUpcoming(items: List<T>, currentIndex: Int, seed: Long): List<T> {

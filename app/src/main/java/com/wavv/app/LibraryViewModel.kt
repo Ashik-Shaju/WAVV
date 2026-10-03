@@ -10,9 +10,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -29,6 +31,9 @@ sealed interface LibraryUiState {
         val semanticLoading: Boolean = false,
         val semanticSearchComplete: Boolean = false,
         val indexingError: String? = null,
+        val analysisProgress: MusicAnalysisProgress? = null,
+        val personalizedRecommendations: List<Song> = emptyList(),
+        val smartMixes: List<SmartMix> = emptyList(),
     ) : LibraryUiState
     data class Error(val message: String) : LibraryUiState
 }
@@ -39,15 +44,18 @@ class LibraryViewModel(
     private val indexScheduler: LibraryIndexScheduler,
     private val dclapScheduler: DclapIndexScheduler,
     private val textSearch: DclapTextSearch,
+    private val metadataRepository: MediaLibraryRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow<LibraryUiState>(LibraryUiState.Loading)
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
     private val _source = MutableStateFlow(sourceStore.read())
     val source: StateFlow<LibrarySource?> = _source.asStateFlow()
+    private val favoriteIds = MutableStateFlow<Set<Long>>(emptySet())
 
-    private val sessionId = java.util.UUID.randomUUID().toString()
+    private val sessionId = WavvSession.id
     private var loadJob: Job? = null
     private var searchJob: Job? = null
+    private var discoveryJob: Job? = null
 
     fun showSourceSelection() {
         _state.value = LibraryUiState.SelectSource
@@ -117,7 +125,27 @@ class LibraryViewModel(
                 when (workInfo?.state) {
                     WorkInfo.State.SUCCEEDED -> {
                         publishReady()
-                        dclapScheduler.enqueue()
+                        val analysisWorkId = dclapScheduler.enqueue()
+                        val analysisInfo = dclapScheduler.observe(analysisWorkId)
+                            .onEach { info ->
+                                if (info != null && isCurrentSource(selectedSource)) {
+                                    _state.update { current ->
+                                        if (current is LibraryUiState.Ready) {
+                                            current.copy(analysisProgress = info.toMusicAnalysisProgress())
+                                        } else current
+                                    }
+                                }
+                            }
+                            .first { it?.state?.isFinished == true }
+                        if (!isCurrentSource(selectedSource)) return@launch
+                        when (analysisInfo?.state) {
+                            WorkInfo.State.FAILED -> publishIndexError(
+                                analysisInfo.outputData.getString(DclapIndexWorker.KEY_ERROR)
+                                    ?: "Music analysis could not be completed",
+                            )
+                            WorkInfo.State.CANCELLED -> publishIndexError("Music analysis was canceled")
+                            else -> Unit
+                        }
                     }
                     WorkInfo.State.FAILED -> publishIndexError(
                         workInfo.outputData.getString(LibraryIndexWorker.KEY_ERROR) ?: "Could not refresh the music library",
@@ -141,12 +169,51 @@ class LibraryViewModel(
     }
 
     private suspend fun publishReady() {
+        libraryStore.pruneListeningHistory()
+        val songs = libraryStore.getSongs()
+        val currentFavorites = libraryStore.getFavoriteIds()
+        favoriteIds.value = currentFavorites
         _state.value = LibraryUiState.Ready(
-            songs = libraryStore.getSongs(),
-            favoriteIds = libraryStore.getFavoriteIds(),
+            songs = songs,
+            favoriteIds = currentFavorites,
             recentlyPlayed = libraryStore.getRecentlyPlayed(),
             playlists = libraryStore.getPlaylists(),
         )
+        observeDiscovery(songs)
+    }
+
+    private fun observeDiscovery(songs: List<Song>) {
+        discoveryJob?.cancel()
+        if (songs.isEmpty()) return
+        discoveryJob = viewModelScope.launch(Dispatchers.IO) {
+            val vectors = libraryStore.audioVectors(songs)
+            val tagsBySong = libraryStore.musicTags(songs)
+            val cutoff = System.currentTimeMillis() - DISCOVERY_HISTORY_MS
+            combine(favoriteIds, libraryStore.observeDiscoveryEvents(cutoff)) { favorites, events -> favorites to events }
+                .collectLatest { (favorites, events) ->
+                    val discovery = withContext(Dispatchers.Default) {
+                        buildPersonalizedDiscovery(
+                            songs = songs,
+                            events = events,
+                            favoriteIds = favorites,
+                            audioVectors = vectors,
+                            tagsBySong = tagsBySong,
+                            currentSessionId = sessionId,
+                            nowMs = System.currentTimeMillis(),
+                        )
+                    }
+                    val recentlyPlayed = libraryStore.getRecentlyPlayed()
+                    _state.update { state ->
+                        if (state is LibraryUiState.Ready && state.songs.map(Song::id) == songs.map(Song::id)) {
+                            state.copy(
+                                recentlyPlayed = recentlyPlayed,
+                                personalizedRecommendations = discovery.recommendations,
+                                smartMixes = discovery.mixes,
+                            )
+                        } else state
+                    }
+                }
+        }
     }
 
     private suspend fun refreshPlaylists() {
@@ -182,16 +249,42 @@ class LibraryViewModel(
         }
         searchJob = viewModelScope.launch {
             try {
-                val localResults = withContext(Dispatchers.Default) { searchSongs(songs, query) }
-                _state.update { state ->
-                    if (state is LibraryUiState.Ready) state.copy(searchResults = localResults) else state
+                val intent = withContext(Dispatchers.Default) { parseMusicQuery(query, songs) }
+                val searchableSongs = if (intent.languageCode == null) songs else withContext(Dispatchers.IO) {
+                    songs.map { song ->
+                        if (song.languageMetadataChecked || song.languageTags.isNotEmpty()) return@map song
+                        try {
+                            val tags = metadataRepository.readLanguageTags(song)
+                            libraryStore.setLanguageTags(song.id, tags)
+                            song.copy(languageTags = tags, languageMetadataChecked = true)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            song
+                        }
+                    }
                 }
-                delay(250)
-                val semanticSongs = withContext(Dispatchers.IO) { textSearch.search(query, songs, libraryStore) }
-                val results = withContext(Dispatchers.Default) { searchSongs(songs, query, semanticSongs) }
+                val tagsBySong = withContext(Dispatchers.IO) { libraryStore.musicTags(searchableSongs) }
+                _state.update { current ->
+                    if (current is LibraryUiState.Ready) current.copy(songs = searchableSongs) else current
+                }
+                val semanticMatches = if (intent.semanticText.isBlank()) emptyList() else try {
+                    withContext(Dispatchers.IO) { textSearch.search(intent.semanticText, searchableSongs, libraryStore) }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                val results = withContext(Dispatchers.Default) {
+                    rankLocalSearch(searchableSongs, intent, semanticMatches, tagsBySong)
+                }
                 _state.update { state ->
                     if (state is LibraryUiState.Ready) {
-                        state.copy(searchResults = results, semanticLoading = false, semanticSearchComplete = true)
+                        state.copy(
+                            searchResults = results,
+                            semanticLoading = false,
+                            semanticSearchComplete = intent.semanticText.isNotBlank() && semanticMatches.isNotEmpty(),
+                        )
                     } else state
                 }
             } catch (error: CancellationException) {
@@ -207,8 +300,10 @@ class LibraryViewModel(
     fun toggleFavorite(songId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             libraryStore.toggleFavorite(songId, sessionId)
+            val ids = libraryStore.getFavoriteIds()
+            favoriteIds.value = ids
             _state.update { state ->
-                if (state is LibraryUiState.Ready) state.copy(favoriteIds = libraryStore.getFavoriteIds()) else state
+                if (state is LibraryUiState.Ready) state.copy(favoriteIds = ids) else state
             }
         }
     }
@@ -217,8 +312,25 @@ class LibraryViewModel(
         if (songIds.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             libraryStore.setFavorites(songIds, favorite, sessionId)
+            val ids = libraryStore.getFavoriteIds()
+            favoriteIds.value = ids
             _state.update { state ->
-                if (state is LibraryUiState.Ready) state.copy(favoriteIds = libraryStore.getFavoriteIds()) else state
+                if (state is LibraryUiState.Ready) state.copy(favoriteIds = ids) else state
+            }
+        }
+    }
+
+    fun clearListeningHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                libraryStore.clearListeningHistory()
+                _state.update { current ->
+                    if (current is LibraryUiState.Ready) current.copy(recentlyPlayed = emptyList()) else current
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                publishIndexError(error.message ?: "Couldn't clear listening history")
             }
         }
     }
@@ -262,31 +374,23 @@ class LibraryViewModel(
         }
     }
 
-    fun recordPlaybackEvent(
-        eventType: String,
-        songId: Long,
-        selectionSource: String? = null,
-        skipPositionMs: Long? = null,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.recordEvent(
-                eventType = eventType,
-                songId = songId,
-                sessionId = sessionId,
-                selectionSource = selectionSource,
-                skipPositionSeconds = skipPositionMs?.div(1_000L),
-            )
-            if (eventType == "play") {
-                _state.update { state ->
-                    if (state is LibraryUiState.Ready) state.copy(recentlyPlayed = libraryStore.getRecentlyPlayed()) else state
-                }
-            }
-        }
-    }
-
     override fun onCleared() {
         searchJob?.cancel()
+        discoveryJob?.cancel()
         textSearch.close()
         super.onCleared()
     }
 }
+
+private const val DISCOVERY_HISTORY_MS = LISTENING_HISTORY_RETENTION_MS
+
+private fun androidx.work.WorkInfo.toMusicAnalysisProgress() = MusicAnalysisProgress(
+    status = state.toMusicAnalysisStatus(),
+    phase = when (progress.getString(DclapIndexWorker.KEY_PHASE)) {
+        DclapIndexWorker.PHASE_DCLAP -> MusicAnalysisPhase.DCLAP
+        DclapIndexWorker.PHASE_MUSIC_UNDERSTANDING -> MusicAnalysisPhase.MUSIC_UNDERSTANDING
+        else -> null
+    },
+    completed = progress.getInt(DclapIndexWorker.KEY_COMPLETED, 0),
+    total = progress.getInt(DclapIndexWorker.KEY_TOTAL, 0),
+)

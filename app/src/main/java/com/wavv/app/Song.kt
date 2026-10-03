@@ -17,6 +17,13 @@ data class Song(
     val metadataSource: String = "unknown",
     val genre: String? = null,
     val genres: List<String> = emptyList(),
+    val albumArtist: String? = null,
+    val composer: String? = null,
+    val year: Int? = null,
+    val trackNumber: Int? = null,
+    val discNumber: Int? = null,
+    val languageTags: List<String> = emptyList(),
+    val languageMetadataChecked: Boolean = false,
 )
 
 data class UserPlaylist(

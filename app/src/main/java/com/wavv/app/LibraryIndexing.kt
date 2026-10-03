@@ -162,13 +162,15 @@ class LibraryIndexWorker(
         val source = sourceStore.read() ?: return Result.failure()
         return try {
             setProgress(workDataOf(KEY_COMPLETED to 0, KEY_TOTAL to -1))
-            val songs = MediaLibraryRepository(applicationContext).loadSongs(source) { completed, total ->
+            val repository = MediaLibraryRepository(applicationContext)
+            val songs = repository.loadSongs(source) { completed, total ->
                 if (completed == 1 || completed % PROGRESS_INTERVAL == 0 || total == completed) {
                     setProgress(workDataOf(KEY_COMPLETED to completed, KEY_TOTAL to (total ?: -1)))
                 }
             }
             if (sourceStore.read()?.fingerprint() != source.fingerprint()) return Result.success()
             LibraryStore(WavvDatabase.get(applicationContext)).replaceSongs(songs)
+            repository.pruneEmbeddedArtworkCache(songs)
             sourceStore.markIndexed(source)
             setProgress(workDataOf(KEY_COMPLETED to songs.size, KEY_TOTAL to songs.size))
             Result.success()

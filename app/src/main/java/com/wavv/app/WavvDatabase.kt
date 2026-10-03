@@ -6,6 +6,7 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Insert
+import androidx.room.Index
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
@@ -14,6 +15,8 @@ import androidx.room.PrimaryKey
 import androidx.room.withTransaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 @Entity(tableName = "songs")
@@ -36,9 +39,23 @@ data class SongEntity(
     @ColumnInfo(defaultValue = "'[]'") val genresJson: String = "[]",
     val isFavorite: Boolean = false,
     val lastPlayedAt: Long? = null,
+    val albumArtist: String? = null,
+    val composer: String? = null,
+    val year: Int? = null,
+    val trackNumber: Int? = null,
+    val discNumber: Int? = null,
+    @ColumnInfo(defaultValue = "'[]'") val languageTagsJson: String = "[]",
+    @ColumnInfo(defaultValue = "0") val languageMetadataChecked: Boolean = false,
 )
 
-@Entity(tableName = "listening_events")
+@Entity(tableName = "song_user_state")
+data class SongUserStateEntity(
+    @PrimaryKey val uri: String,
+    val isFavorite: Boolean,
+    val lastPlayedAt: Long?,
+)
+
+@Entity(tableName = "listening_events", indices = [Index(value = ["timestamp"])])
 data class ListeningEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val userId: String,
@@ -108,6 +125,9 @@ interface SongDao {
     @Query("SELECT * FROM songs ORDER BY title COLLATE NOCASE ASC")
     suspend fun getAll(): List<SongEntity>
 
+    @Query("SELECT * FROM songs WHERE id = :songId")
+    suspend fun get(songId: Long): SongEntity?
+
     @Query("SELECT id FROM songs WHERE isFavorite = 1")
     suspend fun getFavoriteIds(): List<Long>
 
@@ -128,12 +148,51 @@ interface SongDao {
 
     @Query("UPDATE songs SET lastPlayedAt = :timestamp WHERE id = :songId")
     suspend fun markPlayed(songId: Long, timestamp: Long)
+
+    @Query("UPDATE songs SET lastPlayedAt = NULL WHERE lastPlayedAt < :cutoffMs")
+    suspend fun clearLastPlayedBefore(cutoffMs: Long)
+
+    @Query("UPDATE songs SET lastPlayedAt = NULL WHERE lastPlayedAt IS NOT NULL")
+    suspend fun clearLastPlayed()
+
+    @Query("UPDATE songs SET languageTagsJson = :languageTagsJson, languageMetadataChecked = 1 WHERE id = :songId")
+    suspend fun setLanguageTags(songId: Long, languageTagsJson: String)
+}
+
+@Dao
+interface SongUserStateDao {
+    @Query("SELECT * FROM song_user_state WHERE uri IN (:uris)")
+    suspend fun getForUris(uris: List<String>): List<SongUserStateEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(state: SongUserStateEntity)
+
+    @Query("DELETE FROM song_user_state WHERE uri = :uri")
+    suspend fun delete(uri: String)
+
+    @Query("UPDATE song_user_state SET lastPlayedAt = NULL WHERE lastPlayedAt < :cutoffMs")
+    suspend fun clearLastPlayedBefore(cutoffMs: Long)
+
+    @Query("DELETE FROM song_user_state WHERE isFavorite = 0 AND lastPlayedAt IS NULL")
+    suspend fun deleteEmpty()
+
+    @Query("UPDATE song_user_state SET lastPlayedAt = NULL")
+    suspend fun clearLastPlayed()
 }
 
 @Dao
 interface ListeningEventDao {
     @Insert
     suspend fun insert(event: ListeningEventEntity)
+
+    @Query("SELECT * FROM listening_events WHERE timestamp >= :sinceMs ORDER BY timestamp DESC LIMIT :limit")
+    fun observeRecent(sinceMs: Long, limit: Int): Flow<List<ListeningEventEntity>>
+
+    @Query("DELETE FROM listening_events WHERE timestamp < :cutoffMs")
+    suspend fun deleteBefore(cutoffMs: Long)
+
+    @Query("DELETE FROM listening_events")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -195,6 +254,9 @@ interface SongEmbeddingDao {
 
 @Dao
 interface MusicUnderstandingDao {
+    @Query("SELECT * FROM music_understanding_results")
+    suspend fun getAll(): List<MusicUnderstandingResultEntity>
+
     @Query("SELECT * FROM music_understanding_results WHERE songId = :songId")
     suspend fun get(songId: Long): MusicUnderstandingResultEntity?
 
@@ -205,13 +267,21 @@ interface MusicUnderstandingDao {
     suspend fun deleteMissingSongs()
 }
 
+internal data class CatalogUserState(val isFavorite: Boolean, val lastPlayedAt: Long?)
+
+internal fun resolveCatalogUserState(
+    previous: CatalogUserState?,
+    persisted: CatalogUserState?,
+): CatalogUserState = persisted ?: previous ?: CatalogUserState(isFavorite = false, lastPlayedAt = null)
+
 @Database(
-    entities = [SongEntity::class, ListeningEventEntity::class, PlaylistEntity::class, PlaylistItemEntity::class, AnalysisJobEntity::class, SongEmbeddingEntity::class, MusicUnderstandingResultEntity::class],
-    version = 6,
+    entities = [SongEntity::class, SongUserStateEntity::class, ListeningEventEntity::class, PlaylistEntity::class, PlaylistItemEntity::class, AnalysisJobEntity::class, SongEmbeddingEntity::class, MusicUnderstandingResultEntity::class],
+    version = 8,
     exportSchema = true,
 )
 abstract class WavvDatabase : RoomDatabase() {
     abstract fun songDao(): SongDao
+    abstract fun songUserStateDao(): SongUserStateDao
     abstract fun listeningEventDao(): ListeningEventDao
     abstract fun playlistDao(): PlaylistDao
     abstract fun analysisJobDao(): AnalysisJobDao
@@ -226,7 +296,7 @@ abstract class WavvDatabase : RoomDatabase() {
                 context.applicationContext,
                 WavvDatabase::class.java,
                 "wavv.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build().also { instance = it }
         }
 
         private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -301,20 +371,90 @@ abstract class WavvDatabase : RoomDatabase() {
                 )
             }
         }
+
+        internal val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS song_user_state (
+                        uri TEXT NOT NULL,
+                        isFavorite INTEGER NOT NULL,
+                        lastPlayedAt INTEGER,
+                        PRIMARY KEY(uri)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO song_user_state (uri, isFavorite, lastPlayedAt)
+                    SELECT uri, MAX(isFavorite), MAX(lastPlayedAt) FROM songs
+                    WHERE isFavorite = 1 OR lastPlayedAt IS NOT NULL
+                    GROUP BY uri
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        internal val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN albumArtist TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN composer TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN year INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN trackNumber INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN discNumber INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN languageTagsJson TEXT NOT NULL DEFAULT '[]'")
+                db.execSQL("ALTER TABLE songs ADD COLUMN languageMetadataChecked INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_listening_events_timestamp ON listening_events(timestamp)")
+            }
+        }
     }
 }
 
 class LibraryStore(private val database: WavvDatabase) {
+    suspend fun pruneListeningHistory(nowMs: Long = System.currentTimeMillis()) {
+        database.withTransaction { pruneListeningHistoryBefore(listeningHistoryCutoff(nowMs)) }
+    }
+
+    suspend fun clearListeningHistory() {
+        database.withTransaction {
+            database.listeningEventDao().deleteAll()
+            database.songDao().clearLastPlayed()
+            database.songUserStateDao().clearLastPlayed()
+            database.songUserStateDao().deleteEmpty()
+        }
+    }
+
     suspend fun replaceSongs(songs: List<Song>) {
         database.withTransaction {
             val previousSongsByUri = database.songDao().getAll().associateBy(SongEntity::uri)
+            val uris = songs.asSequence()
+                .map(Song::uri)
+                .distinct()
+                .toList()
+                .chunked(STATE_QUERY_BATCH_SIZE)
+            val stateDao = database.songUserStateDao()
+            val userStatesByUri = mutableMapOf<String, SongUserStateEntity>()
+            for (uriBatch in uris) {
+                stateDao.getForUris(uriBatch).forEach { userStatesByUri[it.uri] = it }
+            }
             database.songDao().deleteAll()
             database.songDao().upsertAll(
                 songs.map { song ->
                     val previous = previousSongsByUri[song.uri]
+                    val userState = userStatesByUri[song.uri]
+                    val restoredState = resolveCatalogUserState(
+                        previous = previous?.let { CatalogUserState(it.isFavorite, it.lastPlayedAt) },
+                        persisted = userState?.let { CatalogUserState(it.isFavorite, it.lastPlayedAt) },
+                    )
                     song.copy(id = previous?.id ?: song.id)
-                        .toEntity(previous?.isFavorite ?: false)
-                        .copy(lastPlayedAt = previous?.lastPlayedAt)
+                        .toEntity(restoredState.isFavorite)
+                        .copy(
+                            lastPlayedAt = restoredState.lastPlayedAt,
+                            languageTagsJson = if (song.languageMetadataChecked || song.languageTags.isNotEmpty()) {
+                                song.languageTags.toJsonArray()
+                            } else previous?.languageTagsJson ?: "[]",
+                            languageMetadataChecked = song.languageMetadataChecked || (previous?.languageMetadataChecked == true),
+                        )
                 },
             )
             database.songEmbeddingDao().deleteMissingSongs()
@@ -353,23 +493,30 @@ class LibraryStore(private val database: WavvDatabase) {
         )
     }
 
-    suspend fun runAnalysisJob(songId: Long, jobType: String, analyze: suspend () -> Unit) {
+    suspend fun runAnalysisJob(songId: Long, jobType: String, analyze: suspend () -> Unit): Exception? {
         saveAnalysis(songId, jobType, "running")
         try {
             analyze()
             saveAnalysis(songId, jobType, "completed")
+            return null
         } catch (error: CancellationException) {
             withContext(NonCancellable) { runCatching { saveAnalysis(songId, jobType, "cancelled") } }
             throw error
         } catch (error: Exception) {
-            saveAnalysis(songId, jobType, "failed", (error.message ?: error::class.simpleName ?: "Analysis failed").take(512))
+            saveAnalysis(
+                songId,
+                jobType,
+                "failed",
+                (error.message ?: error::class.simpleName ?: "Analysis failed").take(512),
+            )
+            return error
         } catch (error: Error) {
             withContext(NonCancellable) { runCatching { saveAnalysis(songId, jobType, "failed", "Fatal analysis error") } }
             throw error
         }
     }
 
-    suspend fun searchEmbeddings(query: FloatArray, songs: List<Song>, limit: Int): List<Song> {
+    internal suspend fun searchEmbeddings(query: FloatArray, songs: List<Song>, limit: Int): List<SemanticMatch> {
         val byId = songs.associateBy(Song::id)
         // ponytail: linear scan is enough for the current library; add ANN only after a measured large-library bottleneck.
         return database.songEmbeddingDao().getAll()
@@ -379,8 +526,12 @@ class LibraryStore(private val database: WavvDatabase) {
                 val vector = embedding.vector.toFloatArray()
                 if (
                     embedding.modelId != DCLAP_MODEL_ID ||
-                    embedding.sourceSizeBytes != song.fileSizeBytes ||
-                    embedding.sourceModifiedAt != song.modifiedAt ||
+                    !sourceFingerprintMatches(
+                        embedding.sourceSizeBytes,
+                        embedding.sourceModifiedAt,
+                        song.fileSizeBytes,
+                        song.modifiedAt,
+                    ) ||
                     vector.size != query.size ||
                     !embedding.normalized
                 ) return@mapNotNull null
@@ -388,23 +539,87 @@ class LibraryStore(private val database: WavvDatabase) {
             }
             .sortedWith(compareByDescending<Pair<Song, Double>> { it.second }.thenBy { it.first.id })
             .take(limit)
-            .map { it.first }
+            .map { SemanticMatch(it.first.id, it.second.toFloat()) }
             .toList()
     }
 
+    suspend fun audioVectors(songs: List<Song>): Map<Long, FloatArray> {
+        val byId = songs.associateBy(Song::id)
+        return database.songEmbeddingDao().getAll().mapNotNull { embedding ->
+            val song = byId[embedding.songId] ?: return@mapNotNull null
+            if (
+                embedding.modelId != DCLAP_MODEL_ID || !embedding.normalized || embedding.dimension != 512 ||
+                !sourceFingerprintMatches(embedding.sourceSizeBytes, embedding.sourceModifiedAt, song.fileSizeBytes, song.modifiedAt)
+            ) return@mapNotNull null
+            val vector = runCatching { embedding.vector.toFloatArray() }.getOrNull()
+                ?.takeIf { it.size == embedding.dimension && it.all(Float::isFinite) }
+                ?: return@mapNotNull null
+            song.id to vector
+        }.toMap()
+    }
+
+    internal suspend fun musicTags(songs: List<Song>): Map<Long, List<MusicTag>> {
+        val byId = songs.associateBy(Song::id)
+        return database.musicUnderstandingDao().getAll().mapNotNull { result ->
+            val song = byId[result.songId] ?: return@mapNotNull null
+            if (
+                result.sourceSizeBytes != song.fileSizeBytes || result.sourceModifiedAt != song.modifiedAt
+            ) return@mapNotNull null
+            song.id to result.tagsJson.toMusicTags()
+        }.toMap()
+    }
+
+    internal fun observeDiscoveryEvents(sinceMs: Long, limit: Int = MAX_DISCOVERY_EVENTS) =
+        database.listeningEventDao().observeRecent(sinceMs, limit).map { rows -> rows.map(ListeningEventEntity::toLocalEvent) }
+
+    suspend fun setLanguageTags(songId: Long, languageTags: List<String>) {
+        database.songDao().setLanguageTags(songId, languageTags.toJsonArray())
+    }
+
+    internal suspend fun recordObservedEvent(event: LocalListeningEvent) {
+        database.withTransaction {
+            val now = System.currentTimeMillis()
+            database.listeningEventDao().insert(
+                ListeningEventEntity(
+                    userId = LOCAL_USER,
+                    songId = event.songId,
+                    timestamp = event.timestampMs,
+                    sessionId = event.sessionId,
+                    eventType = event.eventType,
+                    listenSeconds = event.listenSeconds,
+                    completionRatio = event.completionRatio,
+                    skipPositionSeconds = event.skipPositionSeconds,
+                    selectionSource = event.selectionSource,
+                    playlistId = event.playlistId,
+                    recommendationId = event.recommendationId,
+                ),
+            )
+            if (event.eventType == "play") {
+                database.songDao().get(event.songId)?.let { song ->
+                    database.songDao().markPlayed(event.songId, event.timestampMs)
+                    saveUserState(song, song.isFavorite, event.timestampMs)
+                }
+            }
+            pruneListeningHistoryBefore(listeningHistoryCutoff(now))
+        }
+    }
+
     suspend fun toggleFavorite(songId: Long, sessionId: String): Boolean = database.withTransaction {
-        val current = database.songDao().isFavorite(songId) ?: return@withTransaction false
-        val next = !current
+        val song = database.songDao().get(songId) ?: return@withTransaction false
+        val now = System.currentTimeMillis()
+        val next = !song.isFavorite
         database.songDao().setFavorite(songId, next)
+        saveUserState(song, next, song.lastPlayedAt)
         database.listeningEventDao().insert(
             ListeningEventEntity(
                 userId = LOCAL_USER,
                 songId = songId,
-                timestamp = System.currentTimeMillis(),
+                timestamp = now,
                 sessionId = sessionId,
                 eventType = if (next) "favorite" else "unfavorite",
             ),
         )
+        pruneListeningHistoryBefore(listeningHistoryCutoff(now))
         next
     }
 
@@ -429,8 +644,12 @@ class LibraryStore(private val database: WavvDatabase) {
                 ),
             )
             if (eventType == "play") {
-                database.songDao().markPlayed(songId, timestamp)
+                database.songDao().get(songId)?.let { song ->
+                    database.songDao().markPlayed(songId, timestamp)
+                    saveUserState(song, song.isFavorite, timestamp)
+                }
             }
+            pruneListeningHistoryBefore(listeningHistoryCutoff(timestamp))
         }
     }
 
@@ -446,13 +665,28 @@ class LibraryStore(private val database: WavvDatabase) {
             val playlistDao = database.playlistDao()
             val songIds = playlistDao.getSongIds(playlistId)
             if (songId !in songIds) {
-                playlistDao.upsertItems(listOf(PlaylistItemEntity(playlistId, songId, songIds.size, System.currentTimeMillis())))
+                val now = System.currentTimeMillis()
+                playlistDao.upsertItems(listOf(PlaylistItemEntity(playlistId, songId, songIds.size, now)))
+                database.listeningEventDao().insert(
+                    ListeningEventEntity(userId = LOCAL_USER, songId = songId, timestamp = now, sessionId = WavvSession.id, eventType = "playlist_add", playlistId = playlistId),
+                )
+                pruneListeningHistoryBefore(listeningHistoryCutoff(now))
             }
         }
     }
 
     suspend fun removeFromPlaylist(playlistId: Long, songId: Long) {
-        database.playlistDao().removeSong(playlistId, songId)
+        database.withTransaction {
+            val playlistDao = database.playlistDao()
+            if (songId in playlistDao.getSongIds(playlistId)) {
+                val now = System.currentTimeMillis()
+                playlistDao.removeSong(playlistId, songId)
+                database.listeningEventDao().insert(
+                    ListeningEventEntity(userId = LOCAL_USER, songId = songId, timestamp = now, sessionId = WavvSession.id, eventType = "playlist_remove", playlistId = playlistId),
+                )
+                pruneListeningHistoryBefore(listeningHistoryCutoff(now))
+            }
+        }
     }
 
     suspend fun renamePlaylist(playlistId: Long, name: String) {
@@ -474,9 +708,10 @@ class LibraryStore(private val database: WavvDatabase) {
             val events = database.listeningEventDao()
             val now = System.currentTimeMillis()
             songIds.forEach { songId ->
-                val current = songs.isFavorite(songId) ?: return@forEach
-                if (current != favorite) {
+                val song = songs.get(songId) ?: return@forEach
+                if (song.isFavorite != favorite) {
                     songs.setFavorite(songId, favorite)
+                    saveUserState(song, favorite, song.lastPlayedAt)
                     events.insert(
                         ListeningEventEntity(
                             userId = LOCAL_USER,
@@ -488,13 +723,32 @@ class LibraryStore(private val database: WavvDatabase) {
                     )
                 }
             }
+            pruneListeningHistoryBefore(listeningHistoryCutoff(now))
         }
+    }
+
+    private suspend fun pruneListeningHistoryBefore(cutoffMs: Long) {
+        database.listeningEventDao().deleteBefore(cutoffMs)
+        database.songDao().clearLastPlayedBefore(cutoffMs)
+        database.songUserStateDao().clearLastPlayedBefore(cutoffMs)
+        database.songUserStateDao().deleteEmpty()
     }
 
     private companion object {
         const val LOCAL_USER = "local"
         const val METADATA_JOB = "metadata_index"
         const val COMPLETED = "completed"
+        const val STATE_QUERY_BATCH_SIZE = 400
+        const val MAX_DISCOVERY_EVENTS = 10_000
+    }
+
+    private suspend fun saveUserState(song: SongEntity, isFavorite: Boolean, lastPlayedAt: Long?) {
+        val stateDao = database.songUserStateDao()
+        if (!isFavorite && lastPlayedAt == null) {
+            stateDao.delete(song.uri)
+        } else {
+            stateDao.upsert(SongUserStateEntity(song.uri, isFavorite, lastPlayedAt))
+        }
     }
 }
 
@@ -523,6 +777,13 @@ private fun Song.toEntity(isFavorite: Boolean) = SongEntity(
     genre = genre,
     genresJson = org.json.JSONArray().apply { genreNames().forEach { put(it) } }.toString(),
     isFavorite = isFavorite,
+    albumArtist = albumArtist,
+    composer = composer,
+    year = year,
+    trackNumber = trackNumber,
+    discNumber = discNumber,
+    languageTagsJson = languageTags.toJsonArray(),
+    languageMetadataChecked = languageMetadataChecked,
 )
 
 private fun SongEntity.toSong() = Song(
@@ -545,4 +806,44 @@ private fun SongEntity.toSong() = Song(
         val storedGenres = org.json.JSONArray(genresJson)
         List(storedGenres.length()) { index -> storedGenres.getString(index) }
     }.getOrDefault(emptyList()),
+    albumArtist = albumArtist,
+    composer = composer,
+    year = year,
+    trackNumber = trackNumber,
+    discNumber = discNumber,
+    languageTags = runCatching {
+        val languageTags = org.json.JSONArray(languageTagsJson)
+        List(languageTags.length()) { index -> languageTags.getString(index) }
+    }.getOrDefault(emptyList()),
+    languageMetadataChecked = languageMetadataChecked,
 )
+
+private fun List<String>.toJsonArray() = org.json.JSONArray().apply { forEach(::put) }.toString()
+
+private fun ListeningEventEntity.toLocalEvent() = LocalListeningEvent(
+    songId = songId,
+    timestampMs = timestamp,
+    eventType = eventType,
+    sessionId = sessionId,
+    listenSeconds = listenSeconds,
+    completionRatio = completionRatio,
+    skipPositionSeconds = skipPositionSeconds,
+    selectionSource = selectionSource,
+    recommendationId = recommendationId,
+    playlistId = playlistId,
+)
+
+private fun String.toMusicTags(): List<MusicTag> = runCatching {
+    val json = org.json.JSONArray(this)
+    List(json.length()) { index ->
+        val tag = json.getJSONObject(index)
+        MusicTag(
+            task = tag.optString("task"),
+            taxonomy = tag.optString("taxonomy"),
+            label = tag.optString("label"),
+            labelSource = tag.optString("labelSource"),
+            probability = tag.optDouble("probability").toFloat(),
+            threshold = tag.optDouble("threshold").toFloat(),
+        )
+    }.filter { it.label.isNotBlank() && it.probability.isFinite() && it.threshold.isFinite() }
+}.getOrDefault(emptyList())

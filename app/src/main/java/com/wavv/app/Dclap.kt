@@ -11,6 +11,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import java.io.Closeable
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -427,7 +428,7 @@ private class DclapAudioEncoder(model: File) : Closeable {
         val options = OrtSession.SessionOptions()
         options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         options.setInterOpNumThreads(1)
-        options.setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceAtMost(8).coerceAtLeast(1))
+        options.setIntraOpNumThreads(DclapThreadPolicy.intraOpThreadCount(Runtime.getRuntime().availableProcessors()))
         options.setMemoryPatternOptimization(true)
         options.setCPUArenaAllocator(true)
         options.addCPU(true)
@@ -555,7 +556,7 @@ private class DclapTextEncoder(model: File, tokenizerDirectory: File) : Closeabl
         val options = OrtSession.SessionOptions()
         options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         options.setInterOpNumThreads(1)
-        options.setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceAtMost(8).coerceAtLeast(1))
+        options.setIntraOpNumThreads(DclapThreadPolicy.intraOpThreadCount(Runtime.getRuntime().availableProcessors()))
         options.setMemoryPatternOptimization(true)
         options.setCPUArenaAllocator(true)
         options.addCPU(true)
@@ -586,8 +587,9 @@ class DclapTextSearch(private val context: Context) : Closeable {
         DclapTextEncoder(model.model, model.tokenizer)
     }
 
-    suspend fun search(query: String, songs: List<Song>, store: LibraryStore, limit: Int = 50): List<Song> {
-        return store.searchEmbeddings(encoder.value.encode(query), songs, limit)
+    internal suspend fun search(query: String, songs: List<Song>, store: LibraryStore): List<SemanticMatch> {
+        if (query.isBlank() || songs.isEmpty()) return emptyList()
+        return store.searchEmbeddings(encoder.value.encode(query), songs, songs.size)
     }
 
     override fun close() {
@@ -599,12 +601,13 @@ internal suspend fun indexDclapSongs(
     context: Context,
     store: LibraryStore,
     onProgress: suspend (completed: Int, total: Int) -> Unit = { _, _ -> },
-) {
+): AnalysisIndexResult {
     val songs = store.getSongs()
     onProgress(0, songs.size)
-    if (songs.isEmpty()) return
+    if (songs.isEmpty()) return AnalysisIndexResult()
     val models = DclapModelInstaller.install(context)
     val workerContext = currentCoroutineContext()
+    var failedOperations = 0
     DclapAudioEncoder(models.audio).use { encoder ->
         songs.forEachIndexed { index, song ->
             workerContext.ensureActive()
@@ -613,7 +616,7 @@ internal suspend fun indexDclapSongs(
                 onProgress(index + 1, songs.size)
                 return@forEachIndexed
             }
-            store.runAnalysisJob(song.id, "dclap") {
+            val failure = store.runAnalysisJob(song.id, "dclap") {
                 val vector = encoder.encode(context, Uri.parse(song.uri))
                 store.saveEmbedding(
                     SongEmbeddingEntity(
@@ -629,13 +632,18 @@ internal suspend fun indexDclapSongs(
                     ),
                 )
             }
+            if (failure is IOException) throw failure
+            if (failure != null) failedOperations += 1
             onProgress(index + 1, songs.size)
         }
     }
+    return AnalysisIndexResult(failedOperations = failedOperations)
 }
 
 private fun SongEmbeddingEntity.isCurrent(song: Song): Boolean =
-    modelId == DCLAP_MODEL_ID && sourceSizeBytes == song.fileSizeBytes && sourceModifiedAt == song.modifiedAt && dimension == 512 && dtype == "float32" && normalized
+    modelId == DCLAP_MODEL_ID &&
+        sourceFingerprintMatches(sourceSizeBytes, sourceModifiedAt, song.fileSizeBytes, song.modifiedAt) &&
+        dimension == 512 && dtype == "float32" && normalized
 
 private fun normalize(values: FloatArray): FloatArray {
     val norm = sqrt(values.sumOf { it.toDouble() * it.toDouble() })
