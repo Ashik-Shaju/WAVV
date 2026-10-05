@@ -1,6 +1,6 @@
 # Wavv
 
-Wavv is an offline-first Android music player built with Kotlin, Jetpack Compose, Room, and Media3. Start with the [public documentation](github-docs/README.md).
+Wavv is a local-first Android music player built with Kotlin, Jetpack Compose, Room, and Media3. It indexes audio the user selects, keeps library and listening state on-device, and includes local music search and analysis. It is not a streaming service and has no account-backed library or sync. Start with the [public documentation](github-docs/README.md) for user instructions, architecture, privacy, testing, and troubleshooting.
 
 ## Build on Windows
 
