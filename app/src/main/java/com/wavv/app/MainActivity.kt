@@ -1,11 +1,19 @@
 package com.wavv.app
 
+import android.app.Activity
 import android.Manifest
 import android.content.Intent
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint as AndroidPaint
+import android.graphics.PorterDuff
+import android.graphics.Rect as AndroidRect
+import android.graphics.RenderEffect as AndroidRenderEffect
+import android.graphics.Shader as AndroidShader
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -13,6 +21,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.LruCache
 import android.widget.Toast
+import android.view.View
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -36,11 +46,13 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -60,6 +72,8 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -74,7 +88,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -91,6 +109,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -159,13 +178,16 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -173,6 +195,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.drawWithCache
@@ -185,18 +208,28 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.ExperimentalTextApi
@@ -224,6 +257,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -231,10 +265,14 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val WavvBackground = Color(0xFF0A0A0A)
 private val WavvSurface = Color(0xFF202026)
 private val WavvFrostedGlass = Color(0xD62A2A31)
+private val HomeFrostedGlass = Color(0x761E2024)
+private val HomeFrostedFill = Color(0x3D282930)
+private val HomeFrostedBorder = Color.White.copy(alpha = .12f)
 private val WavvPink = Color(0xFFFA2D48)
 private val WavvMuted = Color.White.copy(alpha = .45f)
 private val WavvMotionEasing = CubicBezierEasing(.32f, .72f, 0f, 1f)
@@ -245,6 +283,276 @@ private val albumArtCache = object : LruCache<String, Bitmap>(12 * 1024) {
 }
 private val albumArtDecodeLocks = ConcurrentHashMap<String, Mutex>()
 private val albumArtDecodeSize = IntSize(768, 768)
+
+/** Shares one low-resolution backdrop frame between every visible frosted surface. */
+private object FrostedBackdropFrames {
+    private const val FRAME_SCALE = .30f
+    private val bitmapCanvas = AndroidCanvas()
+    private val captureInProgress = AtomicBoolean(false)
+    private val surfaces = linkedMapOf<FrostedBackdropView, AtomicBoolean>()
+    private var frameRoot: View? = null
+    private var frame: Bitmap? = null
+    private var captureBuffer: Bitmap? = null
+    private var observedRoot: View? = null
+    private var observedTreeObserver: android.view.ViewTreeObserver? = null
+    private var preDrawListener: android.view.ViewTreeObserver.OnPreDrawListener? = null
+
+    fun register(view: FrostedBackdropView, captureState: AtomicBoolean) {
+        surfaces[view] = captureState
+        view.findComposeRoot()?.let(::observeBeforeDraw)
+    }
+
+    fun unregister(view: FrostedBackdropView) {
+        surfaces.remove(view)
+        if (surfaces.isEmpty()) {
+            removePreDrawObserver()
+            frame?.recycle()
+            captureBuffer?.recycle()
+            frame = null
+            captureBuffer = null
+            frameRoot = null
+        }
+    }
+
+    private fun observeBeforeDraw(root: View) {
+        if (observedRoot === root && preDrawListener != null) return
+        removePreDrawObserver()
+        val observer = root.viewTreeObserver
+        val listener = android.view.ViewTreeObserver.OnPreDrawListener {
+            // Snapshot the updated Compose hierarchy immediately before the same frame
+            // draws its frosted AndroidViews. This removes the old 16/250 ms polling lag.
+            val requester = surfaces.keys.firstOrNull {
+                it.isAttachedToWindow && it.shouldRefreshBackdrop() && it.findComposeRoot() === root
+            }
+            if (requester != null) capture(root)
+            true
+        }
+        observedRoot = root
+        observedTreeObserver = observer
+        preDrawListener = listener
+        observer.addOnPreDrawListener(listener)
+    }
+
+    private fun removePreDrawObserver() {
+        val observer = observedTreeObserver
+        val listener = preDrawListener
+        if (observer?.isAlive == true && listener != null) observer.removeOnPreDrawListener(listener)
+        observedRoot = null
+        observedTreeObserver = null
+        preDrawListener = null
+    }
+
+    private fun capture(root: View) {
+        if (!captureInProgress.compareAndSet(false, true)) return
+        if (root.width <= 0 || root.height <= 0) {
+            captureInProgress.set(false)
+            return
+        }
+
+        val bitmapWidth = (root.width * FRAME_SCALE).roundToInt().coerceAtLeast(1)
+        val bitmapHeight = (root.height * FRAME_SCALE).roundToInt().coerceAtLeast(1)
+        if (frameRoot !== root || frame?.width != bitmapWidth || frame?.height != bitmapHeight) {
+            frame?.recycle()
+            captureBuffer?.recycle()
+            frame = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
+            captureBuffer = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
+            frameRoot = root
+        }
+
+        val target = captureBuffer ?: run {
+            captureInProgress.set(false)
+            return
+        }
+        target.eraseColor(android.graphics.Color.rgb(10, 10, 10))
+        bitmapCanvas.setBitmap(target)
+        bitmapCanvas.save()
+        bitmapCanvas.scale(FRAME_SCALE, FRAME_SCALE)
+        surfaces.values.forEach { it.set(true) }
+        try {
+            root.draw(bitmapCanvas)
+            val previous = frame
+            frame = target
+            captureBuffer = previous
+        } finally {
+            surfaces.values.forEach { it.set(false) }
+            bitmapCanvas.restore()
+            bitmapCanvas.setBitmap(null)
+            captureInProgress.set(false)
+        }
+        // Compare only the exact crop behind each visible glass surface. A full-screen
+        // Bitmap.sameAs() on every scroll frame scanned hundreds of thousands of pixels
+        // and invalidated every glass view, even when only one card's backdrop moved.
+        // Per-surface reusable buffers keep updates precise without missed color changes,
+        // per-frame allocations, or a redraw cascade at the end of a fling.
+        surfaces.keys.forEach { surface ->
+            if (surface.isAttachedToWindow && surface.shouldRefreshBackdrop() &&
+                surface.updateBackdropPixels(target, root, FRAME_SCALE)
+            ) surface.invalidate()
+        }
+    }
+
+    fun drawFrame(view: FrostedBackdropView, canvas: AndroidCanvas, paint: AndroidPaint): Boolean {
+        if (captureInProgress.get() && !canvas.isHardwareAccelerated) return false
+        val currentFrame = frame ?: return false
+        val root = frameRoot ?: return false
+        if (view.findComposeRoot() !== root || view.width <= 0 || view.height <= 0) return false
+
+        val rootLocation = IntArray(2)
+        val surfaceLocation = IntArray(2)
+        root.getLocationInWindow(rootLocation)
+        view.getLocationInWindow(surfaceLocation)
+        val left = ((surfaceLocation[0] - rootLocation[0]) * FRAME_SCALE).toInt().coerceAtLeast(0)
+        val top = ((surfaceLocation[1] - rootLocation[1]) * FRAME_SCALE).toInt().coerceAtLeast(0)
+        val source = AndroidRect(
+            left,
+            top,
+            (left + view.width * FRAME_SCALE).roundToInt().coerceAtMost(currentFrame.width),
+            (top + view.height * FRAME_SCALE).roundToInt().coerceAtMost(currentFrame.height),
+        )
+        if (source.width() <= 0 || source.height() <= 0) return false
+        canvas.drawBitmap(currentFrame, source, AndroidRect(0, 0, view.width, view.height), paint)
+        return true
+    }
+}
+
+/** Draws a crop of the shared backdrop frame, then applies Android's hardware blur. */
+private class FrostedBackdropView(
+    context: Context,
+    private val captureState: AtomicBoolean,
+    blurRadiusDp: Float,
+    tint: Color,
+) : View(context) {
+    private val paint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG or AndroidPaint.FILTER_BITMAP_FLAG)
+    private var blurRadiusPx = blurRadiusDp * resources.displayMetrics.density
+    private var appliedBlurRadiusPx = Float.NaN
+    private var tintColor = tint.toArgb()
+    private var refreshEnabled = true
+    private var hasBackdropPixels = false
+    private var backdropPixelWidth = 0
+    private var backdropPixelHeight = 0
+    private var lastBackdropPixels = IntArray(0)
+    private var workingBackdropPixels = IntArray(0)
+    private val backdropRootLocation = IntArray(2)
+    private val backdropSurfaceLocation = IntArray(2)
+
+    init {
+        setWillNotDraw(false)
+        // Avoid a persistent hardware layer: it can keep displaying the previous
+        // backdrop frame when the shared sample changes beneath this AndroidView.
+        setLayerType(LAYER_TYPE_NONE, null)
+        val saturation = android.graphics.ColorMatrix().apply { setSaturation(1.05f) }
+        paint.colorFilter = android.graphics.ColorMatrixColorFilter(saturation)
+    }
+
+    fun updateStyle(
+        blurRadiusDp: Float,
+        tint: Color,
+        refreshEnabled: Boolean = true,
+    ) {
+        val wasRefreshEnabled = this.refreshEnabled
+        val requestedBlurRadiusPx = blurRadiusDp * resources.displayMetrics.density
+        val styleChanged = blurRadiusPx != requestedBlurRadiusPx || tintColor != tint.toArgb()
+        blurRadiusPx = requestedBlurRadiusPx
+        tintColor = tint.toArgb()
+        this.refreshEnabled = refreshEnabled
+        if (!wasRefreshEnabled && refreshEnabled) hasBackdropPixels = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && appliedBlurRadiusPx != blurRadiusPx) {
+            setRenderEffect(
+                AndroidRenderEffect.createBlurEffect(
+                    blurRadiusPx,
+                    blurRadiusPx,
+                    AndroidShader.TileMode.CLAMP,
+                ),
+            )
+            appliedBlurRadiusPx = blurRadiusPx
+        }
+        if (styleChanged) invalidate()
+        if (isAttachedToWindow && wasRefreshEnabled != refreshEnabled && refreshEnabled) invalidate()
+    }
+
+    override fun onDraw(canvas: AndroidCanvas) {
+        // During the backdrop snapshot, omit only this glass layer. Foreground Compose
+        // content (buttons, labels, icons) must remain drawable and must not be hidden
+        // through a parent draw modifier, which can leave cached layers blank.
+        if (captureState.get()) return
+        super.onDraw(canvas)
+        if (!FrostedBackdropFrames.drawFrame(this, canvas, paint)) {
+            // Keep frosted surfaces opaque before the first shared frame is ready.
+            canvas.drawColor(android.graphics.Color.rgb(25, 26, 30))
+        }
+        canvas.drawColor(HomeFrostedFill.toArgb(), PorterDuff.Mode.SRC_OVER)
+        canvas.drawColor(tintColor, PorterDuff.Mode.SRC_OVER)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        FrostedBackdropFrames.register(this, captureState)
+    }
+
+    fun shouldRefreshBackdrop(): Boolean = refreshEnabled
+
+    /** Returns true when pixels directly behind this surface changed. */
+    fun updateBackdropPixels(frame: Bitmap, root: View, scale: Float): Boolean {
+        if (findComposeRoot() !== root || width <= 0 || height <= 0) return false
+        root.getLocationInWindow(backdropRootLocation)
+        getLocationInWindow(backdropSurfaceLocation)
+        val left = ((backdropSurfaceLocation[0] - backdropRootLocation[0]) * scale).toInt().coerceAtLeast(0)
+        val top = ((backdropSurfaceLocation[1] - backdropRootLocation[1]) * scale).toInt().coerceAtLeast(0)
+        val right = (left + width * scale).roundToInt().coerceAtMost(frame.width)
+        val bottom = (top + height * scale).roundToInt().coerceAtMost(frame.height)
+        if (right <= left || bottom <= top) return false
+
+        val cropWidth = right - left
+        val cropHeight = bottom - top
+        if (cropWidth != backdropPixelWidth || cropHeight != backdropPixelHeight) {
+            backdropPixelWidth = cropWidth
+            backdropPixelHeight = cropHeight
+            val pixelCount = cropWidth * cropHeight
+            lastBackdropPixels = IntArray(pixelCount)
+            workingBackdropPixels = IntArray(pixelCount)
+            hasBackdropPixels = false
+        }
+        frame.getPixels(workingBackdropPixels, 0, cropWidth, left, top, cropWidth, cropHeight)
+        val changed = !hasBackdropPixels || !workingBackdropPixels.contentEquals(lastBackdropPixels)
+        if (changed) {
+            val previous = lastBackdropPixels
+            lastBackdropPixels = workingBackdropPixels
+            workingBackdropPixels = previous
+            hasBackdropPixels = true
+        }
+        return changed
+    }
+
+    fun findComposeRoot(): View? {
+        var current: View = this
+        while (true) {
+            val parent = current.parent as? View ?: return current
+            if (parent.javaClass.name.contains("AndroidComposeView")) return parent
+            current = parent
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        FrostedBackdropFrames.unregister(this)
+        super.onDetachedFromWindow()
+    }
+}
+
+@Composable
+private fun FrostedBackdrop(
+    captureState: AtomicBoolean,
+    blurRadiusDp: Float,
+    tint: Color,
+    modifier: Modifier,
+    refreshEnabled: Boolean = true,
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { FrostedBackdropView(it, captureState, blurRadiusDp, tint) },
+        update = { it.updateStyle(blurRadiusDp, tint, refreshEnabled) },
+    )
+}
+
 @OptIn(ExperimentalTextApi::class)
 private val WavvFontFamily = FontFamily(
     Font(R.font.nunito_variable, FontWeight.W400, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
@@ -254,6 +562,12 @@ private val WavvFontFamily = FontFamily(
     Font(R.font.nunito_variable, FontWeight.W800, variationSettings = FontVariation.Settings(FontVariation.weight(800))),
     Font(R.font.nunito_variable, FontWeight.W900, variationSettings = FontVariation.Settings(FontVariation.weight(900))),
 )
+private fun expressiveFontFor(page: LibraryPage): FontFamily = when (page) {
+    LibraryPage.Artist, LibraryPage.Artists -> FontFamily.SansSerif
+    LibraryPage.Album, LibraryPage.Albums -> FontFamily.Serif
+    LibraryPage.Playlist, LibraryPage.Playlists -> WavvFontFamily
+    else -> WavvFontFamily
+}
 private val WavvSurfaceGradient = Brush.verticalGradient(
     listOf(Color(0xFF282832), Color(0xFF17171D)),
 )
@@ -261,6 +575,7 @@ private val WavvAccentGradient = Brush.linearGradient(
     listOf(Color(0xFFB71C1C), Color(0xFFE91E63), Color(0xFFFF4081)),
 )
 private enum class Tab { Home, Search, Library, You }
+private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
 
 private enum class LibraryPage { Main, Liked, Playlists, Artists, Albums, Songs, Playlist, Artist, Album }
 
@@ -327,6 +642,12 @@ class MainActivity : ComponentActivity() {
         playbackController.release()
         super.onDestroy()
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
@@ -513,11 +834,27 @@ private fun WavvContent(
     onRemoveSongFromPlaylist: (Long, Long) -> Unit,
 ) {
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
+    val activityWindow = LocalContext.current.findActivity()?.window
+    DisposableEffect(activityWindow, tab) {
+        activityWindow?.setSoftInputMode(
+            if (tab == Tab.Search) WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            else WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+        )
+        onDispose { }
+    }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
     var sharedArtworkTransitionActive by remember { mutableStateOf(true) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var loopMode by rememberSaveable { mutableStateOf(LoopMode.Off) }
-    var homeAtTop by rememberSaveable { mutableStateOf(true) }
+    var playerExpanded by rememberSaveable { mutableStateOf(false) }
+    var playerPositionInitialized by rememberSaveable { mutableStateOf(false) }
+    var homeStackIndex by rememberSaveable { mutableIntStateOf(0) }
+    var homeStackListExpanded by rememberSaveable { mutableStateOf(false) }
+    val homeStackExpansionProgress = animateFloatAsState(
+        targetValue = if (homeStackListExpanded) 1f else 0f,
+        animationSpec = tween(560, easing = WavvMotionEasing),
+        label = "home stack expansion progress",
+    )
     var libraryDestination by rememberSaveable { mutableStateOf(LibraryDestination()) }
     var previousLibraryDestination by rememberSaveable { mutableStateOf(LibraryDestination()) }
     var libraryLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
@@ -525,6 +862,7 @@ private fun WavvContent(
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
     var createPlaylistName by rememberSaveable { mutableStateOf("") }
     var createPlaylistSongId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var homePlaylistSong by remember { mutableStateOf<Song?>(null) }
     var renamePlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
     var renamePlaylistName by rememberSaveable { mutableStateOf("") }
     var deletePlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
@@ -532,6 +870,13 @@ private fun WavvContent(
     val recentlyPlayed = (libraryState as? LibraryUiState.Ready)?.recentlyPlayed.orEmpty()
     val playlists = (libraryState as? LibraryUiState.Ready)?.playlists.orEmpty()
     val activeSong = playbackState.song
+    val homePlayerExpanded = activeSong != null && playerExpanded
+    LaunchedEffect(activeSong?.id) {
+        if (!playerPositionInitialized && activeSong != null) {
+            if (playbackState.isPlaying) playerExpanded = true
+            playerPositionInitialized = true
+        }
+    }
     LaunchedEffect(showPlayer) {
         if (showPlayer) {
             sharedArtworkTransitionActive = true
@@ -549,10 +894,11 @@ private fun WavvContent(
         showQueue = false
     }
     val beginPlayerClose: () -> Unit = { sharedArtworkTransitionActive = false }
-    val upNextSongs = activeSong?.let { song ->
-        playbackState.queue.dropWhile { it.id != song.id }.drop(1).take(3)
-    }.orEmpty()
-    val startPlayback: (Song) -> Unit = { song -> onPlay(song, songs.ifEmpty { listOf(song) }) }
+    val startPlayback: (Song) -> Unit = {
+        playerExpanded = true
+        playerPositionInitialized = true
+        onPlay(it, songs.ifEmpty { listOf(it) })
+    }
     val showLibrary = libraryState is LibraryUiState.Ready
     val navigateLibrary: (LibraryDestination) -> Unit = { destination ->
         previousLibraryDestination = if (destination.isDetail) libraryDestination else LibraryDestination()
@@ -576,7 +922,9 @@ private fun WavvContent(
                 transitionSpec = {
                     (fadeIn(tween(300, easing = WavvScreenEasing)) +
                         slideInVertically(tween(300, easing = WavvScreenEasing)) { tabOffsetPx } +
-                        scaleIn(initialScale = .995f, animationSpec = tween(300, easing = WavvScreenEasing))) togetherWith fadeOut(tween(1))
+                        scaleIn(initialScale = .995f, animationSpec = tween(300, easing = WavvScreenEasing))) togetherWith
+                        (fadeOut(tween(190, easing = WavvMotionEasing)) +
+                            slideOutVertically(tween(190, easing = WavvMotionEasing)) { -tabOffsetPx / 2 })
                 },
                 label = "tab content",
             ) { selectedTab ->
@@ -587,9 +935,24 @@ private fun WavvContent(
                         isPlaying = playbackState.isPlaying,
                         onChooseSource = onChooseSource,
                         onPlay = startPlayback,
+                        onPlayNext = onPlayNext,
+                        onAddToQueue = onAddToQueue,
+                        onToggleFavorite = { onToggleFavorite(it.id) },
+                        onRequestAddToPlaylist = { homePlaylistSong = it },
+                        onNavigateToAlbum = { song -> navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.artist)); tab = Tab.Library },
+                        onNavigateToArtist = { song -> navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist)); tab = Tab.Library },
                         recentSongs = recentlyPlayed,
-                        upNextSongs = upNextSongs,
-                        onAtTopChange = { homeAtTop = it },
+                        playerExpanded = homePlayerExpanded,
+                        stackIndex = homeStackIndex,
+                        stackExpansionProgress = homeStackExpansionProgress,
+                        onStackIndexChange = { homeStackIndex = it },
+                        stackListExpanded = homeStackListExpanded,
+                        onStackListExpandedChange = { expanded ->
+                            homeStackListExpanded = expanded
+                            if (!expanded) homeStackIndex = 0
+                        },
+                        hasNowPlaying = activeSong != null,
+                        onExpandPlayer = { if (homeStackIndex == 0) playerExpanded = true },
                     )
                     Tab.Search -> SearchScreen(
                         songs = songs,
@@ -641,24 +1004,47 @@ private fun WavvContent(
                 is LibraryUiState.Ready -> Unit
             }
         }
-        if (activeSong != null) {
+        AnimatedVisibility(
+            visible = activeSong != null,
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxSize(),
+            enter = fadeIn(tween(220, easing = WavvMotionEasing)) +
+                slideInVertically(tween(300, easing = WavvMotionEasing)) { -it / 40 },
+            exit = fadeOut(tween(140, easing = WavvMotionEasing)),
+        ) {
+            activeSong?.let { song ->
             NowPlayingBar(
-                song = activeSong,
+                song = song,
                 state = playbackState,
-                expanded = tab == Tab.Home && homeAtTop,
-                modifier = Modifier.align(Alignment.BottomCenter),
-                liked = activeSong.id in favoriteIds,
+                expanded = tab == Tab.Home && homePlayerExpanded && !homeStackListExpanded,
+                stacked = tab == Tab.Home && activeSong != null && (!playerExpanded || homeStackListExpanded),
+                stackDockEnabled = tab == Tab.Home,
+                stackDockProgress = homeStackExpansionProgress,
+                modifier = Modifier.fillMaxSize(),
+                liked = song.id in favoriteIds,
                 onToggle = onTogglePlayback,
-                onLike = { onToggleFavorite(activeSong.id) },
+                onLike = { onToggleFavorite(song.id) },
                 onPrevious = onPrevious,
                 onNext = onNext,
                 onOpen = openPlayer,
+                onCollapse = { playerExpanded = false },
+                onExpand = {
+                    if (homeStackListExpanded) {
+                        homeStackListExpanded = false
+                        homeStackIndex = 0
+                    }
+                    else if (homeStackIndex == 0) playerExpanded = true
+                },
                 sharedTransitionScope = sharedTransitionScope,
                 playerVisible = showPlayer,
                 sharedArtworkTransitionActive = sharedArtworkTransitionActive,
             )
+            }
         }
-        if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+        if (showLibrary) BottomNav(
+            tab,
+            { tab = it },
+            Modifier.align(Alignment.BottomCenter),
+        )
         AnimatedVisibility(
             visible = showPlayer,
             enter = fadeIn(tween(180)) + slideInVertically(tween(620, easing = WavvMotionEasing)) { it },
@@ -726,6 +1112,32 @@ private fun WavvContent(
                 dismissButton = { TextButton(onClick = { showCreatePlaylist = false }) { Text("Cancel") } },
             )
         }
+        homePlaylistSong?.let { selectedSong ->
+            AlertDialog(
+                onDismissRequest = { homePlaylistSong = null },
+                title = { Text("Add to playlist") },
+                text = {
+                    if (playlists.isEmpty()) Text("Create a playlist to save this song.")
+                    else Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                        playlists.forEach { playlist ->
+                            TextButton(
+                                onClick = { onAddSongToPlaylist(playlist.id, selectedSong.id); homePlaylistSong = null },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(playlist.name, Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Start) }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        createPlaylistSongId = selectedSong.id
+                        createPlaylistName = ""
+                        homePlaylistSong = null
+                        showCreatePlaylist = true
+                    }) { Text("Create playlist") }
+                },
+                dismissButton = { TextButton(onClick = { homePlaylistSong = null }) { Text("Cancel") } },
+            )
+        }
         renamePlaylist?.let { playlist ->
             AlertDialog(
                 onDismissRequest = { renamePlaylist = null },
@@ -761,11 +1173,11 @@ private fun WavvContent(
 }
 
 @Composable
-private fun ScreenHeader(title: String, waveform: Boolean = false, isPlaying: Boolean = false) {
+private fun ScreenHeader(title: String, waveform: Boolean = false, isPlaying: Boolean = false, showAmbient: Boolean = true) {
     Box(
-        Modifier.fillMaxWidth().background(if (waveform) WavvBackground else Color(0xB20A0A0A)),
+        Modifier.fillMaxWidth().background(if (waveform && !showAmbient) Color.Black else if (waveform) WavvBackground else Color(0xB20A0A0A)),
     ) {
-        if (waveform) {
+        if (waveform && showAmbient) {
             Box(
                 Modifier.matchParentSize().drawWithCache {
                     val radius = size.width * .75f
@@ -809,7 +1221,14 @@ private fun ScreenHeader(title: String, waveform: Boolean = false, isPlaying: Bo
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(title, color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-1).sp)
+            Text(
+                title,
+                color = Color.White,
+                fontSize = if (title == "Wavv") 33.sp else 32.sp,
+                fontWeight = if (title == "Wavv") FontWeight.Black else FontWeight.ExtraBold,
+                letterSpacing = if (title == "Wavv") (-1.15).sp else (-1).sp,
+                fontFamily = if (title == "Wavv") FontFamily.SansSerif else WavvFontFamily,
+            )
             if (waveform) Waveform(isPlaying)
         }
         if (!waveform) {
@@ -931,57 +1350,483 @@ private fun HomeScreen(
     isPlaying: Boolean,
     onChooseSource: () -> Unit,
     onPlay: (Song) -> Unit,
-    onAtTopChange: (Boolean) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
+    playerExpanded: Boolean,
+    stackIndex: Int,
+    stackExpansionProgress: State<Float>,
+    onStackIndexChange: (Int) -> Unit,
+    stackListExpanded: Boolean,
+    onStackListExpandedChange: (Boolean) -> Unit,
+    hasNowPlaying: Boolean,
+    onExpandPlayer: () -> Unit,
     recentSongs: List<Song> = emptyList(),
-    upNextSongs: List<Song> = emptyList(),
 ) {
-    val listState = rememberLazyListState()
-    val likedSongs = remember(songs, favoriteIds) { songs.filter { it.id in favoriteIds } }
-    val albumSongs = remember(songs) {
-        songs.filter { it.album.isNotBlank() }
-            .distinctBy { it.album.trim().lowercase(Locale.ROOT) }
-            .sortedBy { it.album.lowercase(Locale.ROOT) }
+    val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
+    val homeGlowTransition = rememberInfiniteTransition(label = "home accent glow")
+    val homeGlowPhase by homeGlowTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(6200, easing = LinearEasing), RepeatMode.Reverse),
+        label = "home accent phase",
+    )
+    val homeGlowHue = (318f + homeGlowPhase * 60f) % 360f
+    val homeGlowColor = Color.hsv(homeGlowHue, .56f, .58f, .20f)
+    val moodColors = listOf(
+        "Chill" to Color(0xFF00695C), "Energetic" to Color(0xFFE65100),
+        "Focus" to Color(0xFF1565C0), "Happy" to Color(0xFFF9A825),
+        "Melancholy" to Color(0xFF4A148C), "Late Night" to Color(0xFF212121),
+        "Workout" to Color(0xFFB71C1C), "Romance" to Color(0xFF880E4F),
+    )
+    val genreColors = listOf(
+        "Hip-Hop" to Color(0xFF5B2D8E), "Electronic" to Color(0xFF1565C0),
+        "Jazz" to Color(0xFFE65100), "Classical" to Color(0xFF2E7D32),
+        "Pop" to Color(0xFFD81B60), "R&B" to Color(0xFFAD1457),
+        "Rock" to Color(0xFFBF360C), "Indie" to Color(0xFFC62828),
+    )
+    val sections = remember(songs, favoriteIds, recentSongs, moodColors, genreColors) {
+        val recentIds = recentSongs.mapTo(mutableSetOf(), Song::id)
+        val recentlyPlayed = recentSongs.ifEmpty { orderedSongs }.take(8)
+        val forgotten = songs.filter { it.id !in recentIds }
+            .ifEmpty { songs.filter { it.id in favoriteIds } }
+            .take(8)
+        fun categoryEntries(categories: List<Pair<String, Color>>) = categories.mapIndexed { index, (name, color) ->
+            HomeStackEntry(name, song = songs.getOrNull(index % songs.size.coerceAtLeast(1)), color = color)
+        }
+        listOf(
+            HomeStackSection("Recently Played", recentlyPlayed.map { HomeStackEntry(it.title, it.artist, it) }),
+            HomeStackSection("Forgotten Favourites", forgotten.map { HomeStackEntry(it.title, it.artist, it) }),
+            HomeStackSection("Moods", categoryEntries(moodColors)),
+            HomeStackSection("Genres", categoryEntries(genreColors)),
+            HomeStackSection("Hip Hop", orderedSongs.take(8).map { HomeStackEntry(it.title, it.artist, it) }),
+            HomeStackSection("Melody", songs.sortedBy(Song::artist).take(8).map { HomeStackEntry(it.title, it.artist, it) }),
+        )
     }
-    val artistSongs = remember(songs) {
-        songs.filter { it.artist.isNotBlank() }
-            .distinctBy { it.artist.trim().lowercase(Locale.ROOT) }
-            .sortedBy { it.artist.lowercase(Locale.ROOT) }
-    }
-    val recentlyAdded = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
-    LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
-        onAtTopChange(listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 60)
-    }
+    var selectedCategory by remember { mutableStateOf<HomeStackEntry?>(null) }
+
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader("Wavv", waveform = true, isPlaying = isPlaying)
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 180.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            if (songs.isEmpty()) {
-                item { EmptyLibraryCard(onChooseSource) }
-            } else {
-                item { HeroCarousel(songs, upNextSongs, onPlay) }
-                if (recentSongs.isNotEmpty()) {
-                    item { Hairline() }
-                    item { SongShelf("Recently Played", recentSongs, onPlay) }
-                }
-                if (likedSongs.isNotEmpty()) {
-                    item { Hairline() }
-                    item { SongShelf("Liked Songs", likedSongs, onPlay) }
-                }
-                if (albumSongs.isNotEmpty()) {
-                    item { Hairline() }
-                    item { AlbumShelf(albumSongs, onPlay) }
-                }
-                if (artistSongs.isNotEmpty()) {
-                    item { Hairline() }
-                    item { SongShelf("Artists", artistSongs, onPlay, Song::artist, Song::album) }
-                }
-                item { Hairline() }
-                item { SongShelf("Recently Added", recentlyAdded, onPlay) }
+        ScreenHeader("Wavv", waveform = true, isPlaying = isPlaying, showAmbient = false)
+        if (songs.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                EmptyLibraryCard(onChooseSource)
             }
+        } else {
+            Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black)) {
+                Box(
+                    Modifier.align(Alignment.BottomCenter).offset(y = (-190).dp).size(170.dp)
+                        .background(
+                            Brush.radialGradient(
+                                0f to homeGlowColor,
+                                .58f to homeGlowColor.copy(alpha = .08f),
+                                1f to Color.Transparent,
+                            ),
+                            CircleShape,
+                        )
+                        .blur(24.dp),
+                )
+                Column(
+                    Modifier.fillMaxWidth().graphicsLayer {
+                        val progress = stackExpansionProgress.value
+                        translationY = -size.height * progress
+                        alpha = 1f - progress
+                    },
+                ) {
+                    Spacer(Modifier.height(10.dp))
+                    HeroCarousel(
+                        songs = songs,
+                        onPlay = onPlay,
+                        onPlayNext = onPlayNext,
+                        favoriteIds = favoriteIds,
+                        onAddToQueue = onAddToQueue,
+                        onToggleFavorite = onToggleFavorite,
+                        onRequestAddToPlaylist = onRequestAddToPlaylist,
+                        onNavigateToAlbum = onNavigateToAlbum,
+                        onNavigateToArtist = onNavigateToArtist,
+                    )
+                }
+                HomeStackPanel(
+                    sections = sections,
+                    stackIndex = stackIndex,
+                    playerExpanded = playerExpanded,
+                    stackListExpanded = stackListExpanded,
+                    expansionProgress = stackExpansionProgress,
+                    hasNowPlaying = hasNowPlaying,
+                    onIndexChange = { onStackIndexChange(it.coerceIn(0, sections.lastIndex.coerceAtLeast(0))) },
+                    onStackListExpandedChange = onStackListExpandedChange,
+                    onExpandPlayer = onExpandPlayer,
+                    onOpenSong = onPlay,
+                    onOpenCategory = { selectedCategory = it },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        selectedCategory?.let { category ->
+            val categorySongs = songs.filter { song ->
+                val text = "${song.title} ${song.artist} ${song.album}".lowercase()
+                text.contains(category.title.lowercase())
+            }.ifEmpty { songs }
+            Dialog(
+                onDismissRequest = { selectedCategory = null },
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                HomeCategoryDetailScreen(
+                    title = category.title,
+                    color = category.color ?: WavvPink,
+                    artworkSong = category.song,
+                    songs = categorySongs,
+                    onClose = { selectedCategory = null },
+                    onPlay = { song -> selectedCategory = null; onPlay(song) },
+                )
+            }
+        }
+    }
+}
+
+private data class HomeStackEntry(
+    val title: String,
+    val subtitle: String? = null,
+    val song: Song? = null,
+    val color: Color? = null,
+)
+
+private data class HomeStackSection(val label: String, val entries: List<HomeStackEntry>)
+
+@Composable
+private fun HomeStackPanel(
+    sections: List<HomeStackSection>,
+    stackIndex: Int,
+    playerExpanded: Boolean,
+    stackListExpanded: Boolean,
+    expansionProgress: State<Float>,
+    hasNowPlaying: Boolean,
+    onIndexChange: (Int) -> Unit,
+    onStackListExpandedChange: (Boolean) -> Unit,
+    onExpandPlayer: () -> Unit,
+    onOpenSong: (Song) -> Unit,
+    onOpenCategory: (HomeStackEntry) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val densityScale = density.density
+    val scrollState = rememberScrollState()
+    val collapseAtTop = remember(scrollState, stackListExpanded) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (
+                    stackListExpanded && source == NestedScrollSource.UserInput && available.y > 0f &&
+                    scrollState.value == 0
+                ) {
+                    onStackListExpandedChange(false)
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        }
+    }
+    val orderedSections = remember(sections, stackIndex) {
+        if (sections.isEmpty()) emptyList()
+        else sections.drop(stackIndex.coerceIn(0, sections.lastIndex)) + sections.take(stackIndex.coerceIn(0, sections.lastIndex))
+    }
+    val navigationBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    val topInset = if (hasNowPlaying) 76.dp else 12.dp
+    val cardHeight = 144.dp
+    val cardGap = 12.dp
+    val rowHeight = cardHeight + cardGap
+    val stackPeek = 40.dp
+    val compactHeight = 184.dp
+    val cardHeightPx = with(density) { cardHeight.toPx() }
+    val rowHeightPx = with(density) { rowHeight.toPx() }
+    val stackPeekPx = with(density) { stackPeek.toPx() }
+    val topInsetPx = with(density) { topInset.toPx() }
+    val stackBottomClearance = 80.dp
+
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val parentHeight = maxHeight
+        val compactTop = (parentHeight - navigationBottom - stackBottomClearance - compactHeight).coerceAtLeast(0.dp)
+        val expandedHeight = (parentHeight - navigationBottom - stackBottomClearance).coerceAtLeast(compactHeight)
+        val expandedHeightPx = with(density) { expandedHeight.toPx() }
+        val compactTopPx = with(density) { compactTop.toPx() }
+        // Keep the tucked card's lower edge clear of the opaque footer/navbar extension.
+        // Moving the handoff boundary up makes the card finish its curve before that layer.
+        val stackPathClearancePx = with(density) { 24.dp.toPx() }
+        val stackBoundaryPx = expandedHeightPx - cardHeightPx - stackPeekPx - stackPathClearancePx
+        val expansion = expansionProgress.value.coerceIn(0f, 1f)
+
+        Box(Modifier.fillMaxWidth().height(expandedHeight).clipToBounds()) {
+            val listGestureModifier = if (stackListExpanded) {
+                Modifier.nestedScroll(collapseAtTop)
+                    .verticalScroll(scrollState, enabled = true, overscrollEffect = null)
+            } else Modifier
+            Column(
+                Modifier.fillMaxWidth().then(listGestureModifier).padding(horizontal = 20.dp),
+            ) {
+                Spacer(Modifier.height(topInset))
+                orderedSections.forEachIndexed { displayIndex, section ->
+                    val actualIndex = if (sections.isEmpty()) 0 else (displayIndex + stackIndex).mod(sections.size)
+                    val active = actualIndex == stackIndex
+                    val next = actualIndex == stackIndex + 1 && !playerExpanded
+                    val leaving = actualIndex == stackIndex - 1 && !playerExpanded
+                    val compactVisible = active || next || leaving
+                    val compactY = when {
+                        active -> if (playerExpanded) 40.dp else 0.dp
+                        next -> 40.dp
+                        leaving -> (-144).dp
+                        else -> (displayIndex * 144).dp
+                    }
+                    val compactScale = if (active && !playerExpanded) 1f else .94f
+                    val compactAlpha = if (compactVisible) 1f else 0f
+                    val layoutProgress = expansionProgress.value.coerceIn(0f, 1f)
+                    val layoutNaturalTop = topInsetPx + displayIndex * rowHeightPx - scrollState.value
+                    val layoutTuck = ((layoutNaturalTop - stackBoundaryPx) / rowHeightPx).coerceIn(0f, 1f)
+                    val layoutEasedTuck = layoutTuck * layoutTuck * (3f - 2f * layoutTuck)
+                    val layoutTuckedTop = stackBoundaryPx + stackPeekPx
+                    val layoutExpandedTop = if (layoutNaturalTop > stackBoundaryPx) {
+                        layoutNaturalTop + (layoutTuckedTop - layoutNaturalTop) * layoutEasedTuck
+                    } else layoutNaturalTop
+                    val compactTopForCard = with(density) { compactY.toPx() }
+                    val collapsedCardTop = compactTopPx + compactTopForCard
+                    val backdropCardTop = collapsedCardTop * (1f - layoutProgress) + layoutExpandedTop * layoutProgress
+                    val backdropCardAlpha = compactAlpha + (1f - compactAlpha) * layoutProgress
+                    val cardBackdropVisible = backdropCardAlpha > .02f &&
+                        backdropCardTop < expandedHeightPx && backdropCardTop + cardHeightPx > 0f
+                    val shape = RoundedCornerShape(28.dp)
+                    Box(
+                        Modifier.fillMaxWidth().height(rowHeight)
+                            .zIndex((orderedSections.size - displayIndex).toFloat()),
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth().height(cardHeight).graphicsLayer {
+                                val progress = expansionProgress.value.coerceIn(0f, 1f)
+                                val naturalTop = topInsetPx + displayIndex * rowHeightPx - scrollState.value
+                                // Keep the same card moving through the list/stack boundary.
+                                // The overflow card eases into the single tucked layer over
+                                // one row instead of jumping there as soon as it crosses the
+                                // viewport boundary. Deeper cards share that tucked position
+                                // and are revealed in order as scrolling brings them forward.
+                                val tuck = ((naturalTop - stackBoundaryPx) / rowHeightPx)
+                                    .coerceIn(0f, 1f)
+                                val easedTuck = tuck * tuck * (3f - 2f * tuck)
+                                val tuckedTop = stackBoundaryPx + stackPeekPx
+                                val expandedTop = if (naturalTop > stackBoundaryPx) {
+                                    naturalTop + (tuckedTop - naturalTop) * easedTuck
+                                } else naturalTop
+                                val compactTopForCard = with(density) { compactY.toPx() }
+                                val collapsedTop = compactTopPx + compactTopForCard
+                                val desiredTop = collapsedTop * (1f - progress) + expandedTop * progress
+                                val expandedScale = 1f - .06f * easedTuck
+                                val targetScale = compactScale + (expandedScale - compactScale) * progress
+                                alpha = compactAlpha + (1f - compactAlpha) * progress
+                                scaleX = targetScale
+                                scaleY = targetScale
+                                translationY = desiredTop - naturalTop
+                            }.pointerInput(
+                                stackListExpanded,
+                                compactVisible,
+                                stackIndex,
+                                sections.size,
+                                hasNowPlaying,
+                                playerExpanded,
+                            ) {
+                                // Attach this detector to the moving card, rather than
+                                // the full-screen panel. That preserves the carousel's
+                                // independent hit target and keeps swipe input aligned
+                                // with the card while it transitions between layouts.
+                                if (!stackListExpanded && compactVisible) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                            val velocityTracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
+                                            var handled = false
+                                            var expandingWithThisGesture = false
+                                            var lastPosition = down.position
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                velocityTracker.addPosition(change.uptimeMillis, change.position)
+                                                val pointerDelta = change.position - lastPosition
+                                                lastPosition = change.position
+                                                val delta = change.position - down.position
+                                                val velocity = velocityTracker.calculateVelocity()
+                                                val verticalIntent =
+                                                    kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x) * 1.15f ||
+                                                        kotlin.math.abs(velocity.y) > kotlin.math.abs(velocity.x) * 1.15f
+                                                val crossedSlop = kotlin.math.abs(delta.y) > viewConfiguration.touchSlop
+                                                val fastFlick = kotlin.math.abs(velocity.y) > 650f * densityScale && kotlin.math.abs(delta.y) > 5f * densityScale
+                                                if (!handled && verticalIntent && (crossedSlop || fastFlick)) {
+                                                    handled = true
+                                                    change.consume()
+                                                    val swipeDirection = if (fastFlick && !crossedSlop) velocity.y else delta.y
+                                                    if (swipeDirection < 0f) {
+                                                        onStackListExpandedChange(true)
+                                                        expandingWithThisGesture = true
+                                                        if (pointerDelta.y < 0f) scrollState.dispatchRawDelta(-pointerDelta.y)
+                                                    } else if (hasNowPlaying && stackIndex == 0) {
+                                                        onExpandPlayer()
+                                                    } else {
+                                                        onIndexChange((stackIndex - 1).coerceIn(0, sections.lastIndex.coerceAtLeast(0)))
+                                                    }
+                                                } else if (handled) {
+                                                    if (expandingWithThisGesture && pointerDelta.y < 0f) {
+                                                        scrollState.dispatchRawDelta(-pointerDelta.y)
+                                                    }
+                                                    change.consume()
+                                                }
+                                                if (!change.pressed) break
+                                            }
+                                    }
+                                }
+                            }
+                                .shadow(if (active) 16.dp else 10.dp, shape).clip(shape),
+                        ) {
+                            // Preserve one keyed card instance through both layouts. Keeping
+                            // its content and frosted backdrop alive avoids a blank/recreated
+                            // frame when it changes from list position to the tucked stack.
+                            key(section.label) {
+                                HomeStackCard(
+                                    section = section,
+                                    enabled = stackListExpanded || active,
+                                    backdropRefreshEnabled = cardBackdropVisible,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onEntryClick = { entry ->
+                                        if (!stackListExpanded && !active) return@HomeStackCard
+                                        if (entry.color != null) onOpenCategory(entry)
+                                        else entry.song?.let(onOpenSong)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(stackPeek - cardGap))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeStackCard(
+    section: HomeStackSection,
+    enabled: Boolean,
+    backdropRefreshEnabled: Boolean,
+    modifier: Modifier = Modifier,
+    onEntryClick: (HomeStackEntry) -> Unit,
+) {
+    val captureState = remember { AtomicBoolean(false) }
+    val tileWidth = ((LocalConfiguration.current.screenWidthDp.dp - 88.dp) / 3).coerceIn(64.dp, 94.dp)
+    val cardShape = RoundedCornerShape(28.dp)
+    Box(modifier.clip(cardShape)) {
+        FrostedBackdrop(
+            captureState,
+            blurRadiusDp = 34f,
+            tint = HomeFrostedGlass,
+            modifier = Modifier.matchParentSize(),
+            refreshEnabled = backdropRefreshEnabled,
+        )
+        Column(
+            Modifier.fillMaxSize()
+                .border(1.dp, HomeFrostedBorder, cardShape)
+                .drawWithCache {
+                    val wash = Brush.linearGradient(listOf(Color.White.copy(.055f), Color.White.copy(.012f), Color.Transparent))
+                    onDrawBehind { drawRect(wash) }
+                }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 3.dp).padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(section.label.uppercase(), color = Color.White, fontSize = 15.sp, lineHeight = 18.sp, fontWeight = FontWeight.Black, letterSpacing = .55.sp, fontFamily = FontFamily.SansSerif)
+            Text("Swipe to explore", color = Color.White.copy(.4f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 3.dp),
+        ) {
+            itemsIndexed(
+                items = section.entries,
+                key = { index, entry -> entry.song?.id ?: "${section.label}:${entry.title}:$index" },
+            ) { _, entry ->
+                Column(
+                Modifier.width(tileWidth).clickable(enabled = enabled, role = Role.Button) { onEntryClick(entry) },
+                ) {
+                    Box(
+                        Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp))
+                            .background(entry.color ?: Color.White.copy(.08f))
+                            .shadow(5.dp, RoundedCornerShape(14.dp)),
+                    ) {
+                        entry.song?.let { AlbumArt(it, Modifier.fillMaxSize().alpha(if (entry.color != null) .62f else 1f), entry.title, 14.dp) }
+                        if (entry.color != null) {
+                            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(entry.color.copy(alpha = .67f), Color.Transparent))))
+                            Text(entry.title, Modifier.align(Alignment.BottomStart).padding(start = 9.dp, end = 7.dp, bottom = 8.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.SansSerif, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        } else {
+                            Box(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
+                                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = .9f)))),
+                            )
+                            Text(
+                                entry.title,
+                                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 7.dp, vertical = 7.dp),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                lineHeight = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+}
+
+@Composable
+private fun HomeCategoryDetailScreen(
+    title: String,
+    color: Color,
+    artworkSong: Song?,
+    songs: List<Song>,
+    onClose: () -> Unit,
+    onPlay: (Song) -> Unit,
+) {
+    Box(Modifier.fillMaxSize()) {
+        SongListArtworkBackdrop(artworkSong ?: songs.firstOrNull(), Modifier.matchParentSize())
+        Column(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxWidth().height(204.dp).background(color.copy(alpha = .12f))) {
+            artworkSong?.let { AlbumArt(it, Modifier.fillMaxSize().statusBarsPadding().alpha(.4f).edgeBlendedArtworkMask(), title, 0.dp) }
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color(0xFF090B11).copy(alpha = .72f))))
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 16.dp, top = 8.dp)
+                    .size(36.dp).clip(CircleShape).background(Color.Black.copy(.3f)).border(1.dp, Color.White.copy(.2f), CircleShape),
+            ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(18.dp)) }
+            Column(Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 18.dp)) {
+                Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, fontFamily = FontFamily.SansSerif)
+                Text("${songs.size} songs", Modifier.padding(top = 3.dp), color = Color.White.copy(.58f), fontSize = 13.sp)
+            }
+        }
+        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 160.dp)) {
+            itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onPlay(song) }.padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    AlbumArt(song, Modifier.size(50.dp), song.title, 9.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.artist, Modifier.padding(top = 3.dp), color = Color.White.copy(.44f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (index != songs.lastIndex) Hairline()
+            }
+        }
         }
     }
 }
@@ -1000,7 +1845,17 @@ private fun EmptyLibraryCard(onChooseSource: () -> Unit) {
 }
 
 @Composable
-private fun HeroCarousel(songs: List<Song>, upNextSongs: List<Song>, onPlay: (Song) -> Unit) {
+private fun HeroCarousel(
+    songs: List<Song>,
+    onPlay: (Song) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    favoriteIds: Set<Long>,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
+) {
     val pageCount = minOf(8, songs.size).coerceAtLeast(1)
     val pagerState = rememberPagerState { pageCount }
     LaunchedEffect(pageCount) {
@@ -1019,7 +1874,17 @@ private fun HeroCarousel(songs: List<Song>, upNextSongs: List<Song>, onPlay: (So
                 modifier = Modifier.fillMaxWidth(),
             ) { page ->
                 val song = songs[page % songs.size]
-                HeroCard(song, upNextSongs, onPlay)
+                HeroCard(
+                    song = song,
+                    onPlay = onPlay,
+                    onPlayNext = onPlayNext,
+                    isFavorite = song.id in favoriteIds,
+                    onAddToQueue = onAddToQueue,
+                    onToggleFavorite = onToggleFavorite,
+                    onRequestAddToPlaylist = onRequestAddToPlaylist,
+                    onNavigateToAlbum = onNavigateToAlbum,
+                    onNavigateToArtist = onNavigateToArtist,
+                )
             }
         }
         val indicatorCount = pageCount.coerceAtMost(9)
@@ -1035,52 +1900,96 @@ private fun HeroCarousel(songs: List<Song>, upNextSongs: List<Song>, onPlay: (So
 }
 
 @Composable
-private fun HeroCard(song: Song, queue: List<Song>, onPlay: (Song) -> Unit) {
-    Box(Modifier.fillMaxWidth().aspectRatio(.95f).clip(RoundedCornerShape(20.dp)).clickable { onPlay(song) }) {
-        AlbumArt(song, Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1f), song.title, 0.dp)
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.68f).background(
-                Brush.verticalGradient(
-                    0f to Color.Transparent,
-                    .28f to Color.Black.copy(.48f),
-                    .66f to Color.Black.copy(.84f),
-                    1f to Color.Black.copy(.96f),
-                ),
+private fun HeroCard(
+    song: Song,
+    onPlay: (Song) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    isFavorite: Boolean,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
+) {
+    var showActions by remember(song.id) { mutableStateOf(false) }
+    val cardShape = RoundedCornerShape(20.dp)
+    Box(
+        Modifier.fillMaxWidth().aspectRatio(.95f)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = {},
+                onLongClickLabel = "Song actions",
+                onLongClick = { showActions = true },
             ),
-        )
-        Column(
-            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    ) {
+        Box(Modifier.matchParentSize().clip(cardShape).background(Color.Black)) {
+            AlbumArt(song, Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1f), song.title, 0.dp)
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.68f).background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        .28f to Color.Black.copy(.48f),
+                        .66f to Color.Black.copy(.84f),
+                        1f to Color.Black.copy(.96f),
+                    ),
+                ),
+            )
+            Column(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title.uppercase(), color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    GlassPill(onClick = { onPlay(song) }, onLongClick = { showActions = true }, label = "Play")
+                }
+            }
+        }
+    }
+    if (showActions) {
+        WavvBottomSheet(onDismissRequest = { showActions = false }) { close ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+                AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
                 Column(Modifier.weight(1f)) {
-                    Text(song.title, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                GlassPill(onClick = { onPlay(song) }, label = "Play")
-            }
-            queue.firstOrNull()?.let { next ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("NEXT", color = Color.White.copy(.66f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "${next.title} · ${next.artist}",
-                        color = Color.White.copy(.82f),
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Text("Song actions", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(song.artist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            Spacer(Modifier.height(14.dp))
+            SheetActionRow(Icons.Default.SkipNext, "Play next") { close(); onPlayNext(song) }
+            SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") { close(); onAddToQueue(song) }
+            SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
+                close(); onToggleFavorite(song)
+            }
+            SheetActionRow(Icons.Default.Add, "Add to playlist") { close(); onRequestAddToPlaylist(song) }
+            SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
+            SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
         }
     }
 }
 
 @Composable
-private fun GlassPill(onClick: () -> Unit, label: String) {
-    Row(Modifier.height(42.dp).clip(CircleShape).background(Color.White.copy(.18f)).border(1.dp, Color.White.copy(.28f), CircleShape).clickable(onClick = onClick).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-        Icon(Icons.Default.PlayArrow, contentDescription = label, tint = Color.White, modifier = Modifier.size(15.dp))
-        Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: String) {
+    val captureState = remember { AtomicBoolean(false) }
+    val shape = CircleShape
+    Box(
+        Modifier.width(86.dp).height(42.dp).clip(shape)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClickLabel = "Song actions",
+                onLongClick = onLongClick,
+            ),
+    ) {
+        FrostedBackdrop(captureState, blurRadiusDp = 22f, tint = Color(0x906A6A6A), modifier = Modifier.matchParentSize())
+        Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Cursive)
+        }
     }
 }
 
@@ -1142,13 +2051,40 @@ private fun SearchScreen(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var focused by rememberSaveable { mutableStateOf(false) }
+    var recentSearches by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+    val imeVisible = imeBottomPx > 0
+    val imeBottom = with(LocalDensity.current) { imeBottomPx.toDp() }
+    val imeDensity = LocalDensity.current
+    val normalBarBottom = if (hasNowPlaying) 184.dp else 88.dp
+    val desiredBarBottom = maxOf(normalBarBottom, imeBottom + 10.dp)
+    val imeBarOffsetPx = remember { Animatable(0f) }
+    LaunchedEffect(imeBottomPx, normalBarBottom) {
+        val targetOffset = with(imeDensity) { (normalBarBottom - desiredBarBottom).toPx() }
+        if (imeBottomPx > 0) {
+            imeBarOffsetPx.snapTo(targetOffset)
+        } else {
+            imeBarOffsetPx.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(280, easing = WavvScreenEasing),
+            )
+        }
+    }
+    val addRecentSearch: (String) -> Unit = { value ->
+        val normalized = value.trim()
+        if (normalized.isNotEmpty()) {
+            recentSearches = (listOf(normalized) + recentSearches.filterNot { it.equals(normalized, ignoreCase = true) }).take(8)
+        }
+    }
     LaunchedEffect(songs) {
         if (query.isNotBlank()) onQueryChange(query)
     }
-    val focusManager = LocalFocusManager.current
+    LaunchedEffect(imeVisible) {
+        if (!imeVisible) addRecentSearch(query)
+    }
     Column(Modifier.fillMaxSize()) {
         ScreenHeader("Search")
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = if (hasNowPlaying) 256.dp else 160.dp),
@@ -1173,9 +2109,30 @@ private fun SearchScreen(
                     }
                 } else {
                     item {
-                        Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(.18f), modifier = Modifier.size(44.dp))
-                            Text("Start typing to search", color = Color.White.copy(.25f), fontSize = 14.sp)
+                        if (recentSearches.isNotEmpty()) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp)) {
+                                ShelfLabel("Recent searches")
+                                Spacer(Modifier.height(10.dp))
+                                recentSearches.forEach { recent ->
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable {
+                                            query = recent
+                                            onQueryChange(recent)
+                                        }.padding(vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(.42f), modifier = Modifier.size(18.dp))
+                                        Text(recent, Modifier.weight(1f), color = Color.White.copy(.82f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    if (recent != recentSearches.last()) Hairline()
+                                }
+                            }
+                        } else {
+                            Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(.18f), modifier = Modifier.size(44.dp))
+                                Text("Start typing to search", color = Color.White.copy(.25f), fontSize = 14.sp)
+                            }
                         }
                     }
                 }
@@ -1185,8 +2142,10 @@ private fun SearchScreen(
                 { query = it; onQueryChange(it) },
                 focused,
                 { focused = it },
-                focusManager,
-                Modifier.align(Alignment.BottomCenter).padding(bottom = if (hasNowPlaying) 184.dp else 88.dp),
+                onSearchSubmit = { addRecentSearch(query) },
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = normalBarBottom)
+                    .graphicsLayer { translationY = imeBarOffsetPx.value },
             )
         }
     }
@@ -1266,49 +2225,49 @@ private fun CategoryCard(label: String, color: Color, artwork: Int, onClick: () 
 }
 
 @Composable
-private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: Boolean, onFocusChange: (Boolean) -> Unit, focusManager: androidx.compose.ui.focus.FocusManager, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
-            .shadow(20.dp, CircleShape)
-            .clip(CircleShape)
-            .background(Brush.horizontalGradient(listOf(Color(0xEB44142A), Color(0xF01C1423), Color(0xF50D0D12))))
-            .drawWithCache {
-                val pinkWash = Brush.radialGradient(
-                    0f to Color(0x42FF4081),
-                    1f to Color.Transparent,
-                    center = Offset(size.width * .16f, size.height * .2f),
-                    radius = size.width * .52f,
-                )
-                val redWash = Brush.horizontalGradient(0f to Color(0x29B71C1C), .72f to Color.Transparent)
-                onDrawBehind {
-                    drawRect(pinkWash)
-                    drawRect(redWash)
-                }
-            }
-            .border(1.dp, Color(0x2EFF7691), CircleShape)
-            .padding(horizontal = 20.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: Boolean, onFocusChange: (Boolean) -> Unit, onSearchSubmit: () -> Unit, modifier: Modifier = Modifier) {
+    val captureState = remember { AtomicBoolean(false) }
+    val shape = RoundedCornerShape(20.dp)
+    Box(
+        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).height(58.dp)
+            .shadow(18.dp, shape)
+            .clip(shape)
+            .background(Color(0xD51F2125))
+            .border(1.dp, Color.White.copy(alpha = .16f), shape),
     ) {
-        Image(androidx.compose.ui.res.painterResource(R.drawable.nav_search), null, Modifier.size(17.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(if (focused) Color.White.copy(.6f) else Color.White.copy(.3f)))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            modifier = Modifier.weight(1f).onFocusChanged { onFocusChange(it.isFocused) },
-            textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontFamily = WavvFontFamily),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            decorationBox = { field -> if (query.isEmpty()) Text("Songs, artists, albums...", color = Color.White.copy(.35f), fontSize = 16.sp); field() },
-        )
-        if (query.isNotEmpty() || focused) Box(
-            Modifier.size(20.dp).clip(CircleShape).background(Color.White.copy(.15f)).clickable {
-                onQueryChange("")
-                focusManager.clearFocus()
-                onFocusChange(false)
-            },
-            contentAlignment = Alignment.Center,
+        FrostedBackdrop(captureState, blurRadiusDp = 28f, tint = Color(0xB8292B30), modifier = Modifier.matchParentSize())
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White, modifier = Modifier.size(14.dp))
+            Image(
+                androidx.compose.ui.res.painterResource(R.drawable.nav_search),
+                null,
+                Modifier.size(18.dp),
+                colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(if (focused) .82f else .68f)),
+            )
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.weight(1f).onFocusChanged { onFocusChange(it.isFocused) },
+                textStyle = TextStyle(color = Color.White.copy(.94f), fontSize = 16.sp, fontFamily = WavvFontFamily, fontWeight = FontWeight.Medium),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSearchSubmit() }),
+                decorationBox = { field ->
+                    if (query.isEmpty()) Text("Songs, artists, albums...", color = Color.White.copy(.52f), fontSize = 16.sp, fontWeight = FontWeight.Normal)
+                    field()
+                },
+            )
+            if (query.isNotEmpty() || focused) Box(
+                Modifier.size(24.dp).clip(CircleShape).background(Color.White.copy(.12f)).clickable {
+                    onQueryChange("")
+                },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White.copy(.78f), modifier = Modifier.size(15.dp))
+            }
         }
     }
 }
@@ -1458,6 +2417,7 @@ private fun LibraryScreen(
                 Column(Modifier.fillMaxSize()) {
                     LibraryBrowseHeader(
                         title = route.title.ifBlank { route.page.name.lowercase().replaceFirstChar(Char::uppercase) },
+                        fontFamily = expressiveFontFor(route.page),
                         showLayout = true,
                         layout = layout,
                         onBack = onBack,
@@ -1482,7 +2442,7 @@ private fun LibraryScreen(
                                     cardRows[rowIndex].forEach { card ->
                                         Column(Modifier.weight(1f).clickable(onClick = card.onClick)) {
                                             AlbumArt(card.artSong?.albumArtUri, Modifier.fillMaxWidth().aspectRatio(1f), card.title, 13.dp, card.artSong?.uri)
-                                            Text(card.title, Modifier.padding(top = 8.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(card.title, Modifier.padding(top = 8.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             if (route.page == LibraryPage.Playlists) {
                                                 val playlistId = card.id.toLongOrNull()
@@ -1507,7 +2467,7 @@ private fun LibraryScreen(
                                 Row(Modifier.fillMaxWidth().clickable(onClick = card.onClick).padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                     AlbumArt(card.artSong?.albumArtUri, Modifier.size(58.dp), card.title, 10.dp, card.artSong?.uri)
                                     Column(Modifier.weight(1f)) {
-                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp)
                                     }
                                     if (route.page == LibraryPage.Playlists) {
@@ -1531,7 +2491,8 @@ private fun LibraryScreen(
             }
 
             LibraryPage.Liked, LibraryPage.Songs, LibraryPage.Playlist, LibraryPage.Artist, LibraryPage.Album -> {
-                LibraryCollectionScreen(
+                    LibraryCollectionScreen(
+                    page = route.page,
                     title = if (route == destination) collectionTitle else route.title,
                     subtitle = if (route == destination) collectionSubtitle else route.subtitle,
                     songs = if (route == destination) collectionSongs else when (route.page) {
@@ -1615,6 +2576,7 @@ private data class LibraryCard(val id: String, val title: String, val subtitle: 
 @Composable
 private fun LibraryBrowseHeader(
     title: String,
+    fontFamily: FontFamily,
     showLayout: Boolean,
     layout: LibraryLayout,
     onBack: () -> Unit,
@@ -1631,7 +2593,7 @@ private fun LibraryBrowseHeader(
         IconButton(onClick = onBack, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(.08f))) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Library", tint = Color.White)
         }
-        Text(title, Modifier.weight(1f).padding(start = 8.dp), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, Modifier.weight(1f).padding(start = 8.dp), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, fontFamily = fontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (showSort) IconButton(onClick = onSort, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Tune, contentDescription = "Sort", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp)) }
         if (showLayout) IconButton(onClick = onToggleLayout, modifier = Modifier.size(38.dp)) {
             Icon(if (layout == LibraryLayout.Grid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, contentDescription = if (layout == LibraryLayout.Grid) "Switch to list" else "Switch to grid", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp))
@@ -1714,6 +2676,7 @@ private fun WavvBottomSheet(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LibraryCollectionScreen(
+    page: LibraryPage,
     title: String,
     subtitle: String,
     songs: List<Song>,
@@ -1760,24 +2723,9 @@ private fun LibraryCollectionScreen(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(WavvBackground)) {
-        val height = minOf(720.dp, maxWidth + 270.dp)
+        val height = minOf(620.dp, maxWidth + 170.dp)
         val artworkHeight = minOf(maxWidth, 480.dp)
-        if (featured != null) {
-            AnimatedContent(
-                targetState = featured,
-                transitionSpec = {
-                    fadeIn(
-                        initialAlpha = .35f,
-                        animationSpec = tween(900, easing = CubicBezierEasing(.25f, .1f, .25f, 1f)),
-                    ) togetherWith fadeOut(tween(1))
-                },
-                contentKey = { it.id },
-                label = "collection color wash",
-            ) { washSong ->
-                AlbumArt(washSong, Modifier.fillMaxSize().scale(1.16f).blur(62.dp).alpha(.55f), null, 0.dp)
-            }
-        }
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(.12f), Color.Transparent, Color(0xD908070A)))))
+        SongListArtworkBackdrop(featured, Modifier.matchParentSize())
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = if (hasNowPlaying) 260.dp else 176.dp),
@@ -1794,22 +2742,25 @@ private fun LibraryCollectionScreen(
                             contentKey = { it.id },
                             label = "collection artwork",
                         ) { artSong ->
-                            AlbumArt(artSong,
-                                Modifier.padding(top = 54.dp).fillMaxWidth().height(artworkHeight),
-                                artSong.title,
-                                0.dp,
-                            )
+                            Box(Modifier.fillMaxWidth().height(artworkHeight).statusBarsPadding().edgeBlendedArtworkMask()) {
+                                AlbumArt(artSong, Modifier.fillMaxSize(), artSong.title, 0.dp)
+                                Box(
+                                    Modifier.fillMaxSize().background(
+                                        Brush.verticalGradient(
+                                            0f to Color.Transparent,
+                                            .54f to Color.Transparent,
+                                            1f to Color.Black.copy(alpha = .24f),
+                                        ),
+                                    ),
+                                )
+                            }
                         }
-                        Box(
-                            Modifier.padding(top = 54.dp).fillMaxWidth().height(artworkHeight)
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, WavvBackground.copy(.88f)))),
-                        )
                     }
                     Column(
                         Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black, fontFamily = expressiveFontFor(page), letterSpacing = if (page == LibraryPage.Album) .15.sp else (-.55).sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(subtitle, Modifier.padding(top = 3.dp), color = Color.White.copy(.58f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         featured?.let { Text("${it.title} · ${it.artist}", Modifier.padding(top = 4.dp), color = Color.White.copy(.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1929,6 +2880,7 @@ private data class ProfileSetting(
     val title: String,
     val value: String,
     val detail: String,
+    val tint: Color = WavvPink,
 )
 
 private fun LibrarySource?.folderUris(): List<String> = when (this) {
@@ -1978,57 +2930,91 @@ private fun YouScreen(
     }
     val notificationsEnabled = context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
     val settings = listOf(
-        ProfileSetting(Icons.Default.MusicNote, "Audio Quality", "High", "Wavv plays the selected audio file without re-encoding it."),
-        ProfileSetting(Icons.Outlined.Wifi, "Download on Wi-Fi", "On", "Wavv does not download music. It plays audio files selected on this device."),
-        ProfileSetting(Icons.Outlined.Palette, "Theme", "Dark", "Dark appearance is currently the only theme available."),
-        ProfileSetting(Icons.Outlined.Notifications, "Notifications", "All", "Notification access is controlled by Android for this app."),
-        ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library."),
-        ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", "1.2 GB", "Storage reported for the audio files currently indexed in your library."),
-        ProfileSetting(Icons.Default.SmartDisplay, "Share Profile", "", "Wavv has no online profile or account service to share."),
-        ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
-        ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. For app permissions, open Android app settings."),
+        ProfileSetting(Icons.Default.Tune, "Audio Quality", "Original", "Wavv plays the selected audio file without re-encoding it.", Color(0xFFFF375F)),
+        ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library.", Color(0xFF0A84FF)),
+        ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", Color(0xFF64D2FF)),
+        ProfileSetting(Icons.Outlined.Palette, "Appearance", "Dark", "Dark appearance is currently the only theme available.", Color(0xFFBF5AF2)),
+        ProfileSetting(Icons.Outlined.Notifications, "Notifications", if (notificationsEnabled) "On" else "Off", "Notification access is controlled by Android for this app.", Color(0xFF8E8E93)),
+        ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device.", Color(0xFF8E8E93)),
     )
     var activeSetting by remember { mutableStateOf<ProfileSetting?>(null) }
+    var settingsSearch by rememberSaveable { mutableStateOf("") }
+    val visibleSettings = settings.filter { setting ->
+        "${setting.title} ${setting.value}".contains(settingsSearch.trim(), ignoreCase = true)
+    }
+    val settingGroups = listOf(
+        "Music & Audio" to visibleSettings.filter { it.title == "Audio Quality" },
+        "Library" to visibleSettings.filter { it.title == "Music Folders" || it.title == "Storage Used" },
+        "Experience" to visibleSettings.filter { it.title in setOf("Appearance", "Notifications", "Privacy") },
+    ).filter { it.second.isNotEmpty() }
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            ScreenHeader("You")
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 160.dp)) {
-                item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 30.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    ) {
-                        Box(Modifier.size(96.dp).shadow(24.dp, CircleShape).clip(CircleShape).background(Color(0xFF6250D6)).border(3.dp, Color(0x667B3FF5), CircleShape), contentAlignment = Alignment.Center) {
-                            Text("A", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.ExtraBold)
-                        }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Arjun Kumar", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-.6).sp, lineHeight = 29.sp)
-                            Text("arjun@gmail.com", color = Color.White.copy(.62f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Surface(
-                                Modifier.padding(top = 8.dp),
-                                shape = CircleShape,
-                                color = Color.White.copy(.12f),
-                                border = BorderStroke(1.dp, Color.White.copy(.18f)),
-                            ) {
-                                Text("Edit Profile", Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF111522), Color(0xFF090B11), Color(0xFF050609)))))
+        Box(Modifier.align(Alignment.TopEnd).offset(x = 130.dp, y = (-100).dp).size(310.dp).blur(70.dp).background(Color(0x475E5CE6), CircleShape))
+        Box(Modifier.align(Alignment.CenterStart).offset(x = (-180).dp, y = (-20).dp).size(300.dp).blur(80.dp).background(Color(0x290A84FF), CircleShape))
+        LazyColumn(
+            Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 18.dp),
+            contentPadding = PaddingValues(top = 20.dp, bottom = 176.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
+            item {
+                Text("Settings", Modifier.padding(start = 2.dp, bottom = 18.dp), color = Color.White, fontSize = 36.sp, fontWeight = FontWeight.Black, letterSpacing = (-1.3).sp)
+                SettingsSearchField(settingsSearch, { settingsSearch = it })
+            }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 0.dp, bottom = 26.dp)
+                        .clip(RoundedCornerShape(24.dp)).background(Color.White.copy(.105f))
+                        .border(1.dp, Color.White.copy(.14f), RoundedCornerShape(24.dp))
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(15.dp),
+                ) {
+                    Box(
+                        Modifier.size(66.dp).shadow(10.dp, CircleShape).clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(Color(0xFF8B7CFF), Color(0xFF4B3BC9)))),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White, modifier = Modifier.size(30.dp)) }
+                    Column(Modifier.weight(1f)) {
+                        Text("Wavv", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Black, letterSpacing = (-.55).sp, fontFamily = FontFamily.SansSerif)
+                        Text("Local music library", Modifier.padding(top = 5.dp), color = Color.White.copy(.55f), fontSize = 13.sp)
+                        Text("Settings for this device", Modifier.padding(top = 3.dp), color = Color.White.copy(.38f), fontSize = 12.sp)
+                    }
+                }
+            }
+            if (settingGroups.isEmpty()) {
+                item { Text("No settings found", Modifier.fillMaxWidth().padding(vertical = 56.dp), color = Color.White.copy(.48f), fontSize = 15.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
+            } else {
+                settingGroups.forEach { (group, entries) ->
+                    item(key = "heading-$group") {
+                        Text(group, Modifier.padding(start = 10.dp, top = 0.dp, bottom = 8.dp), color = Color.White.copy(.48f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    item(key = "settings-$group") {
+                        Column(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
+                                .background(Color.White.copy(.085f)).border(1.dp, Color.White.copy(.11f), RoundedCornerShape(22.dp)),
+                        ) {
+                            entries.forEachIndexed { index, setting ->
+                                Row(
+                                    Modifier.fillMaxWidth().heightIn(min = 66.dp).clickable(role = Role.Button) { activeSetting = setting }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(13.dp),
+                                ) {
+                                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(Brush.linearGradient(listOf(setting.tint, setting.tint.copy(alpha = .77f)))), contentAlignment = Alignment.Center) {
+                                        Icon(setting.icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
+                                    }
+                                    Text(setting.title, Modifier.weight(1f), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (setting.value.isNotBlank()) Text(setting.value, color = Color.White.copy(.42f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(.27f), modifier = Modifier.size(14.dp))
+                                }
+                                if (index < entries.lastIndex) Hairline()
                             }
                         }
                     }
+                    item(key = "space-$group") { Spacer(Modifier.height(24.dp)) }
                 }
-                item {
-                    Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ShelfLabel("This Month")
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            StatCard("4,821", "Minutes", Modifier.weight(1f))
-                            StatCard("138", "Artists", Modifier.weight(1f))
-                            StatCard("2,204", "Tracks", Modifier.weight(1f))
-                        }
-                    }
-                }
-                item { SettingsBlock(settings) { activeSetting = it } }
-                item { Text("Rhythmica v1.0.0 · Local Music Player", Modifier.fillMaxWidth().padding(24.dp), color = Color.White.copy(.2f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
             }
+            item { Text("Wavv 1.0.0\nMade for your music", Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), color = Color.White.copy(.24f), fontSize = 12.sp, lineHeight = 18.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
         }
         activeSetting?.let { setting ->
             WavvBottomSheet(onDismissRequest = { activeSetting = null }, maxHeight = 460.dp) { _ ->
@@ -2043,7 +3029,7 @@ private fun YouScreen(
                 }
                 Text(setting.detail, Modifier.padding(top = 16.dp, bottom = 12.dp), color = Color.White.copy(.62f), fontSize = 14.sp, lineHeight = 20.sp)
                 when (setting.title) {
-                    "Audio Quality", "Theme" -> SettingInfoRow(setting.value, if (setting.title == "Audio Quality") "Original file · no re-encoding" else "Current app appearance", "Selected")
+                    "Audio Quality", "Appearance" -> SettingInfoRow(setting.value, if (setting.title == "Audio Quality") "Original file · no re-encoding" else "Current app appearance", "Selected")
                     "Music Folders" -> {
                         val folders = source.folderUris()
                         if (folders.isEmpty()) {
@@ -2095,6 +3081,36 @@ private fun YouScreen(
                     }
                     else -> SettingInfoRow(setting.title, setting.value, null)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSearchField(value: String, onValueChange: (String) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(48.dp).padding(bottom = 0.dp)
+            .clip(RoundedCornerShape(18.dp)).background(Color.White.copy(.1f))
+            .border(1.dp, Color.White.copy(.12f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 15.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(Icons.Default.Search, contentDescription = null, tint = Color.White.copy(.5f), modifier = Modifier.size(19.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontFamily = WavvFontFamily),
+            decorationBox = { field ->
+                if (value.isEmpty()) Text("Search Settings", color = Color.White.copy(.42f), fontSize = 16.sp)
+                field()
+            },
+        )
+        if (value.isNotEmpty()) {
+            Box(Modifier.size(22.dp).clip(CircleShape).background(Color.White.copy(.2f)).clickable { onValueChange("") }, contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Close, contentDescription = "Clear settings search", tint = Color.White.copy(.75f), modifier = Modifier.size(13.dp))
             }
         }
     }
@@ -2168,25 +3184,35 @@ private fun SettingsBlock(settings: List<ProfileSetting>, onSelect: (ProfileSett
 }
 
 @Composable
-private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, modifier: Modifier = Modifier) {
+private fun BottomNav(
+    active: Tab,
+    onChange: (Tab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
     val activeIndex = tabs.indexOfFirst { it.first == active }
+    val captureState = remember { AtomicBoolean(false) }
     Box(
-        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 12.dp)
+        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 4.dp).height(60.dp)
+            .shadow(12.dp, CircleShape)
             .clip(CircleShape)
-            .background(WavvFrostedGlass)
-            .border(1.dp, Color.White.copy(.16f), CircleShape),
+            .border(.75.dp, HomeFrostedBorder, CircleShape),
     ) {
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0f to Color.White.copy(.06f), 1f to Color.Transparent),
-            ),
+        FrostedBackdrop(
+            captureState,
+            blurRadiusDp = 36f,
+            tint = HomeFrostedGlass,
+            modifier = Modifier.matchParentSize(),
         )
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(5.dp)) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
             val itemWidth = maxWidth / tabs.size
             val highlightOffset by animateDpAsState(
                 targetValue = itemWidth * activeIndex,
-                animationSpec = tween(320, easing = WavvScreenEasing),
+                animationSpec = spring(
+                    dampingRatio = .9f,
+                    stiffness = 520f,
+                    visibilityThreshold = .5.dp,
+                ),
                 label = "tab highlight position",
             )
             Box(Modifier.matchParentSize()) {
@@ -2197,7 +3223,7 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, modifier: Modifier =
                         .border(1.dp, Color.White.copy(.1f), CircleShape),
                 )
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 tabs.forEach { (tab, label) ->
                     val selected = tab == active
                     val itemTransition = updateTransition(selected, label = "$label selection")
@@ -2206,9 +3232,9 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, modifier: Modifier =
                     val iconScale by itemTransition.animateFloat(label = "$label icon scale") { isSelected -> if (isSelected) 1.06f else 1f }
                     val iconOffsetY by itemTransition.animateFloat(label = "$label icon offset") { isSelected -> if (isSelected) -1f else 0f }
                     Column(
-                        Modifier.weight(1f).clip(CircleShape).clickable(role = Role.Tab) { onChange(tab) }.padding(top = 10.dp, bottom = 9.dp),
+                        Modifier.weight(1f).fillMaxHeight().clip(CircleShape).clickable(role = Role.Tab) { onChange(tab) },
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.Center,
                     ) {
                         Image(
                             painter = androidx.compose.ui.res.painterResource(
@@ -2221,12 +3247,13 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, modifier: Modifier =
                             ),
                             contentDescription = label,
                             colorFilter = if (tab == Tab.Library) null else androidx.compose.ui.graphics.ColorFilter.tint(iconColor),
-                            modifier = Modifier.size(if (tab == Tab.Library) 22.dp else 24.dp, if (tab == Tab.Library) 24.dp else 23.dp).graphicsLayer {
+                            modifier = Modifier.size(if (tab == Tab.Library) 18.dp else 20.dp, 20.dp).graphicsLayer {
                                 scaleX = iconScale
                                 scaleY = iconScale
                                 translationY = iconOffsetY.dp.toPx()
                             },
                         )
+                        Spacer(Modifier.height(3.dp))
                         Text(label, color = labelColor, fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
                     }
                 }
@@ -2236,39 +3263,94 @@ private fun BottomNav(active: Tab, onChange: (Tab) -> Unit, modifier: Modifier =
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
-    val height by animateDpAsState(if (expanded) 144.dp else 70.dp, tween(520, easing = WavvMotionEasing), label = "player bar height")
-    val cornerRadius by animateDpAsState(if (expanded) 30.dp else 999.dp, tween(320, easing = WavvMotionEasing), label = "player bar corners")
+private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
+    val captureState = remember { AtomicBoolean(false) }
+    val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
+    val barTransition = updateTransition(barMode, label = "now playing bar mode")
+    val height by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar height") {
+        if (it == NowPlayingBarMode.Expanded) 144.dp else 60.dp
+    }
+    val cornerRadius by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar corners") {
+        if (it == NowPlayingBarMode.Expanded) 28.dp else 30.dp
+    }
+    val barOffset by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar home position") {
+        when (it) { NowPlayingBarMode.Stacked -> (-178).dp; NowPlayingBarMode.Expanded -> (-24).dp; NowPlayingBarMode.Docked -> 0.dp }
+    }
+    val artworkSize by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork size") {
+        if (it == NowPlayingBarMode.Expanded) 50.dp else 40.dp
+    }
+    val artworkX by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork horizontal position") {
+        16.dp
+    }
+    val artworkY by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork vertical position") {
+        10.dp
+    }
+    val artworkCorner by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork corners") {
+        if (it == NowPlayingBarMode.Expanded) 11.dp else 10.dp
+    }
     val shape = RoundedCornerShape(cornerRadius)
     val durationMs = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
     val positionMs = state.positionMs.coerceIn(0L, durationMs)
-    Box(modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 96.dp).height(height).shadow(18.dp, shape).clip(shape).background(WavvFrostedGlass).border(1.dp, Color.White.copy(.16f), shape).clickable(onClick = onOpen)) {
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0f to Color.White.copy(.06f), 1f to Color.Transparent),
-            ),
+    val density = LocalDensity.current
+    val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+    val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    BoxWithConstraints(modifier) {
+    val dockProgress = if (stackDockEnabled) stackDockProgress.value.coerceIn(0f, 1f) else 0f
+    val bottomPosition = maxHeight - navigationBarBottom - 96.dp - height + barOffset
+    val topPosition = statusBarTop + 70.dp
+    val barPosition = bottomPosition * (1f - dockProgress) + topPosition * dockProgress
+    Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).offset(y = barPosition).height(height)
+        .pointerInput(expanded, stacked, onCollapse, onExpand) {
+            if (!expanded && !stacked) return@pointerInput
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                var swiped = false
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    val delta = change.position - down.position
+                    if (!swiped && kotlin.math.abs(delta.y) > viewConfiguration.touchSlop && kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x)) {
+                        if (expanded && delta.y < 0f) {
+                            swiped = true
+                            change.consume()
+                            onCollapse()
+                        } else if (stacked && delta.y > 0f) {
+                            swiped = true
+                            change.consume()
+                            onExpand()
+                        }
+                    } else if (swiped) {
+                        change.consume()
+                    }
+                }
+            }
+        }
+        .shadow(18.dp, shape).clip(shape)
+        .border(.75.dp, HomeFrostedBorder, shape).clickable(onClick = onOpen)) {
+        FrostedBackdrop(
+            captureState,
+            blurRadiusDp = 34f,
+            tint = HomeFrostedGlass,
+            modifier = Modifier.matchParentSize(),
         )
+        Box(
+            Modifier.align(Alignment.TopStart).offset(x = artworkX, y = artworkY).size(artworkSize)
+                .sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible),
+        ) {
+            AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(artworkCorner)), song.title, artworkCorner)
+        }
         AnimatedContent(
             targetState = expanded,
             transitionSpec = {
-                if (targetState) {
-                    (fadeIn(tween(350, delayMillis = 120, easing = WavvMotionEasing)) +
-                        scaleIn(initialScale = .96f, animationSpec = tween(400, delayMillis = 100, easing = WavvMotionEasing))) togetherWith
-                        fadeOut(tween(180, easing = WavvMotionEasing))
-                } else {
-                    fadeIn(tween(180, easing = WavvScreenEasing)) togetherWith
-                        (fadeOut(tween(350, delayMillis = 120, easing = WavvMotionEasing)) +
-                            scaleOut(targetScale = .96f, animationSpec = tween(400, delayMillis = 100, easing = WavvMotionEasing)))
-                }
+                fadeIn(tween(200, easing = WavvMotionEasing)) togetherWith fadeOut(tween(160, easing = WavvMotionEasing))
             },
             label = "player bar content",
         ) { big ->
             if (big) {
                 Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.size(50.dp).sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible && big == expanded)) {
-                            AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(11.dp)), song.title, 11.dp)
-                        }
+                    Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Spacer(Modifier.width(50.dp))
                         TrackText(song, Modifier.weight(1f), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp)
                         Box(Modifier.size(38.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) { FigmaFavouriteIcon(liked, 30.dp) }
                     }
@@ -2298,10 +3380,8 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, m
                     }
                 }
             } else {
-                Row(Modifier.fillMaxSize().padding(start = 20.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Box(Modifier.size(48.dp).sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible && big == expanded)) {
-                        AlbumArt(song, Modifier.fillMaxSize(), song.title, 10.dp)
-                    }
+                Row(Modifier.fillMaxSize().padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Spacer(Modifier.width(40.dp))
                     TrackText(song, Modifier.weight(1f), 14.sp)
                     Image(
                         androidx.compose.ui.res.painterResource(if (state.isPlaying) R.drawable.image_16 else R.drawable.play_button),
@@ -2314,6 +3394,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, m
             }
         }
     }
+}
 }
 
 @Composable
@@ -2726,6 +3807,23 @@ private fun Modifier.maskedArtworkFade(): Modifier =
                 0f to Color.Transparent,
                 .35f to Color.Black,
                 .60f to Color.Black,
+                1f to Color.Transparent,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+
+/** Lets the sharp cover dissolve into the same blurred artwork backdrop at both edges. */
+private fun Modifier.edgeBlendedArtworkMask(): Modifier =
+    graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen).drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color.Transparent,
+                .12f to Color.Black.copy(alpha = .22f),
+                .30f to Color.Black,
+                .58f to Color.Black,
+                .84f to Color.Black.copy(alpha = .72f),
                 1f to Color.Transparent,
             ),
             blendMode = BlendMode.DstIn,
@@ -3458,6 +4556,23 @@ private fun NoArtwork(modifier: Modifier, contentDescription: String?, radius: D
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.Default.MusicNote, contentDescription = contentDescription, tint = Color.White.copy(.35f), modifier = Modifier.size(32.dp))
+    }
+}
+
+/** Edge-to-edge album artwork with a restrained glow sampled from the artwork itself. */
+@Composable
+private fun SongListArtworkBackdrop(song: Song?, modifier: Modifier = Modifier) {
+    Box(modifier.clipToBounds().background(WavvBackground)) {
+        if (song != null) {
+            AnimatedContent(
+                targetState = song,
+                transitionSpec = { fadeIn(tween(720, easing = WavvScreenEasing)) togetherWith fadeOut(tween(520, easing = WavvScreenEasing)) },
+                contentKey = { it.id },
+                label = "song list edge to edge artwork",
+            ) { artworkSong ->
+                NowPlayingAmbientBackdrop(artworkSong, isPlaying = true)
+            }
+        }
     }
 }
 
