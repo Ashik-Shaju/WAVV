@@ -131,6 +131,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
@@ -264,6 +265,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.math.max
 import kotlin.math.roundToInt
 import java.util.Locale
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -857,6 +861,7 @@ private fun WavvContent(
     )
     var libraryDestination by rememberSaveable { mutableStateOf(LibraryDestination()) }
     var previousLibraryDestination by rememberSaveable { mutableStateOf(LibraryDestination()) }
+    var libraryHistoryVisible by rememberSaveable { mutableStateOf(false) }
     var libraryLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
     var pinnedPlaylistIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
@@ -908,8 +913,8 @@ private fun WavvContent(
         libraryDestination = if (libraryDestination.isDetail) previousLibraryDestination else LibraryDestination()
     }
 
-    BackHandler(enabled = showLibrary && tab == Tab.Library && !showPlayer && libraryDestination.page != LibraryPage.Main) {
-        backLibrary()
+    BackHandler(enabled = showLibrary && tab == Tab.Library && !showPlayer && (libraryHistoryVisible || libraryDestination.page != LibraryPage.Main)) {
+        if (libraryHistoryVisible) libraryHistoryVisible = false else backLibrary()
     }
 
     SharedTransitionLayout(Modifier.fillMaxSize()) {
@@ -966,6 +971,9 @@ private fun WavvContent(
                     Tab.Library -> LibraryScreen(
                         destination = libraryDestination,
                         songs = songs,
+                        playbackHistory = (libraryState as? LibraryUiState.Ready)?.playbackHistory.orEmpty(),
+                        historyVisible = libraryHistoryVisible,
+                        onToggleHistory = { libraryHistoryVisible = !libraryHistoryVisible },
                         hasNowPlaying = activeSong != null,
                         favoriteIds = favoriteIds,
                         playlists = playlists,
@@ -2277,6 +2285,9 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: B
 private fun LibraryScreen(
     destination: LibraryDestination,
     songs: List<Song>,
+    playbackHistory: List<PlaybackHistoryEntry>,
+    historyVisible: Boolean,
+    onToggleHistory: () -> Unit,
     hasNowPlaying: Boolean,
     favoriteIds: Set<Long>,
     playlists: List<UserPlaylist>,
@@ -2328,7 +2339,20 @@ private fun LibraryScreen(
         else -> ""
     }
 
+    Box(Modifier.fillMaxSize()) {
     AnimatedContent(
+        targetState = historyVisible,
+        transitionSpec = { fadeIn(tween(230, easing = WavvMotionEasing)) togetherWith fadeOut(tween(180, easing = WavvMotionEasing)) },
+        label = "library history toggle",
+    ) { route ->
+        if (route) {
+            LibraryHistoryScreen(
+                history = playbackHistory,
+                allSongs = songs,
+                hasNowPlaying = hasNowPlaying,
+                onPlay = onPlay,
+            )
+        } else AnimatedContent(
         targetState = destination,
         transitionSpec = {
             (fadeIn(tween(220)) + slideInHorizontally(tween(420, easing = WavvMotionEasing)) { it / 10 }) togetherWith
@@ -2529,6 +2553,26 @@ private fun LibraryScreen(
             }
         }
     }
+    }
+    Box(
+        Modifier.align(Alignment.BottomEnd)
+            .padding(end = 20.dp, bottom = if (hasNowPlaying) 176.dp else 92.dp)
+            .size(56.dp)
+            .shadow(14.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Color(0xFF34343A))
+            .border(1.dp, Color.White.copy(.14f), CircleShape)
+            .clickable(onClick = onToggleHistory),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
+            contentDescription = if (historyVisible) "Return to library" else "Listening history",
+            tint = Color.White,
+            modifier = Modifier.size(24.dp),
+        )
+    }
+    }
 
     if (sortMenu) {
         WavvBottomSheet(onDismissRequest = { sortMenu = false }, maxHeight = 320.dp) { close ->
@@ -2570,6 +2614,95 @@ private fun LibraryScreen(
         )
     }
 }
+
+@Composable
+private fun LibraryHistoryScreen(
+    history: List<PlaybackHistoryEntry>,
+    allSongs: List<Song>,
+    hasNowPlaying: Boolean,
+    onPlay: (Song, List<Song>) -> Unit,
+) {
+    val groupedHistory = remember(history) {
+        history.groupBy { localDayStart(it.playedAt) }
+            .toSortedMap(compareByDescending { it })
+    }
+    val surfaceShape = RoundedCornerShape(26.dp)
+    val surfaceBottomInset = if (hasNowPlaying) 250.dp else 164.dp
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        ScreenHeader("History", showAmbient = false)
+        if (history.isEmpty()) {
+            Box(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = surfaceBottomInset)
+                    .clip(surfaceShape).background(Color(0xFF242428)),
+                contentAlignment = Alignment.Center,
+            ) {
+                LibraryEmpty("No listening history", "Songs you play will appear here.")
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = surfaceBottomInset)
+                    .clip(surfaceShape).background(Color(0xFF242428)),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 14.dp),
+            ) {
+                groupedHistory.forEach { (day, entries) ->
+                    item(key = "history-day-$day") {
+                        Text(
+                            historyDayLabel(day),
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                            color = Color.White.copy(.66f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = .2.sp,
+                        )
+                    }
+                    items(entries, key = PlaybackHistoryEntry::id) { entry ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onPlay(entry.song, allSongs) }
+                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            AlbumArt(
+                                entry.song,
+                                Modifier.size(48.dp).clip(RoundedCornerShape(9.dp)),
+                                entry.song.title,
+                                9.dp,
+                            )
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(entry.song.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(entry.song.artist, color = Color.White.copy(.48f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text(historyTimeLabel(entry.playedAt), color = Color.White.copy(.4f), fontSize = 11.sp, maxLines = 1)
+                        }
+                        Box(Modifier.fillMaxWidth().padding(start = 76.dp, end = 16.dp).height(1.dp).background(Color.White.copy(.085f)))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun localDayStart(timestamp: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = timestamp
+    set(Calendar.HOUR_OF_DAY, 0)
+    set(Calendar.MINUTE, 0)
+    set(Calendar.SECOND, 0)
+    set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+private fun historyDayLabel(dayStart: Long): String {
+    val today = localDayStart(System.currentTimeMillis())
+    val yesterday = Calendar.getInstance().apply { timeInMillis = today; add(Calendar.DAY_OF_YEAR, -1) }.timeInMillis
+    val date = SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(Date(dayStart))
+    return when (dayStart) {
+        today -> "Today · $date"
+        yesterday -> "Yesterday · $date"
+        else -> SimpleDateFormat("EEEE, MMM d, yyyy", Locale.getDefault()).format(Date(dayStart))
+    }
+}
+
+private fun historyTimeLabel(timestamp: Long): String =
+    SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
 
 private data class LibraryCard(val id: String, val title: String, val subtitle: String, val artSong: Song?, val onClick: () -> Unit)
 

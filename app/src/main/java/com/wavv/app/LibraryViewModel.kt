@@ -24,6 +24,7 @@ sealed interface LibraryUiState {
         val songs: List<Song>,
         val favoriteIds: Set<Long> = emptySet(),
         val recentlyPlayed: List<Song> = emptyList(),
+        val playbackHistory: List<PlaybackHistoryEntry> = emptyList(),
         val playlists: List<UserPlaylist> = emptyList(),
         val searchResults: List<Song>? = null,
         val semanticLoading: Boolean = false,
@@ -145,6 +146,7 @@ class LibraryViewModel(
             songs = libraryStore.getSongs(),
             favoriteIds = libraryStore.getFavoriteIds(),
             recentlyPlayed = libraryStore.getRecentlyPlayed(),
+            playbackHistory = libraryStore.getPlaybackHistory(),
             playlists = libraryStore.getPlaylists(),
         )
     }
@@ -277,8 +279,13 @@ class LibraryViewModel(
                 skipPositionSeconds = skipPositionMs?.div(1_000L),
             )
             if (eventType == "play") {
+                val recentlyPlayed = libraryStore.getRecentlyPlayed()
+                val playbackHistory = libraryStore.getPlaybackHistory()
                 _state.update { state ->
-                    if (state is LibraryUiState.Ready) state.copy(recentlyPlayed = libraryStore.getRecentlyPlayed()) else state
+                    if (state is LibraryUiState.Ready) state.copy(
+                        recentlyPlayed = recentlyPlayed,
+                        playbackHistory = playbackHistory,
+                    ) else state
                 }
             }
         }
