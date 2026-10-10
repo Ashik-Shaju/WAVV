@@ -76,16 +76,19 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -166,6 +169,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -297,6 +301,26 @@ internal data class LibraryDestination(
     val subtitle: String = "",
 ) : java.io.Serializable {
     val isDetail get() = page == LibraryPage.Playlist || page == LibraryPage.Artist || page == LibraryPage.Album
+}
+
+internal data class LibraryNavigationState(
+    val destination: LibraryDestination = LibraryDestination(),
+    val backStack: List<LibraryDestination> = emptyList(),
+) : java.io.Serializable {
+    fun navigateTo(destination: LibraryDestination): LibraryNavigationState {
+        if (destination == this.destination) return this
+        return if (destination.isDetail) {
+            copy(destination = destination, backStack = backStack + this.destination)
+        } else {
+            copy(destination = destination, backStack = emptyList())
+        }
+    }
+
+    fun back(): LibraryNavigationState =
+        copy(
+            destination = backStack.lastOrNull() ?: LibraryDestination(),
+            backStack = backStack.dropLast(1),
+        )
 }
 
 internal enum class LibraryLayout { Grid, List }
@@ -573,8 +597,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var loopMode by rememberSaveable { mutableStateOf(LoopMode.Off) }
     var homeAtTop by rememberSaveable { mutableStateOf(true) }
-    var libraryDestination by rememberSaveable { mutableStateOf(LibraryDestination()) }
-    var previousLibraryDestination by rememberSaveable { mutableStateOf(LibraryDestination()) }
+    var homeStackExpanded by rememberSaveable { mutableStateOf(false) }
+    var libraryNavigation by rememberSaveable { mutableStateOf(LibraryNavigationState()) }
+    val libraryDestination = libraryNavigation.destination
     var libraryLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
     var pinnedPlaylistIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
@@ -589,6 +614,17 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val recentlyPlayed = (libraryState as? LibraryUiState.Ready)?.recentlyPlayed.orEmpty()
     val playlists = (libraryState as? LibraryUiState.Ready)?.playlists.orEmpty()
     val activeSong = playbackState.song
+    val homeStackExpansionProgress = animateFloatAsState(
+        targetValue = if (tab == Tab.Home && homeStackExpanded && songs.isNotEmpty() && !showPlayer) 1f else 0f,
+        animationSpec = tween(540, easing = WavvMotionEasing),
+        label = "home stack expansion",
+    )
+    val miniPlayerExpanded = tab == Tab.Home && homeAtTop && !homeStackExpanded
+    val miniPlayerHeight by animateDpAsState(
+        targetValue = if (activeSong != null && miniPlayerExpanded) 144.dp else 70.dp,
+        animationSpec = tween(520, easing = WavvMotionEasing),
+        label = "mini player height",
+    )
     LaunchedEffect(showPlayer) {
         sharedArtworkTransitionActive = true
         delay(700)
@@ -626,16 +662,14 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
     val showLibrary = libraryState is LibraryUiState.Ready
     val navigateLibrary: (LibraryDestination) -> Unit = { destination ->
-        previousLibraryDestination = if (destination.isDetail) libraryDestination else LibraryDestination()
-        libraryDestination = destination
+        libraryNavigation = libraryNavigation.navigateTo(destination)
     }
-    val backLibrary = {
-        libraryDestination = if (libraryDestination.isDetail) previousLibraryDestination else LibraryDestination()
-    }
+    val backLibrary = { libraryNavigation = libraryNavigation.back() }
 
-    BackHandler(enabled = showPlayer || (showLibrary && tab != Tab.Home)) {
+    BackHandler(enabled = showPlayer || (tab == Tab.Home && homeStackExpanded) || (showLibrary && tab != Tab.Home)) {
         when {
             showPlayer -> closePlayer()
+            tab == Tab.Home && homeStackExpanded -> homeStackExpanded = false
             tab == Tab.Library && libraryDestination.page != LibraryPage.Main -> backLibrary()
             else -> tab = Tab.Home
         }
@@ -664,7 +698,29 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         isPlaying = playbackState.isPlaying,
                         onChooseSource = onChooseSource,
                         onPlay = startPlayback,
+                        onPlayNext = onPlayNext,
+                        onAddToQueue = onAddToQueue,
+                        onToggleFavorite = { song -> onToggleFavorite(song.id) },
+                        onRequestAddToPlaylist = { song ->
+                            createPlaylistSongId = song.id
+                            createPlaylistName = ""
+                            showCreatePlaylist = true
+                        },
+                        onNavigateToAlbum = { song ->
+                            navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.artist))
+                            tab = Tab.Library
+                        },
+                        onNavigateToArtist = { song ->
+                            navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist))
+                            tab = Tab.Library
+                        },
+                        onExpandPlayer = openPlayer,
                         recentSongs = recentlyPlayed,
+                        hasNowPlaying = activeSong != null,
+                        miniPlayerHeight = miniPlayerHeight,
+                        stackExpanded = homeStackExpanded,
+                        stackExpansionProgress = homeStackExpansionProgress,
+                        onStackExpandedChange = { homeStackExpanded = it },
                         smartMixes = smartMixes,
                         onPlayMix = startMix,
                         upNextSongs = upNextSongs,
@@ -731,8 +787,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 song = activeSong,
                 state = playbackState,
                 backdrop = navBackdrop,
-                expanded = tab == Tab.Home && homeAtTop,
-                modifier = Modifier.align(Alignment.BottomCenter),
+                expanded = miniPlayerExpanded,
+                height = miniPlayerHeight,
+                stackDockProgress = homeStackExpansionProgress,
+                modifier = Modifier.fillMaxSize(),
                 liked = activeSong.id in favoriteIds,
                 onToggle = onTogglePlayback,
                 onLike = { onToggleFavorite(activeSong.id) },
@@ -847,11 +905,19 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
 }
 
 @Composable
-internal fun ScreenHeader(title: String, waveform: Boolean = false, isPlaying: Boolean = false) {
+internal fun ScreenHeader(
+    title: String,
+    waveform: Boolean = false,
+    isPlaying: Boolean = false,
+    showAmbient: Boolean = true,
+) {
+    val brandHome = title == "Wavv" && !showAmbient
     Box(
-        Modifier.fillMaxWidth().background(if (waveform) WavvBackground else Color(0xB20A0A0A)),
+        Modifier.fillMaxWidth().background(
+            if (waveform && !showAmbient) Color.Black else if (waveform) WavvBackground else Color(0xB20A0A0A),
+        ),
     ) {
-        if (waveform) {
+        if (waveform && showAmbient) {
             Box(
                 Modifier.matchParentSize().drawWithCache {
                     val radius = size.width * .75f
@@ -895,7 +961,14 @@ internal fun ScreenHeader(title: String, waveform: Boolean = false, isPlaying: B
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(title, color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-1).sp)
+            Text(
+                title,
+                color = Color.White,
+                fontSize = if (brandHome) 33.sp else 32.sp,
+                fontWeight = if (brandHome) FontWeight.Black else FontWeight.ExtraBold,
+                letterSpacing = if (brandHome) (-1.15).sp else (-1).sp,
+                fontFamily = if (brandHome) FontFamily.SansSerif else FontFamily.Default,
+            )
             if (waveform) Waveform(isPlaying)
         }
         if (!waveform) {
@@ -1205,15 +1278,22 @@ internal fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop,
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, backdrop: Backdrop, expanded: Boolean, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
-    val height by animateDpAsState(if (expanded) 144.dp else 70.dp, tween(520, easing = WavvMotionEasing), label = "player bar height")
+private fun NowPlayingBar(song: Song, state: PlaybackState, backdrop: Backdrop, expanded: Boolean, height: Dp, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
     val cornerRadius by animateDpAsState(if (expanded) 30.dp else 999.dp, tween(320, easing = WavvMotionEasing), label = "player bar corners")
     val shape = RoundedCornerShape(cornerRadius)
     val durationMs = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
     val positionMs = state.positionMs.coerceIn(0L, durationMs)
-    Box(
-        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 96.dp)
-            .height(height)
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+        val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+        val dockOffsetPx = with(density) {
+            (statusBarTop + 70.dp - (maxHeight - navigationBarBottom - 96.dp - height)).toPx()
+        }
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 20.dp)
+                .navigationBarsPadding().padding(bottom = 96.dp).height(height)
+                .graphicsLayer { translationY = dockOffsetPx * stackDockProgress.value.coerceIn(0f, 1f) }
             .shadow(18.dp, shape)
             .drawBackdrop(
                 backdrop = backdrop,
@@ -1251,8 +1331,8 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, backdrop: Backdrop, 
                 ),
                 shape,
             )
-            .clickable(role = Role.Button, onClick = onOpen),
-    ) {
+                .clickable(role = Role.Button, onClick = onOpen),
+        ) {
         Box(
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(0f to Color.White.copy(.10f), .42f to Color.Transparent, 1f to Color.Black.copy(.14f)),
@@ -1330,6 +1410,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, backdrop: Backdrop, 
             }
         }
     }
+}
 }
 
 @Composable

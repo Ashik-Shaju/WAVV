@@ -1,5 +1,8 @@
 package com.wavv.app
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,9 +13,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -40,13 +46,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -81,6 +87,20 @@ internal fun SearchScreen(
         }
     }
     val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val normalBarBottom = if (hasNowPlaying) 184.dp else 88.dp
+    val imeBottom = with(density) { imeBottomPx.toDp() }
+    val desiredBarBottom = maxOf(normalBarBottom, imeBottom + 10.dp)
+    val imeBarOffsetPx = remember { Animatable(0f) }
+    LaunchedEffect(imeBottomPx, normalBarBottom) {
+        val targetOffset = with(density) { (normalBarBottom - desiredBarBottom).toPx() }
+        if (imeBottomPx > 0) {
+            imeBarOffsetPx.snapTo(targetOffset)
+        } else {
+            imeBarOffsetPx.animateTo(0f, tween(280))
+        }
+    }
     val genreSongs = remember(songs, selectedGenre) {
         selectedGenre?.let { genre -> songsForGenre(songs, genre) }.orEmpty()
     }
@@ -160,7 +180,9 @@ internal fun SearchScreen(
                 focused,
                 { focused = it; if (it) selectedGenre = null },
                 focusManager,
-                Modifier.align(Alignment.BottomCenter).padding(bottom = if (hasNowPlaying) 184.dp else 88.dp),
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = normalBarBottom)
+                    .graphicsLayer { translationY = imeBarOffsetPx.value },
                 showClear = selectedGenre != null,
             )
         }
@@ -182,7 +204,10 @@ internal fun SearchResultRow(song: Song, onPlay: (Song) -> Unit) {
 @Composable
 private fun BrowseCategories(songs: List<Song>, onChooseCategory: (String) -> Unit) {
     val categories = remember(songs) { genreCategories(songs) }
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        Modifier.padding(horizontal = 16.dp).animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         Text(
             "BROWSE CATEGORIES",
             Modifier.padding(start = 4.dp, bottom = 2.dp),
@@ -208,63 +233,96 @@ private fun BrowseCategories(songs: List<Song>, onChooseCategory: (String) -> Un
 
 @Composable
 private fun CategoryCard(category: GenreCategory, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val hue = (category.name.hashCode().ushr(1) % 360).toFloat()
+    val tint = Color.hsv(hue, .68f, .62f)
+    val shape = RoundedCornerShape(12.dp)
     Box(
-        modifier.height(100.dp)
-            .clip(RoundedCornerShape(12.dp))
+        modifier.height(100.dp).clip(shape).background(tint)
+            .border(1.dp, Color.White.copy(.14f), shape)
             .clickable(role = Role.Button, onClick = onClick),
     ) {
-        AlbumArt(category.artwork, Modifier.fillMaxSize(), contentDescription = null, radius = 12.dp)
-        Box(
-            Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, .35f to Color.Black.copy(.14f), 1f to Color.Black.copy(.84f))),
+        AlbumArt(
+            category.artwork,
+            Modifier.align(Alignment.CenterEnd).fillMaxWidth(.64f).fillMaxSize(),
+            contentDescription = null,
+            radius = 12.dp,
         )
-        Text(category.name, Modifier.align(Alignment.BottomStart).fillMaxWidth(.9f).padding(start = 12.dp, bottom = 12.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-.3).sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.horizontalGradient(
+                    colorStops = arrayOf(
+                        0f to tint,
+                        .38f to tint.copy(alpha = .96f),
+                        .7f to tint.copy(alpha = .2f),
+                        1f to Color.Transparent,
+                    ),
+                ),
+            ),
+        )
+        Text(
+            category.name,
+            Modifier.align(Alignment.BottomStart).fillMaxWidth(.64f).padding(start = 12.dp, bottom = 12.dp),
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-.3).sp,
+            lineHeight = 18.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
 @Composable
 private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: Boolean, onFocusChange: (Boolean) -> Unit, focusManager: androidx.compose.ui.focus.FocusManager, modifier: Modifier = Modifier, showClear: Boolean = false) {
-    Row(
-        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
-            .shadow(20.dp, CircleShape)
-            .clip(CircleShape)
-            .background(Brush.horizontalGradient(listOf(Color(0xEB44142A), Color(0xF01C1423), Color(0xF50D0D12))))
-            .drawWithCache {
-                val pinkWash = Brush.radialGradient(
-                    0f to Color(0x42FF4081),
-                    1f to Color.Transparent,
-                    center = Offset(size.width * .16f, size.height * .2f),
-                    radius = size.width * .52f,
-                )
-                val redWash = Brush.horizontalGradient(0f to Color(0x29B71C1C), .72f to Color.Transparent)
-                onDrawBehind {
-                    drawRect(pinkWash)
-                    drawRect(redWash)
-                }
-            }
-            .border(1.dp, Color(0x2EFF7691), CircleShape)
-            .padding(horizontal = 20.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    val shape = RoundedCornerShape(20.dp)
+    Box(
+        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).height(58.dp)
+            .shadow(18.dp, shape)
+            .clip(shape)
+            .background(Color(0xD51F2125))
+            .border(1.dp, Brush.verticalGradient(0f to Color.White.copy(.24f), 1f to Color.White.copy(.08f)), shape),
     ) {
-        Image(androidx.compose.ui.res.painterResource(R.drawable.nav_search), null, Modifier.size(17.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(if (focused) Color.White.copy(.6f) else Color.White.copy(.3f)))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            modifier = Modifier.weight(1f).onFocusChanged { onFocusChange(it.isFocused) },
-            textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontFamily = WavvFontFamily),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            decorationBox = { field -> if (query.isEmpty()) Text("Songs, artists, albums...", color = Color.White.copy(.35f), fontSize = 16.sp); field() },
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    0f to Color.White.copy(.09f),
+                    .46f to Color.Transparent,
+                    1f to Color.Black.copy(.18f),
+                ),
+            ),
         )
-        if (query.isNotEmpty() || focused || showClear) Box(
-            Modifier.size(20.dp).clip(CircleShape).background(Color.White.copy(.15f)).clickable {
-                onQueryChange("")
-                focusManager.clearFocus()
-                onFocusChange(false)
-            },
-            contentAlignment = Alignment.Center,
+        Box(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth(.66f).height(1.dp).background(
+                Brush.horizontalGradient(0f to Color.Transparent, .5f to Color.White.copy(.48f), 1f to Color.Transparent),
+            ),
+        )
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White, modifier = Modifier.size(14.dp))
+            Image(androidx.compose.ui.res.painterResource(R.drawable.nav_search), null, Modifier.size(18.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(if (focused) Color.White.copy(.82f) else Color.White.copy(.68f)))
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.weight(1f).onFocusChanged { onFocusChange(it.isFocused) },
+                textStyle = TextStyle(color = Color.White.copy(.94f), fontSize = 16.sp, fontFamily = WavvFontFamily, fontWeight = FontWeight.Medium),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+                decorationBox = { field -> if (query.isEmpty()) Text("Songs, artists, albums...", color = Color.White.copy(.52f), fontSize = 16.sp); field() },
+            )
+            if (query.isNotEmpty() || focused || showClear) Box(
+                Modifier.size(24.dp).clip(CircleShape).background(Color.White.copy(.12f)).clickable {
+                    onQueryChange("")
+                    focusManager.clearFocus()
+                    onFocusChange(false)
+                },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White.copy(.78f), modifier = Modifier.size(15.dp))
+            }
         }
     }
 }

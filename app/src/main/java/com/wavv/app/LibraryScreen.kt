@@ -78,14 +78,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -149,6 +154,7 @@ internal fun LibraryScreen(
         LibraryPage.Album -> destination.subtitle
         else -> ""
     }
+    val bottomOverlayClearance = if (hasNowPlaying) 192.dp else 104.dp
 
     AnimatedContent(
         targetState = destination,
@@ -162,8 +168,8 @@ internal fun LibraryScreen(
             LibraryPage.Main -> Column(Modifier.fillMaxSize()) {
                 ScreenHeader("Library")
                 LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp),
+                    Modifier.fillMaxSize().padding(bottom = bottomOverlayClearance),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
                 ) {
                     item {
                         Column(Modifier.padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -239,6 +245,7 @@ internal fun LibraryScreen(
                 Column(Modifier.fillMaxSize()) {
                     LibraryBrowseHeader(
                         title = route.title.ifBlank { route.page.name.lowercase().replaceFirstChar(Char::uppercase) },
+                        fontFamily = expressiveFontFor(route.page),
                         showLayout = true,
                         layout = layout,
                         onBack = onBack,
@@ -256,14 +263,17 @@ internal fun LibraryScreen(
                         }
                     }
                     val cardRows = remember(orderedCards) { orderedCards.chunked(2) }
-                    LazyColumn(contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 16.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp)) {
+                    LazyColumn(
+                        Modifier.fillMaxSize().padding(bottom = bottomOverlayClearance),
+                        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 16.dp),
+                    ) {
                         if (layout == LibraryLayout.Grid) {
                             items(cardRows.size) { rowIndex ->
                                 Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     cardRows[rowIndex].forEach { card ->
                                         Column(Modifier.weight(1f).clickable(onClick = card.onClick)) {
                                             AlbumArt(card.artSong?.albumArtUri, Modifier.fillMaxWidth().aspectRatio(1f), card.title, 13.dp, card.artSong?.uri)
-                                            Text(card.title, Modifier.padding(top = 8.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(card.title, Modifier.padding(top = 8.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             if (route.page == LibraryPage.Playlists) {
                                                 val playlistId = card.id.toLongOrNull()
@@ -288,7 +298,7 @@ internal fun LibraryScreen(
                                 Row(Modifier.fillMaxWidth().clickable(onClick = card.onClick).padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                     AlbumArt(card.artSong?.albumArtUri, Modifier.size(58.dp), card.title, 10.dp, card.artSong?.uri)
                                     Column(Modifier.weight(1f)) {
-                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp)
                                     }
                                     if (route.page == LibraryPage.Playlists) {
@@ -315,6 +325,7 @@ internal fun LibraryScreen(
                 LibraryCollectionScreen(
                     title = if (route == destination) collectionTitle else route.title,
                     subtitle = if (route == destination) collectionSubtitle else route.subtitle,
+                    page = route.page,
                     songs = if (route == destination) collectionSongs else when (route.page) {
                         LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
                         LibraryPage.Songs -> songs
@@ -326,7 +337,7 @@ internal fun LibraryScreen(
                     favoriteIds = favoriteIds,
                     sortMode = sortMode,
                     playAsText = route.page == LibraryPage.Liked || route.page == LibraryPage.Songs || route.page == LibraryPage.Playlist,
-                    hasNowPlaying = hasNowPlaying,
+                    bottomOverlayClearance = bottomOverlayClearance,
                     isPlaylist = route.page == LibraryPage.Playlist,
                     isDetail = route.isDetail,
                     onBack = onBack,
@@ -393,9 +404,16 @@ internal fun LibraryScreen(
 
 private data class LibraryCard(val id: String, val title: String, val subtitle: String, val artSong: Song?, val onClick: () -> Unit)
 
+private fun expressiveFontFor(page: LibraryPage): FontFamily = when (page) {
+    LibraryPage.Artist, LibraryPage.Artists -> FontFamily.SansSerif
+    LibraryPage.Album, LibraryPage.Albums -> FontFamily.Serif
+    else -> WavvFontFamily
+}
+
 @Composable
 private fun LibraryBrowseHeader(
     title: String,
+    fontFamily: FontFamily,
     showLayout: Boolean,
     layout: LibraryLayout,
     onBack: () -> Unit,
@@ -412,7 +430,7 @@ private fun LibraryBrowseHeader(
         IconButton(onClick = onBack, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(.08f))) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Library", tint = Color.White)
         }
-        Text(title, Modifier.weight(1f).padding(start = 8.dp), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, Modifier.weight(1f).padding(start = 8.dp), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, fontFamily = fontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (showSort) IconButton(onClick = onSort, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Tune, contentDescription = "Sort", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp)) }
         if (showLayout) IconButton(onClick = onToggleLayout, modifier = Modifier.size(38.dp)) {
             Icon(if (layout == LibraryLayout.Grid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, contentDescription = if (layout == LibraryLayout.Grid) "Switch to list" else "Switch to grid", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp))
@@ -496,12 +514,13 @@ internal fun WavvBottomSheet(
 private fun LibraryCollectionScreen(
     title: String,
     subtitle: String,
+    page: LibraryPage,
     songs: List<Song>,
     playlists: List<UserPlaylist>,
     favoriteIds: Set<Long>,
     sortMode: String,
     playAsText: Boolean,
-    hasNowPlaying: Boolean,
+    bottomOverlayClearance: Dp,
     isPlaylist: Boolean,
     isDetail: Boolean,
     onBack: () -> Unit,
@@ -540,7 +559,7 @@ private fun LibraryCollectionScreen(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(WavvBackground)) {
-        val height = minOf(720.dp, maxWidth + 270.dp)
+        val height = minOf(620.dp, maxWidth + 170.dp)
         val artworkHeight = minOf(maxWidth, 480.dp)
         if (featured != null) {
             AnimatedContent(
@@ -559,8 +578,8 @@ private fun LibraryCollectionScreen(
         }
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(.12f), Color.Transparent, Color(0xD908070A)))))
         LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = if (hasNowPlaying) 260.dp else 176.dp),
+            Modifier.fillMaxSize().padding(bottom = bottomOverlayClearance),
+            contentPadding = PaddingValues(bottom = 16.dp),
         ) {
             item {
                 Box(Modifier.fillMaxWidth().height(height)) {
@@ -574,22 +593,25 @@ private fun LibraryCollectionScreen(
                             contentKey = { it.id },
                             label = "collection artwork",
                         ) { artSong ->
-                            AlbumArt(artSong,
-                                Modifier.padding(top = 54.dp).fillMaxWidth().height(artworkHeight),
-                                artSong.title,
-                                0.dp,
-                            )
+                            Box(Modifier.fillMaxWidth().height(artworkHeight).statusBarsPadding().edgeBlendedArtworkMask()) {
+                                AlbumArt(artSong, Modifier.fillMaxSize(), artSong.title, 0.dp)
+                                Box(
+                                    Modifier.fillMaxSize().background(
+                                        Brush.verticalGradient(
+                                            0f to Color.Transparent,
+                                            .54f to Color.Transparent,
+                                            1f to Color.Black.copy(alpha = .24f),
+                                        ),
+                                    ),
+                                )
+                            }
                         }
-                        Box(
-                            Modifier.padding(top = 54.dp).fillMaxWidth().height(artworkHeight)
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, WavvBackground.copy(.88f)))),
-                        )
                     }
                     Column(
                         Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black, fontFamily = expressiveFontFor(page), letterSpacing = if (page == LibraryPage.Album) .15.sp else (-.55).sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(subtitle, Modifier.padding(top = 3.dp), color = Color.White.copy(.58f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         featured?.let { Text("${it.title} · ${it.artist}", Modifier.padding(top = 4.dp), color = Color.White.copy(.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -703,3 +725,19 @@ private fun LibraryCollectionScreen(
         )
     }
 }
+
+private fun Modifier.edgeBlendedArtworkMask(): Modifier =
+    graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen).drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color.Transparent,
+                .12f to Color.Black.copy(alpha = .22f),
+                .30f to Color.Black,
+                .58f to Color.Black,
+                .84f to Color.Black.copy(alpha = .72f),
+                1f to Color.Transparent,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
