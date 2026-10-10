@@ -173,6 +173,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -598,6 +599,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var loopMode by rememberSaveable { mutableStateOf(LoopMode.Off) }
     var homeAtTop by rememberSaveable { mutableStateOf(true) }
     var homeStackExpanded by rememberSaveable { mutableStateOf(false) }
+    var homeStackIndex by rememberSaveable { mutableIntStateOf(0) }
     var libraryNavigation by rememberSaveable { mutableStateOf(LibraryNavigationState()) }
     val libraryDestination = libraryNavigation.destination
     var libraryLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
@@ -616,7 +618,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val activeSong = playbackState.song
     val homeStackExpansionProgress = animateFloatAsState(
         targetValue = if (tab == Tab.Home && homeStackExpanded && songs.isNotEmpty() && !showPlayer) 1f else 0f,
-        animationSpec = tween(540, easing = WavvMotionEasing),
+        animationSpec = tween(560, easing = WavvMotionEasing),
         label = "home stack expansion",
     )
     val miniPlayerExpanded = tab == Tab.Home && homeAtTop && !homeStackExpanded
@@ -669,7 +671,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     BackHandler(enabled = showPlayer || (tab == Tab.Home && homeStackExpanded) || (showLibrary && tab != Tab.Home)) {
         when {
             showPlayer -> closePlayer()
-            tab == Tab.Home && homeStackExpanded -> homeStackExpanded = false
+            tab == Tab.Home && homeStackExpanded -> {
+                homeStackExpanded = false
+                homeStackIndex = 0
+            }
             tab == Tab.Library && libraryDestination.page != LibraryPage.Main -> backLibrary()
             else -> tab = Tab.Home
         }
@@ -719,8 +724,13 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         hasNowPlaying = activeSong != null,
                         miniPlayerHeight = miniPlayerHeight,
                         stackExpanded = homeStackExpanded,
+                        stackIndex = homeStackIndex,
                         stackExpansionProgress = homeStackExpansionProgress,
-                        onStackExpandedChange = { homeStackExpanded = it },
+                        onStackExpandedChange = { expanded ->
+                            homeStackExpanded = expanded
+                            if (!expanded) homeStackIndex = 0
+                        },
+                        onStackIndexChange = { homeStackIndex = it },
                         smartMixes = smartMixes,
                         onPlayMix = startMix,
                         upNextSongs = upNextSongs,

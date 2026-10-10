@@ -2,18 +2,23 @@ package com.wavv.app
 
 import android.os.Build
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,7 +60,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -69,14 +73,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -97,9 +105,20 @@ import com.kyant.backdrop.effects.vibrancy
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import java.util.Locale
+import kotlin.math.abs
 
 private data class HomeStackEntry(val song: Song, val title: String)
-private data class HomeStackSection(val title: String, val entries: List<HomeStackEntry>)
+private data class HomeStackSection(
+    val title: String,
+    val entries: List<HomeStackEntry>,
+    val mix: SmartMix? = null,
+)
+
+internal fun homeSectionOrder(sectionCount: Int, stackIndex: Int): List<Int> {
+    if (sectionCount <= 0) return emptyList()
+    val start = stackIndex.coerceIn(0, sectionCount - 1)
+    return (start until sectionCount).toList() + (0 until start).toList()
+}
 
 internal fun primaryHomeShelf(recentSongs: List<Song>, recentlyAdded: List<Song>): Pair<String, List<Song>> =
     if (recentSongs.isNotEmpty()) "Recently Played" to recentSongs else "Recently Added" to recentlyAdded
@@ -122,8 +141,10 @@ internal fun HomeScreen(
     hasNowPlaying: Boolean,
     miniPlayerHeight: Dp,
     stackExpanded: Boolean,
+    stackIndex: Int,
     stackExpansionProgress: State<Float>,
     onStackExpandedChange: (Boolean) -> Unit,
+    onStackIndexChange: (Int) -> Unit,
     recentSongs: List<Song> = emptyList(),
     upNextSongs: List<Song> = emptyList(),
     smartMixes: List<SmartMix> = emptyList(),
@@ -143,14 +164,19 @@ internal fun HomeScreen(
             .sortedBy { it.artist.lowercase(Locale.ROOT) }
     }
     val recentlyAdded = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
+    val allSongs = remember(songs) { songs.sortedBy { it.title.lowercase(Locale.ROOT) } }
     val (primaryShelfTitle, primaryShelfSongs) = remember(recentSongs, recentlyAdded) {
         primaryHomeShelf(recentSongs, recentlyAdded)
     }
     // shortcut: Home shelves show at most eight entries; use Library to browse the full catalog.
-    val homeSections = remember(primaryShelfTitle, primaryShelfSongs, likedSongs, albumSongs, artistSongs, recentlyAdded, recentSongs) {
+    val homeSections = remember(primaryShelfTitle, primaryShelfSongs, likedSongs, albumSongs, artistSongs, recentlyAdded, recentSongs, smartMixes, allSongs) {
         buildList {
             if (primaryShelfSongs.isNotEmpty()) {
                 add(HomeStackSection(primaryShelfTitle, primaryShelfSongs.take(8).map { HomeStackEntry(it, it.title) }))
+            }
+            smartMixes.forEach { mix ->
+                val entries = mix.songs.take(8).map { HomeStackEntry(it, it.title) }
+                if (entries.isNotEmpty()) add(HomeStackSection(mix.title, entries, mix))
             }
             if (likedSongs.isNotEmpty()) {
                 add(HomeStackSection("Liked Songs", likedSongs.take(8).map { HomeStackEntry(it, it.title) }))
@@ -163,6 +189,9 @@ internal fun HomeScreen(
             }
             if (recentSongs.isNotEmpty() && recentlyAdded.isNotEmpty()) {
                 add(HomeStackSection("Recently Added", recentlyAdded.take(8).map { HomeStackEntry(it, it.title) }))
+            }
+            if (allSongs.isNotEmpty()) {
+                add(HomeStackSection("Songs", allSongs.take(8).map { HomeStackEntry(it, it.title) }))
             }
         }
     }
@@ -184,6 +213,7 @@ internal fun HomeScreen(
             val feedBottomClearance = if (homeSections.isEmpty()) navigationBarBottom + 104.dp else stackClearance
 
             Box(Modifier.fillMaxSize().layerBackdrop(homeBackdrop)) {
+                HomeAccentGlow(Modifier.align(Alignment.BottomCenter).offset(y = (-190).dp))
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize().padding(bottom = feedBottomClearance).graphicsLayer {
@@ -216,9 +246,6 @@ internal fun HomeScreen(
                                 onNavigateToArtist = onNavigateToArtist,
                             )
                         }
-                        if (smartMixes.isNotEmpty()) {
-                            items(smartMixes, key = SmartMix::id) { mix -> SmartMixShelf(mix, onPlay, onPlayMix) }
-                        }
                     }
                 }
             }
@@ -226,14 +253,17 @@ internal fun HomeScreen(
                 HomeSectionsStack(
                     sections = homeSections,
                     expanded = stackExpanded,
+                    stackIndex = stackIndex.coerceIn(0, (homeSections.size - 1).coerceAtLeast(0)),
                     expansionProgress = stackExpansionProgress,
                     hasNowPlaying = hasNowPlaying,
                     miniPlayerHeight = miniPlayerHeight,
                     navigationBarBottom = navigationBarBottom,
                     backdrop = homeBackdrop,
                     onExpandedChange = onStackExpandedChange,
+                    onStackIndexChange = { onStackIndexChange(it.coerceIn(0, homeSections.lastIndex.coerceAtLeast(0))) },
                     onExpandPlayer = onExpandPlayer,
                     onPlay = onPlay,
+                    onPlayMix = onPlayMix,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -245,19 +275,25 @@ internal fun HomeScreen(
 private fun HomeSectionsStack(
     sections: List<HomeStackSection>,
     expanded: Boolean,
+    stackIndex: Int,
     expansionProgress: State<Float>,
     hasNowPlaying: Boolean,
     miniPlayerHeight: Dp,
     navigationBarBottom: Dp,
     backdrop: Backdrop,
     onExpandedChange: (Boolean) -> Unit,
+    onStackIndexChange: (Int) -> Unit,
     onExpandPlayer: () -> Unit,
     onPlay: (Song) -> Unit,
+    onPlayMix: (SmartMix) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberScrollState()
     LaunchedEffect(expanded) {
         if (!expanded) scrollState.scrollTo(0)
+    }
+    val orderedSections = remember(sections, stackIndex) {
+        homeSectionOrder(sections.size, stackIndex).map(sections::get)
     }
     val collapseAtTop = remember(scrollState, expanded, onExpandedChange) {
         object : NestedScrollConnection {
@@ -272,144 +308,169 @@ private fun HomeSectionsStack(
     }
     BoxWithConstraints(modifier.fillMaxSize().clipToBounds()) {
         val density = LocalDensity.current
+        val densityScale = density.density
         val cardHeight = 144.dp
         val peek = 40.dp
         val expandedTop = if (hasNowPlaying) 76.dp else 12.dp
         val collapsedBottomClearance = navigationBarBottom +
-            if (hasNowPlaying) 108.dp + miniPlayerHeight else 96.dp
-        val collapsedTop = (
-            maxHeight - collapsedBottomClearance - cardHeight - peek * (sections.size - 1).coerceAtMost(1)
-        ).coerceAtLeast(expandedTop)
+            if (hasNowPlaying) 108.dp + miniPlayerHeight else 80.dp
+        val expandedHeight = (maxHeight - collapsedBottomClearance).coerceAtLeast(cardHeight + peek)
+        val expandedHeightPx = with(density) { expandedHeight.toPx() }
+        val cardHeightPx = with(density) { cardHeight.toPx() }
         val rowHeight = cardHeight + 12.dp
+        val rowHeightPx = with(density) { rowHeight.toPx() }
+        val peekPx = with(density) { peek.toPx() }
+        val expandedTopPx = with(density) { expandedTop.toPx() }
+        val collapsedTop = expandedHeight - cardHeight - peek
+        val collapsedTopPx = with(density) { collapsedTop.toPx() }
+        val stackBoundaryPx = expandedHeightPx - cardHeightPx - peekPx - with(density) { 24.dp.toPx() }
 
-        Column(
-            Modifier.fillMaxSize()
-                .nestedScroll(collapseAtTop)
-                .then(if (expanded) Modifier.verticalScroll(scrollState) else Modifier)
-                .padding(horizontal = 20.dp),
-        ) {
-            Spacer(Modifier.height(expandedTop))
-            sections.forEachIndexed { index, section ->
-                val rowTop = expandedTop + rowHeight * index
-                val tuckedTop = collapsedTop + peek * index.coerceAtMost(2)
-                val tuckedOffset = tuckedTop - rowTop
-                val tuckedAlpha = when (index) {
-                    0 -> 1f
-                    1 -> 1f
-                    else -> 0f
-                }
-                Box(
-                    Modifier.fillMaxWidth().height(rowHeight)
-                        .zIndex((sections.size - index).toFloat())
-                        .graphicsLayer {
-                            val progress = expansionProgress.value.coerceIn(0f, 1f)
-                            translationY = with(density) { tuckedOffset.toPx() * (1f - progress) }
-                            alpha = tuckedAlpha + (1f - tuckedAlpha) * progress
-                            val scale = 1f - .025f * (1f - progress) * if (index == 0) 0f else 1f
-                            scaleX = scale
-                            scaleY = scale
-                        }
-                        .pointerInput(expanded, index, onExpandedChange, onExpandPlayer, hasNowPlaying) {
-                            if (!expanded && index == 0) {
-                                var totalDrag = 0f
-                                var handled = false
-                                detectVerticalDragGestures(
-                                    onDragStart = {
-                                        totalDrag = 0f
-                                        handled = false
-                                    },
-                                    onVerticalDrag = { change, dragAmount ->
-                                        totalDrag += dragAmount
-                                        if (!handled && totalDrag < -viewConfiguration.touchSlop) {
-                                            handled = true
-                                            onExpandedChange(true)
-                                            change.consume()
-                                        } else if (!handled && totalDrag > viewConfiguration.touchSlop && hasNowPlaying) {
-                                            handled = true
-                                            onExpandPlayer()
-                                            change.consume()
+        Box(Modifier.fillMaxWidth().height(expandedHeight).clipToBounds()) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .nestedScroll(collapseAtTop)
+                    .then(if (expanded) Modifier.verticalScroll(scrollState, overscrollEffect = null) else Modifier)
+                    .padding(horizontal = 20.dp),
+            ) {
+                Spacer(Modifier.height(expandedTop))
+                orderedSections.forEachIndexed { displayIndex, section ->
+                    val active = displayIndex == 0
+                    val next = displayIndex == 1
+                    val leaving = stackIndex > 0 && displayIndex == orderedSections.lastIndex
+                    val compactVisible = active || next || leaving
+                    val compactY = when {
+                        active -> 0.dp
+                        next -> peek
+                        leaving -> -cardHeight
+                        else -> (displayIndex * 144).dp
+                    }
+                    val compactScale = if (active) 1f else .94f
+                    val compactAlpha = if (compactVisible) 1f else 0f
+                    val compactTopForCard = with(density) { compactY.toPx() }
+                    val compactCardTop = collapsedTopPx + compactTopForCard
+
+                    Box(
+                        Modifier.fillMaxWidth().height(rowHeight)
+                            .zIndex((orderedSections.size - displayIndex).toFloat()),
+                    ) {
+                        if (expanded || compactVisible) {
+                            Box(
+                                Modifier.fillMaxWidth().height(cardHeight).graphicsLayer {
+                                    val layerProgress = expansionProgress.value.coerceIn(0f, 1f)
+                                    val layerNaturalTop = expandedTopPx + displayIndex * rowHeightPx - scrollState.value
+                                    val layerTuck = ((layerNaturalTop - stackBoundaryPx) / rowHeightPx).coerceIn(0f, 1f)
+                                    val layerEasedTuck = layerTuck * layerTuck * (3f - 2f * layerTuck)
+                                    val layerExpandedTop = if (layerNaturalTop > stackBoundaryPx) {
+                                        layerNaturalTop + (stackBoundaryPx + peekPx - layerNaturalTop) * layerEasedTuck
+                                    } else layerNaturalTop
+                                    val targetScale = compactScale + (1f - .06f * layerEasedTuck - compactScale) * layerProgress
+                                    alpha = compactAlpha + (1f - compactAlpha) * layerProgress
+                                    scaleX = targetScale
+                                    scaleY = targetScale
+                                    translationY = compactCardTop * (1f - layerProgress) + layerExpandedTop * layerProgress - layerNaturalTop
+                                }.pointerInput(
+                                    expanded,
+                                    compactVisible,
+                                    stackIndex,
+                                    orderedSections.size,
+                                    hasNowPlaying,
+                                ) {
+                                    if (!expanded && compactVisible) {
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                            val velocityTracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
+                                            var handled = false
+                                            var expandingWithGesture = false
+                                            var lastPosition = down.position
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                velocityTracker.addPosition(change.uptimeMillis, change.position)
+                                                val pointerDelta = change.position - lastPosition
+                                                lastPosition = change.position
+                                                val delta = change.position - down.position
+                                                val velocity = velocityTracker.calculateVelocity()
+                                                val verticalIntent = abs(delta.y) > abs(delta.x) * 1.15f ||
+                                                    abs(velocity.y) > abs(velocity.x) * 1.15f
+                                                val crossedSlop = abs(delta.y) > viewConfiguration.touchSlop
+                                                val fastFlick = abs(velocity.y) > 650f * densityScale && abs(delta.y) > 5f * densityScale
+                                                if (!handled && verticalIntent && (crossedSlop || fastFlick)) {
+                                                    handled = true
+                                                    change.consume()
+                                                    val swipeDirection = if (fastFlick && !crossedSlop) velocity.y else delta.y
+                                                    if (swipeDirection < 0f) {
+                                                        onExpandedChange(true)
+                                                        expandingWithGesture = true
+                                                        if (pointerDelta.y < 0f) scrollState.dispatchRawDelta(-pointerDelta.y)
+                                                    } else if (hasNowPlaying && stackIndex == 0) {
+                                                        onExpandPlayer()
+                                                    } else {
+                                                        onStackIndexChange((stackIndex - 1).coerceAtLeast(0))
+                                                    }
+                                                } else if (handled) {
+                                                    if (expandingWithGesture && pointerDelta.y < 0f) {
+                                                        scrollState.dispatchRawDelta(-pointerDelta.y)
+                                                    }
+                                                    change.consume()
+                                                }
+                                                if (!change.pressed) break
+                                            }
                                         }
-                                    },
+                                    }
+                                }.zIndex((orderedSections.size - displayIndex).toFloat())
+                                    .clip(RoundedCornerShape(28.dp)),
+                            ) {
+                                HomeStackCard(
+                                    section = section,
+                                    enabled = expanded || active,
+                                    backdrop = backdrop,
+                                    onToggleExpanded = { onExpandedChange(!expanded) },
+                                    onPlay = onPlay,
+                                    onPlayMix = onPlayMix,
+                                    modifier = Modifier.fillMaxSize(),
                                 )
                             }
-                        },
-                ) {
-                    if (expanded || index < 2) {
-                        HomeStackCard(
-                            section = section,
-                            enabled = expanded || index == 0,
-                            frontCard = index == 0,
-                            expanded = expanded,
-                            backdrop = backdrop,
-                            onToggleExpanded = { onExpandedChange(!expanded) },
-                            onPlay = onPlay,
-                            modifier = Modifier.fillMaxWidth().height(cardHeight),
-                        )
+                        }
                     }
                 }
+                Spacer(Modifier.height(peek - 12.dp))
             }
-            Spacer(Modifier.height(navigationBarBottom + 96.dp))
         }
     }
 }
 
 @Composable
-private fun SmartMixShelf(
-    mix: SmartMix,
-    onPlaySong: (Song) -> Unit,
-    onPlayMix: (SmartMix) -> Unit,
-) {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(
-                Brush.linearGradient(
-                    listOf(Color(0xB52A1822), Color(0xB8181820), Color(0xB813141A)),
-                ),
-            )
-            .border(1.dp, Color.White.copy(.12f), RoundedCornerShape(24.dp))
-            .animateContentSize()
-            .padding(start = 16.dp, top = 14.dp, bottom = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                ShelfLabel("WAVV MIX")
-                Text(mix.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text(mix.subtitle, color = WavvMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            TextButton(onClick = { onPlayMix(mix) }) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = WavvPink, modifier = Modifier.size(18.dp))
-                Text("Play mix", color = WavvPink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(end = 16.dp)) {
-            items(mix.songs, key = Song::id) { song ->
-                Column(Modifier.width(110.dp).clickable { onPlaySong(song) }) {
-                    AlbumArt(song, Modifier.size(110.dp), song.title, 12.dp)
-                    Text(song.title, Modifier.padding(top = 7.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artist, color = WavvMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        }
-    }
+private fun HomeAccentGlow(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "home accent glow")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(6_200, easing = LinearEasing), RepeatMode.Reverse),
+        label = "home accent phase",
+    )
+    val color = Color.hsv((318f + phase * 60f) % 360f, .56f, .58f, .20f)
+    Box(
+        modifier.size(170.dp).blur(24.dp).background(
+            Brush.radialGradient(0f to color, .58f to color.copy(alpha = .08f), 1f to Color.Transparent),
+            CircleShape,
+        ),
+    )
 }
 
 @Composable
 private fun HomeStackCard(
     section: HomeStackSection,
     enabled: Boolean,
-    frontCard: Boolean,
-    expanded: Boolean,
     backdrop: Backdrop,
     onToggleExpanded: () -> Unit,
     onPlay: (Song) -> Unit,
+    onPlayMix: (SmartMix) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(28.dp)
     BoxWithConstraints(
         modifier.clip(shape)
-            .background(Brush.linearGradient(listOf(Color(0xD8272029), Color(0xD1141720), Color(0xCA0B0D12))))
+            .background(Color(0x761E2024))
             .drawBackdrop(
                 backdrop = backdrop,
                 shape = { shape },
@@ -418,20 +479,14 @@ private fun HomeStackCard(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) blur(34.dp.toPx())
                 },
                 onDrawSurface = {
-                    drawRect(
-                        Brush.linearGradient(
-                            listOf(Color(0xEA241D26), Color(0xF20F1118)),
-                            start = Offset.Zero,
-                            end = Offset(size.width, size.height),
-                        ),
-                    )
+                    drawRect(Color(0x761E2024))
                 },
             )
             .drawWithCache {
-                val gloss = Brush.linearGradient(listOf(Color.White.copy(.09f), Color.White.copy(.02f), Color.Transparent))
+                val gloss = Brush.linearGradient(listOf(Color.White.copy(.055f), Color.White.copy(.012f), Color.Transparent))
                 onDrawBehind { drawRect(gloss) }
             }
-            .border(1.dp, Brush.verticalGradient(0f to Color.White.copy(.28f), .45f to WavvPink.copy(.18f), 1f to Color.White.copy(.08f)), shape),
+            .border(1.dp, Color.White.copy(.12f), shape),
     ) {
         val tileWidth = ((maxWidth - 48.dp) / 3).coerceIn(64.dp, 94.dp)
         Column(
@@ -444,29 +499,32 @@ private fun HomeStackCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(section.title.uppercase(), color = Color.White, fontSize = 15.sp, lineHeight = 18.sp, fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black, letterSpacing = .55.sp, maxLines = 1)
-                if (frontCard) {
-                    Text(
-                        if (expanded) "Swipe down to close" else "Swipe to explore",
-                        Modifier.clickable(role = Role.Button, onClick = onToggleExpanded),
-                        color = Color.White.copy(.4f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
-                }
+                Text(
+                    if (section.mix == null) "Swipe to explore" else "Play mix",
+                    Modifier.clickable(role = Role.Button) {
+                        section.mix?.let(onPlayMix) ?: onToggleExpanded()
+                    },
+                    color = Color.White.copy(.4f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 3.dp)) {
                 items(section.entries, key = { it.song.id }) { entry ->
                     Column(
                         Modifier.width(tileWidth).clickable(enabled = enabled, role = Role.Button) { onPlay(entry.song) },
                     ) {
-                        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp))) {
+                        Box(Modifier.fillMaxWidth().aspectRatio(1f)
+                            .shadow(5.dp, RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(.08f))) {
                             AlbumArt(entry.song, Modifier.fillMaxSize(), contentDescription = entry.title, radius = 14.dp)
                             Box(
-                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(34.dp)
-                                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(.88f)))),
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
+                                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(.9f)))),
                             )
-                            Text(entry.title, Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 7.dp, vertical = 6.dp), color = Color.White, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(entry.title, Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 7.dp, vertical = 7.dp), color = Color.White, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -565,26 +623,28 @@ private fun HeroCard(
     onShowActions: () -> Unit,
 ) {
     val shape = RoundedCornerShape(20.dp)
+    val cardBackdrop = rememberLayerBackdrop()
     Box(
         Modifier.fillMaxWidth().aspectRatio(if (compactHero) 1.05f else .95f).clip(shape)
-            .border(1.dp, Color.White.copy(.14f), shape)
             .combinedClickable(
                 onClick = {},
                 onLongClickLabel = "Song actions",
                 onLongClick = onShowActions,
             ),
     ) {
-        AlbumArt(song, Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1f), song.title, 0.dp)
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.68f).background(
-                Brush.verticalGradient(
-                    0f to Color.Transparent,
-                    .28f to Color.Black.copy(.48f),
-                    .66f to Color.Black.copy(.84f),
-                    1f to Color.Black.copy(.96f),
+        Box(Modifier.fillMaxSize().layerBackdrop(cardBackdrop)) {
+            AlbumArt(song, Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1f), song.title, 0.dp)
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.68f).background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        .28f to Color.Black.copy(.48f),
+                        .66f to Color.Black.copy(.84f),
+                        1f to Color.Black.copy(.96f),
+                    ),
                 ),
-            ),
-        )
+            )
+        }
         Column(
             Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -594,7 +654,7 @@ private fun HeroCard(
                     Text(song.title.uppercase(), color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                GlassPill(onClick = { onPlay(song) }, label = "Play")
+                GlassPill(cardBackdrop, onClick = { onPlay(song) }, onLongClick = onShowActions, label = "Play")
             }
             AnimatedContent(
                 targetState = queue.firstOrNull(),
@@ -668,17 +728,31 @@ private fun HomeSongActionRow(icon: ImageVector, title: String, onClick: () -> U
 }
 
 @Composable
-private fun GlassPill(onClick: () -> Unit, label: String) {
+private fun GlassPill(backdrop: Backdrop, onClick: () -> Unit, onLongClick: () -> Unit, label: String) {
+    val shape = CircleShape
     Box(
-        Modifier.width(86.dp).height(42.dp).clip(CircleShape)
-            .background(Color.White.copy(.18f))
-            .border(1.dp, Color.White.copy(.28f), CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
+        Modifier.width(86.dp).height(42.dp).clip(shape)
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { shape },
+                effects = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) vibrancy()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) blur(22.dp.toPx())
+                },
+                onDrawSurface = { drawRect(Color(0x906A6A6A)) },
+            )
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClickLabel = "Song actions",
+                onLongClick = onLongClick,
+            )
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(5.dp))
             Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Cursive)
         }
     }

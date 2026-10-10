@@ -18,6 +18,13 @@ class HomeScreenContentTest {
         assertEquals("Recently Added" to added, primaryHomeShelf(emptyList(), added))
     }
 
+    @Test
+    fun stackOrderStartsWithSelectedSectionAndClampsRestoredIndex() {
+        assertEquals(listOf(2, 3, 0, 1), homeSectionOrder(sectionCount = 4, stackIndex = 2))
+        assertEquals(listOf(2, 0, 1), homeSectionOrder(sectionCount = 3, stackIndex = Int.MAX_VALUE))
+        assertEquals(emptyList<Int>(), homeSectionOrder(sectionCount = 0, stackIndex = 4))
+    }
+
     private fun song(id: Long) = Song(
         id = id,
         title = "Track $id",
