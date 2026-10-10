@@ -59,12 +59,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
-import androidx.compose.foundation.gestures.AnchoredDraggableState
-import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.anchoredDraggable
-import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -182,7 +179,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -1126,6 +1122,26 @@ private fun BottomNav(
 ) {
     val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
     val activeIndex = tabs.indexOfFirst { it.first == active }
+    val currentOnChange by rememberUpdatedState(onChange)
+    var pillOffsetPx by remember { mutableFloatStateOf(0f) }
+    var pillTargetTab by remember { mutableStateOf(active) }
+    var pillIsDragging by remember { mutableStateOf(false) }
+    var measuredItemWidthPx by remember { mutableFloatStateOf(0f) }
+    var measuredMaxOffsetPx by remember { mutableFloatStateOf(0f) }
+    val itemWidthForInput = rememberUpdatedState(measuredItemWidthPx)
+    val maxOffsetForInput = rememberUpdatedState(measuredMaxOffsetPx)
+    val navDragState = rememberDraggableState { delta ->
+        pillOffsetPx = (pillOffsetPx + delta).coerceIn(0f, maxOffsetForInput.value)
+    }
+    val dragGlowProgress by animateFloatAsState(
+        targetValue = if (pillIsDragging) 1f else 0f,
+        animationSpec = spring(dampingRatio = .86f, stiffness = 560f),
+        label = "navigation pill liquid state",
+    )
+    val tabSpring = spring<Float>(
+        dampingRatio = .88f,
+        stiffness = 520f,
+    )
     val captureState = remember { AtomicBoolean(false) }
     Box(
         modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 4.dp).height(60.dp)
@@ -1139,24 +1155,87 @@ private fun BottomNav(
             tint = HomeFrostedGlass,
             modifier = Modifier.matchParentSize(),
         )
-        BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
-            val itemWidth = maxWidth / tabs.size
-            val highlightOffset by animateDpAsState(
-                targetValue = itemWidth * activeIndex,
-                animationSpec = spring(
-                    dampingRatio = .9f,
-                    stiffness = 520f,
-                    visibilityThreshold = .5.dp,
+        BoxWithConstraints(
+            Modifier.fillMaxSize().padding(4.dp)
+                .draggable(
+                    state = navDragState,
+                    orientation = Orientation.Horizontal,
+                    onDragStarted = { pillIsDragging = true },
+                    onDragStopped = {
+                        val itemWidthPx = itemWidthForInput.value
+                        if (itemWidthPx > 0f) {
+                            // Settle on the tab under the pill when the finger lifts.
+                            // Ignoring fling velocity prevents quick swipes overshooting.
+                            val targetIndex = ((pillOffsetPx / itemWidthPx) + .5f)
+                                .toInt().coerceIn(tabs.indices)
+                            val destination = tabs[targetIndex].first
+                            pillTargetTab = destination
+                            currentOnChange(destination)
+                        }
+                        pillIsDragging = false
+                    },
                 ),
-                label = "tab highlight position",
-            )
+        ) {
+            val itemWidth = maxWidth / tabs.size
+            val itemWidthPx = with(LocalDensity.current) { itemWidth.toPx() }
+            SideEffect {
+                measuredItemWidthPx = itemWidthPx
+                measuredMaxOffsetPx = itemWidthPx * tabs.lastIndex
+            }
+            LaunchedEffect(active) {
+                pillTargetTab = active
+            }
+            LaunchedEffect(pillTargetTab, itemWidthPx, pillIsDragging) {
+                if (!pillIsDragging && itemWidthPx > 0f) {
+                    val targetIndex = tabs.indexOfFirst { it.first == pillTargetTab }.coerceAtLeast(0)
+                    animate(
+                        initialValue = pillOffsetPx,
+                        targetValue = itemWidthPx * targetIndex,
+                        animationSpec = tabSpring,
+                    ) { value, _ ->
+                        pillOffsetPx = value
+                    }
+                }
+            }
             Box(Modifier.matchParentSize()) {
+                val pillBaseModifier = Modifier.align(Alignment.CenterStart)
+                        .offset {
+                            IntOffset(
+                                x = pillOffsetPx.roundToInt(),
+                                y = 0,
+                            )
+                        }
+                        .fillMaxWidth(1f / tabs.size)
+                        .fillMaxHeight()
+                        .graphicsLayer {
+                            val position = if (itemWidthPx > 0f) {
+                                (pillOffsetPx / itemWidthPx).coerceIn(0f, tabs.lastIndex.toFloat())
+                            } else {
+                                activeIndex.toFloat()
+                            }
+                            val progress = position - floor(position)
+                            val stretch = sin(progress * PI).toFloat().coerceIn(0f, 1f)
+                            scaleX = 1f + stretch * .14f * dragGlowProgress
+                            scaleY = 1f - stretch * .06f * dragGlowProgress
+                        }
                 Box(
-                    Modifier.align(Alignment.CenterStart).offset(x = highlightOffset).width(itemWidth).fillMaxHeight()
-                        .clip(CircleShape)
-                        .background(Color(0x1FFFEBE0))
-                        .border(1.dp, Color.White.copy(.1f), CircleShape),
-                )
+                    pillBaseModifier
+                        .clip(CircleShape),
+                ) {
+                    // Deformation changes with the gesture; the frosted fill and
+                    // border stay identical before, during, and after dragging.
+                    // This software-safe capture avoids the RuntimeShader crash on drag.
+                    FrostedBackdrop(
+                        captureState,
+                        blurRadiusDp = 22f,
+                        tint = Color(0x55101013),
+                        modifier = Modifier.matchParentSize(),
+                    )
+                    Box(
+                        Modifier.matchParentSize()
+                            .border(1.dp, Color.White.copy(.11f), CircleShape),
+                    )
+                }
             }
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 tabs.forEach { (tab, label) ->
@@ -1167,7 +1246,10 @@ private fun BottomNav(
                     val iconScale by itemTransition.animateFloat(label = "$label icon scale") { isSelected -> if (isSelected) 1.06f else 1f }
                     val iconOffsetY by itemTransition.animateFloat(label = "$label icon offset") { isSelected -> if (isSelected) -1f else 0f }
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().clip(CircleShape).clickable(role = Role.Tab) { onChange(tab) },
+                        Modifier.weight(1f).fillMaxHeight().clip(CircleShape).clickable(role = Role.Tab) {
+                            pillTargetTab = tab
+                            currentOnChange(tab)
+                        },
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
