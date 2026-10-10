@@ -214,7 +214,7 @@ internal class AudioPcmDecoder(private val context: Context) {
                 MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
                 MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     outputFormat = codec.outputFormat
-                    val changedSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE, sourceRate)
+                    val changedSampleRate = outputFormat.intOrDefault(MediaFormat.KEY_SAMPLE_RATE, sourceRate)
                     require(changedSampleRate > 0) { "Invalid decoded sample rate" }
                     check(decodedSampleCount == 0L || changedSampleRate == outputSampleRate) {
                         "Decoded sample rate changed while streaming audio"
@@ -262,8 +262,8 @@ internal class AudioPcmDecoder(private val context: Context) {
         monoSamples: FloatArray,
         resampler: StreamingAudioResampler,
     ): Long {
-        val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT, sourceChannels)
-        val encoding = format.getInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+        val channels = format.intOrDefault(MediaFormat.KEY_CHANNEL_COUNT, sourceChannels)
+        val encoding = format.intOrDefault(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
         require(channels > 0) { "Invalid decoded PCM channel count" }
         val bytesPerSample = when (encoding) {
             AudioFormat.ENCODING_PCM_8BIT -> 1
@@ -650,6 +650,9 @@ private fun normalize(values: FloatArray): FloatArray {
     require(norm.isFinite() && norm > 0.0) { "DCLAP produced an invalid embedding" }
     return FloatArray(values.size) { index -> (values[index] / norm).toFloat() }
 }
+
+private fun MediaFormat.intOrDefault(key: String, defaultValue: Int): Int =
+    if (containsKey(key)) getInteger(key) else defaultValue
 
 private fun FloatArray.toByteArray(): ByteArray {
     val bytes = ByteBuffer.allocate(size * Float.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)

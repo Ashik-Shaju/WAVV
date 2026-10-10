@@ -64,7 +64,7 @@ class DclapEndToEndTest {
             assertEquals(songs.size to songs.size, cachedProgress.last())
 
             DclapTextSearch(context).use { textSearch ->
-                val results = textSearch.search("music", songs, store, limit = 5)
+                val results = textSearch.search("music", songs, store)
                 assertTrue("DCLAP text search returned no indexed songs", results.isNotEmpty())
             }
         } finally {

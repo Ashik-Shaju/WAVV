@@ -627,7 +627,9 @@ private fun HeroCard(
     Box(
         Modifier.fillMaxWidth().aspectRatio(if (compactHero) 1.05f else .95f).clip(shape)
             .combinedClickable(
-                onClick = {},
+                role = Role.Button,
+                onClickLabel = "Play ${song.title}",
+                onClick = { onPlay(song) },
                 onLongClickLabel = "Song actions",
                 onLongClick = onShowActions,
             ),

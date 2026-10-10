@@ -146,6 +146,7 @@ class LibraryViewModel(
                             WorkInfo.State.CANCELLED -> publishIndexError("Music analysis was canceled")
                             else -> Unit
                         }
+                        observeDiscovery((state.value as? LibraryUiState.Ready)?.songs.orEmpty())
                     }
                     WorkInfo.State.FAILED -> publishIndexError(
                         workInfo.outputData.getString(LibraryIndexWorker.KEY_ERROR) ?: "Could not refresh the music library",

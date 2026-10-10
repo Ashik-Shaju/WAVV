@@ -319,7 +319,9 @@ class MediaLibraryRepository(context: Context) {
             retriever.setDataSource(metadataContext, uri)
             container = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
             codec = container?.substringAfterLast('/')?.ifBlank { null }
-            sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+            sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+            } else null
             title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orFallback(fallbackTitle)
             artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orFallback(artist)
             album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orFallback(album)
