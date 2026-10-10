@@ -75,6 +75,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
@@ -238,13 +239,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
-import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -937,6 +933,7 @@ internal fun ScreenHeader(
     waveform: Boolean = false,
     isPlaying: Boolean = false,
     showAmbient: Boolean = true,
+    trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
     val brandHome = title == "Wavv" && !showAmbient
     Box(
@@ -997,6 +994,7 @@ internal fun ScreenHeader(
                 fontFamily = if (brandHome) FontFamily.SansSerif else FontFamily.Default,
             )
             if (waveform) Waveform(isPlaying)
+            trailingContent()
         }
         if (!waveform) {
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(1.dp).background(Color.White.copy(.06f)))

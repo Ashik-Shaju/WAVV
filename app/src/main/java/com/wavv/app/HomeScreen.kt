@@ -174,6 +174,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
@@ -452,6 +453,10 @@ private fun HomeStackPanel(
     val density = LocalDensity.current
     val densityScale = density.density
     val scrollState = rememberScrollState()
+    val currentStackListExpanded = rememberUpdatedState(stackListExpanded)
+    val currentOnStackListExpandedChange = rememberUpdatedState(onStackListExpandedChange)
+    val currentOnIndexChange = rememberUpdatedState(onIndexChange)
+    val currentOnExpandPlayer = rememberUpdatedState(onExpandPlayer)
     val collapseAtTop = remember(scrollState, stackListExpanded) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
@@ -493,8 +498,6 @@ private fun HomeStackPanel(
         // Moving the handoff boundary up makes the card finish its curve before that layer.
         val stackPathClearancePx = with(density) { 24.dp.toPx() }
         val stackBoundaryPx = expandedHeightPx - cardHeightPx - stackPeekPx - stackPathClearancePx
-        val expansion = expansionProgress.value.coerceIn(0f, 1f)
-
         Box(Modifier.fillMaxWidth().height(expandedHeight).clipToBounds()) {
             val listGestureModifier = if (stackListExpanded) {
                 Modifier.nestedScroll(collapseAtTop)
@@ -518,20 +521,39 @@ private fun HomeStackPanel(
                     }
                     val compactScale = if (active && !playerExpanded) 1f else .94f
                     val compactAlpha = if (compactVisible) 1f else 0f
-                    val layoutProgress = expansionProgress.value.coerceIn(0f, 1f)
-                    val layoutNaturalTop = topInsetPx + displayIndex * rowHeightPx - scrollState.value
-                    val layoutTuck = ((layoutNaturalTop - stackBoundaryPx) / rowHeightPx).coerceIn(0f, 1f)
-                    val layoutEasedTuck = layoutTuck * layoutTuck * (3f - 2f * layoutTuck)
-                    val layoutTuckedTop = stackBoundaryPx + stackPeekPx
-                    val layoutExpandedTop = if (layoutNaturalTop > stackBoundaryPx) {
-                        layoutNaturalTop + (layoutTuckedTop - layoutNaturalTop) * layoutEasedTuck
-                    } else layoutNaturalTop
                     val compactTopForCard = with(density) { compactY.toPx() }
-                    val collapsedCardTop = compactTopPx + compactTopForCard
-                    val backdropCardTop = collapsedCardTop * (1f - layoutProgress) + layoutExpandedTop * layoutProgress
-                    val backdropCardAlpha = compactAlpha + (1f - compactAlpha) * layoutProgress
-                    val cardBackdropVisible = backdropCardAlpha > .02f &&
-                        backdropCardTop < expandedHeightPx && backdropCardTop + cardHeightPx > 0f
+                    // Scroll offsets update every frame. Keep this visibility gate derived so
+                    // only cards crossing the backdrop viewport boundary recompose; each card's
+                    // continuous position/scale remains in its graphicsLayer block below.
+                    val cardBackdropVisible by remember(
+                        scrollState,
+                        expansionProgress,
+                        displayIndex,
+                        compactAlpha,
+                        compactTopForCard,
+                        expandedHeightPx,
+                        compactTopPx,
+                        topInsetPx,
+                        rowHeightPx,
+                        stackBoundaryPx,
+                        stackPeekPx,
+                        cardHeightPx,
+                    ) {
+                        derivedStateOf {
+                            val progress = expansionProgress.value.coerceIn(0f, 1f)
+                            val naturalTop = topInsetPx + displayIndex * rowHeightPx - scrollState.value
+                            val tuck = ((naturalTop - stackBoundaryPx) / rowHeightPx).coerceIn(0f, 1f)
+                            val easedTuck = tuck * tuck * (3f - 2f * tuck)
+                            val expandedTop = if (naturalTop > stackBoundaryPx) {
+                                naturalTop + (stackBoundaryPx + stackPeekPx - naturalTop) * easedTuck
+                            } else naturalTop
+                            val collapsedTop = compactTopPx + compactTopForCard
+                            val backdropTop = collapsedTop * (1f - progress) + expandedTop * progress
+                            val backdropAlpha = compactAlpha + (1f - compactAlpha) * progress
+                            backdropAlpha > .02f && backdropTop < expandedHeightPx &&
+                                backdropTop + cardHeightPx > 0f
+                        }
+                    }
                     val shape = RoundedCornerShape(28.dp)
                     Box(
                         Modifier.fillMaxWidth().height(rowHeight)
@@ -563,7 +585,6 @@ private fun HomeStackPanel(
                                 scaleY = targetScale
                                 translationY = desiredTop - naturalTop
                             }.pointerInput(
-                                stackListExpanded,
                                 compactVisible,
                                 stackIndex,
                                 sections.size,
@@ -574,7 +595,7 @@ private fun HomeStackPanel(
                                 // the full-screen panel. That preserves the carousel's
                                 // independent hit target and keeps swipe input aligned
                                 // with the card while it transitions between layouts.
-                                if (!stackListExpanded && compactVisible) {
+                                if (!currentStackListExpanded.value && compactVisible) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                             val velocityTracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
@@ -599,13 +620,13 @@ private fun HomeStackPanel(
                                                     change.consume()
                                                     val swipeDirection = if (fastFlick && !crossedSlop) velocity.y else delta.y
                                                     if (swipeDirection < 0f) {
-                                                        onStackListExpandedChange(true)
+                                                        currentOnStackListExpandedChange.value(true)
                                                         expandingWithThisGesture = true
                                                         if (pointerDelta.y < 0f) scrollState.dispatchRawDelta(-pointerDelta.y)
                                                     } else if (hasNowPlaying && stackIndex == 0) {
-                                                        onExpandPlayer()
+                                                        currentOnExpandPlayer.value()
                                                     } else {
-                                                        onIndexChange((stackIndex - 1).coerceIn(0, sections.lastIndex.coerceAtLeast(0)))
+                                                        currentOnIndexChange.value((stackIndex - 1).coerceIn(0, sections.lastIndex.coerceAtLeast(0)))
                                                     }
                                                 } else if (handled) {
                                                     if (expandingWithThisGesture && pointerDelta.y < 0f) {

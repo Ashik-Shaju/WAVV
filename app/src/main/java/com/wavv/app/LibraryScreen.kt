@@ -346,6 +346,7 @@ internal fun LibraryScreen(
                 history = playbackHistory,
                 allSongs = songs,
                 hasNowPlaying = hasNowPlaying,
+                onToggleHistory = onToggleHistory,
                 onPlay = onPlay,
             )
         } else AnimatedContent(
@@ -358,7 +359,9 @@ internal fun LibraryScreen(
     ) { route ->
         when (route.page) {
             LibraryPage.Main -> Column(Modifier.fillMaxSize()) {
-                ScreenHeader("Library")
+                ScreenHeader("Library", trailingContent = {
+                    LibraryHistoryAction(historyVisible, onToggleHistory)
+                })
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = 16.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp),
@@ -446,6 +449,7 @@ internal fun LibraryScreen(
                         showSort = route.page == LibraryPage.Playlists,
                         onAdd = { onRequestCreatePlaylist(null) },
                         onSort = { sortMenu = true },
+                        historyAction = { LibraryHistoryAction(historyVisible, onToggleHistory) },
                     )
                     val orderedCards = remember(cards, sortMode) {
                         when (sortMode) {
@@ -515,6 +519,8 @@ internal fun LibraryScreen(
                     page = route.page,
                     title = if (route == destination) collectionTitle else route.title,
                     subtitle = if (route == destination) collectionSubtitle else route.subtitle,
+                    historyVisible = historyVisible,
+                    onToggleHistory = onToggleHistory,
                     songs = if (route == destination) collectionSongs else when (route.page) {
                         LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
                         LibraryPage.Songs -> songs
@@ -549,24 +555,6 @@ internal fun LibraryScreen(
             }
         }
     }
-    }
-    Box(
-        Modifier.align(Alignment.BottomEnd)
-            .padding(end = 20.dp, bottom = if (hasNowPlaying) 176.dp else 92.dp)
-            .size(56.dp)
-            .shadow(14.dp, CircleShape)
-            .clip(CircleShape)
-            .background(Color(0xFF34343A))
-            .border(1.dp, Color.White.copy(.14f), CircleShape)
-            .clickable(onClick = onToggleHistory),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
-            contentDescription = if (historyVisible) "Return to library" else "Listening history",
-            tint = Color.White,
-            modifier = Modifier.size(24.dp),
-        )
     }
     }
 
@@ -616,6 +604,7 @@ private fun LibraryHistoryScreen(
     history: List<PlaybackHistoryEntry>,
     allSongs: List<Song>,
     hasNowPlaying: Boolean,
+    onToggleHistory: () -> Unit,
     onPlay: (Song, List<Song>) -> Unit,
 ) {
     val groupedHistory = remember(history) {
@@ -623,9 +612,17 @@ private fun LibraryHistoryScreen(
             .toSortedMap(compareByDescending { it })
     }
     val surfaceShape = RoundedCornerShape(26.dp)
-    val surfaceBottomInset = if (hasNowPlaying) 250.dp else 164.dp
+    val density = LocalDensity.current
+    val navigationBarInset = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    val surfaceBottomInset by animateDpAsState(
+        targetValue = navigationBarInset + if (hasNowPlaying) 164.dp else 72.dp,
+        animationSpec = tween(360, easing = WavvMotionEasing),
+        label = "history surface available height",
+    )
     Column(Modifier.fillMaxSize().background(Color.Black)) {
-        ScreenHeader("History", showAmbient = false)
+        ScreenHeader("History", showAmbient = false, trailingContent = {
+            LibraryHistoryAction(historyVisible = true, onToggleHistory = onToggleHistory)
+        })
         if (history.isEmpty()) {
             Box(
                 Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = surfaceBottomInset)
@@ -714,6 +711,7 @@ private fun LibraryBrowseHeader(
     showSort: Boolean,
     onAdd: () -> Unit,
     onSort: () -> Unit,
+    historyAction: @Composable () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().statusBarsPadding().padding(start = 14.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
@@ -728,6 +726,25 @@ private fun LibraryBrowseHeader(
             Icon(if (layout == LibraryLayout.Grid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, contentDescription = if (layout == LibraryLayout.Grid) "Switch to list" else "Switch to grid", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp))
         }
         if (showAdd) IconButton(onClick = onAdd, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Add, contentDescription = "Create playlist", tint = WavvPink) }
+        historyAction()
+    }
+}
+
+@Composable
+private fun LibraryHistoryAction(historyVisible: Boolean, onToggleHistory: () -> Unit) {
+    IconButton(
+        onClick = onToggleHistory,
+        modifier = Modifier.size(44.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = .075f))
+            .border(1.dp, Color.White.copy(alpha = .10f), CircleShape),
+    ) {
+        Icon(
+            imageVector = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
+            contentDescription = if (historyVisible) "Return to library" else "Listening history",
+            tint = Color.White.copy(alpha = .92f),
+            modifier = Modifier.size(28.dp),
+        )
     }
 }
 
@@ -808,6 +825,8 @@ private fun LibraryCollectionScreen(
     page: LibraryPage,
     title: String,
     subtitle: String,
+    historyVisible: Boolean,
+    onToggleHistory: () -> Unit,
     songs: List<Song>,
     playlists: List<UserPlaylist>,
     favoriteIds: Set<Long>,
@@ -855,6 +874,11 @@ private fun LibraryCollectionScreen(
         val height = minOf(620.dp, maxWidth + 170.dp)
         val artworkHeight = minOf(maxWidth, 480.dp)
         SongListArtworkBackdrop(featured, Modifier.matchParentSize())
+        Box(
+            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 20.dp),
+        ) {
+            LibraryHistoryAction(historyVisible, onToggleHistory)
+        }
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = if (hasNowPlaying) 260.dp else 176.dp),
