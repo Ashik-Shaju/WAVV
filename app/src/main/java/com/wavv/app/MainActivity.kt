@@ -43,6 +43,7 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -68,6 +69,8 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -206,6 +209,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -262,6 +266,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal val WavvBackground = Color(0xFF0A0A0A)
 internal val WavvSurface = Color(0xFF202026)
@@ -292,6 +297,8 @@ internal val WavvAccentGradient = Brush.linearGradient(
     listOf(Color(0xFFB71C1C), Color(0xFFE91E63), Color(0xFFFF4081)),
 )
 internal enum class Tab { Home, Search, Library, You }
+
+private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
 
 internal enum class LibraryPage { Main, Liked, Playlists, Artists, Albums, Songs, Playlist, Artist, Album }
 
@@ -597,11 +604,13 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var sharedArtworkTransitionActive by remember { mutableStateOf(true) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var loopMode by rememberSaveable { mutableStateOf(LoopMode.Off) }
-    var homeAtTop by rememberSaveable { mutableStateOf(true) }
-    var homeStackExpanded by rememberSaveable { mutableStateOf(false) }
+    var playerExpanded by rememberSaveable { mutableStateOf(false) }
+    var playerPositionInitialized by rememberSaveable { mutableStateOf(false) }
+    var homeStackListExpanded by rememberSaveable { mutableStateOf(false) }
     var homeStackIndex by rememberSaveable { mutableIntStateOf(0) }
     var libraryNavigation by rememberSaveable { mutableStateOf(LibraryNavigationState()) }
     val libraryDestination = libraryNavigation.destination
+    var libraryHistoryVisible by rememberSaveable { mutableStateOf(false) }
     var libraryLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
     var pinnedPlaylistIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
@@ -614,19 +623,21 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val personalizedRecommendations = (libraryState as? LibraryUiState.Ready)?.personalizedRecommendations.orEmpty()
     val smartMixes = (libraryState as? LibraryUiState.Ready)?.smartMixes.orEmpty()
     val recentlyPlayed = (libraryState as? LibraryUiState.Ready)?.recentlyPlayed.orEmpty()
+    val playbackHistory = (libraryState as? LibraryUiState.Ready)?.playbackHistory.orEmpty()
     val playlists = (libraryState as? LibraryUiState.Ready)?.playlists.orEmpty()
     val activeSong = playbackState.song
+    val homePlayerExpanded = activeSong != null && playerExpanded
     val homeStackExpansionProgress = animateFloatAsState(
-        targetValue = if (tab == Tab.Home && homeStackExpanded && songs.isNotEmpty() && !showPlayer) 1f else 0f,
+        targetValue = if (tab == Tab.Home && homeStackListExpanded && songs.isNotEmpty() && !showPlayer) 1f else 0f,
         animationSpec = tween(560, easing = WavvMotionEasing),
         label = "home stack expansion",
     )
-    val miniPlayerExpanded = tab == Tab.Home && homeAtTop && !homeStackExpanded
-    val miniPlayerHeight by animateDpAsState(
-        targetValue = if (activeSong != null && miniPlayerExpanded) 144.dp else 70.dp,
-        animationSpec = tween(520, easing = WavvMotionEasing),
-        label = "mini player height",
-    )
+    LaunchedEffect(activeSong?.id) {
+        if (!playerPositionInitialized && activeSong != null) {
+            if (playbackState.isPlaying) playerExpanded = true
+            playerPositionInitialized = true
+        }
+    }
     LaunchedEffect(showPlayer) {
         sharedArtworkTransitionActive = true
         delay(700)
@@ -642,10 +653,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         showQueue = false
     }
     val beginPlayerClose: () -> Unit = { sharedArtworkTransitionActive = true }
-    val upNextSongs = activeSong?.let { song ->
-        nextQueuedSongs(playbackState.queue, song.id)
-    }.orEmpty()
     val startPlayback: (Song) -> Unit = { song ->
+        playerExpanded = true
+        playerPositionInitialized = true
         val recommendations = personalizedRecommendations.filterNot { it.id == song.id }
         val queue = personalizedQueue(song, songs.ifEmpty { listOf(song) }, recommendations)
         val recommendedIds = recommendations.mapTo(mutableSetOf(), Song::id)
@@ -668,13 +678,14 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
     val backLibrary = { libraryNavigation = libraryNavigation.back() }
 
-    BackHandler(enabled = showPlayer || (tab == Tab.Home && homeStackExpanded) || (showLibrary && tab != Tab.Home)) {
+    BackHandler(enabled = showPlayer || (tab == Tab.Home && homeStackListExpanded) || (showLibrary && tab != Tab.Home)) {
         when {
             showPlayer -> closePlayer()
-            tab == Tab.Home && homeStackExpanded -> {
-                homeStackExpanded = false
+            tab == Tab.Home && homeStackListExpanded -> {
+                homeStackListExpanded = false
                 homeStackIndex = 0
             }
+            tab == Tab.Library && libraryHistoryVisible -> libraryHistoryVisible = false
             tab == Tab.Library && libraryDestination.page != LibraryPage.Main -> backLibrary()
             else -> tab = Tab.Home
         }
@@ -719,22 +730,20 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist))
                             tab = Tab.Library
                         },
-                        onExpandPlayer = openPlayer,
                         recentSongs = recentlyPlayed,
-                        hasNowPlaying = activeSong != null,
-                        miniPlayerHeight = miniPlayerHeight,
-                        stackExpanded = homeStackExpanded,
+                        playerExpanded = homePlayerExpanded,
                         stackIndex = homeStackIndex,
                         stackExpansionProgress = homeStackExpansionProgress,
-                        onStackExpandedChange = { expanded ->
-                            homeStackExpanded = expanded
+                        onStackIndexChange = { homeStackIndex = it },
+                        stackListExpanded = homeStackListExpanded,
+                        onStackListExpandedChange = { expanded ->
+                            homeStackListExpanded = expanded
                             if (!expanded) homeStackIndex = 0
                         },
-                        onStackIndexChange = { homeStackIndex = it },
+                        hasNowPlaying = activeSong != null,
                         smartMixes = smartMixes,
                         onPlayMix = startMix,
-                        upNextSongs = upNextSongs,
-                        onAtTopChange = { homeAtTop = it },
+                        onExpandPlayer = { if (homeStackIndex == 0) playerExpanded = true },
                     )
                     Tab.Search -> SearchScreen(
                         songs = songs,
@@ -748,6 +757,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     Tab.Library -> LibraryScreen(
                         destination = libraryDestination,
                         songs = songs,
+                        playbackHistory = playbackHistory,
+                        historyVisible = libraryHistoryVisible,
+                        onToggleHistory = { libraryHistoryVisible = !libraryHistoryVisible },
                         hasNowPlaying = activeSong != null,
                         favoriteIds = favoriteIds,
                         playlists = playlists,
@@ -796,9 +808,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             NowPlayingBar(
                 song = activeSong,
                 state = playbackState,
-                backdrop = navBackdrop,
-                expanded = miniPlayerExpanded,
-                height = miniPlayerHeight,
+                expanded = tab == Tab.Home && homePlayerExpanded && !homeStackListExpanded,
+                stacked = tab == Tab.Home && (!playerExpanded || homeStackListExpanded),
+                stackDockEnabled = tab == Tab.Home,
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
                 liked = activeSong.id in favoriteIds,
@@ -807,12 +819,21 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 onPrevious = onPrevious,
                 onNext = onNext,
                 onOpen = openPlayer,
+                onCollapse = { playerExpanded = false },
+                onExpand = {
+                    if (homeStackListExpanded) {
+                        homeStackListExpanded = false
+                        homeStackIndex = 0
+                    } else if (homeStackIndex == 0) {
+                        playerExpanded = true
+                    }
+                },
                 sharedTransitionScope = sharedTransitionScope,
                 playerVisible = showPlayer,
                 sharedArtworkTransitionActive = sharedArtworkTransitionActive,
             )
         }
-        if (showLibrary) BottomNav(tab, { tab = it }, navBackdrop, Modifier.align(Alignment.BottomCenter))
+        if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
         AnimatedVisibility(
             visible = showPlayer,
             enter = fadeIn(tween(180)) + slideInVertically(tween(620, easing = WavvMotionEasing)) { it },
@@ -1096,157 +1117,48 @@ private fun LoadingScreen() {
 
 
 
-@Composable
 @OptIn(ExperimentalFoundationApi::class)
-internal fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop, modifier: Modifier = Modifier) {
+@Composable
+private fun BottomNav(
+    active: Tab,
+    onChange: (Tab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
     val activeIndex = tabs.indexOfFirst { it.first == active }
-    val dragState = remember { AnchoredDraggableState(active) }
-    val currentActive by rememberUpdatedState(active)
-    val currentOnChange by rememberUpdatedState(onChange)
-    val tabSpring = spring<Float>(
-        dampingRatio = Spring.DampingRatioLowBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
-    val flingBehavior = AnchoredDraggableDefaults.flingBehavior(
-        state = dragState,
-        positionalThreshold = { distance -> distance * .32f },
-        animationSpec = tabSpring,
-    )
-    LaunchedEffect(dragState) {
-        snapshotFlow { dragState.settledValue }.drop(1).collect { settledTab ->
-            if (settledTab != currentActive) currentOnChange(settledTab)
-        }
-    }
-    LaunchedEffect(active) {
-        if (dragState.targetValue != active) dragState.animateTo(active, tabSpring)
-    }
+    val captureState = remember { AtomicBoolean(false) }
     Box(
-        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 12.dp)
-            .shadow(20.dp, CircleShape)
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { CircleShape },
-                effects = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        vibrancy()
-                        blur(8.dp.toPx())
-                    }
-                },
-                onDrawSurface = { drawRect(Color(0x881A1920)) },
-            )
+        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 4.dp).height(60.dp)
+            .shadow(12.dp, CircleShape)
             .clip(CircleShape)
-            .border(
-                1.dp,
-                Brush.verticalGradient(0f to Color.White.copy(.28f), 1f to Color.White.copy(.06f)),
-                CircleShape,
-            ),
+            .border(.75.dp, HomeFrostedBorder, CircleShape),
     ) {
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(
-                    0f to Color.White.copy(.12f),
-                    .42f to Color.Transparent,
-                    1f to Color.Black.copy(.2f),
-                ),
-            ),
+        FrostedBackdrop(
+            captureState,
+            blurRadiusDp = 36f,
+            tint = HomeFrostedGlass,
+            modifier = Modifier.matchParentSize(),
         )
-        Box(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth(.7f).height(1.dp).background(
-                Brush.horizontalGradient(
-                    0f to Color.Transparent,
-                    .5f to Color.White.copy(.48f),
-                    1f to Color.Transparent,
-                ),
-            ),
-        )
-        BoxWithConstraints(
-            Modifier.fillMaxWidth().padding(5.dp)
-                .anchoredDraggable(dragState, Orientation.Horizontal, flingBehavior = flingBehavior),
-        ) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
             val itemWidth = maxWidth / tabs.size
-            val itemWidthPx = with(LocalDensity.current) { itemWidth.toPx() }
-            Box(
-                Modifier.matchParentSize()
-                    .onSizeChanged { size ->
-                        if (size.width > 0) {
-                            dragState.updateAnchors(
-                                DraggableAnchors {
-                                    tabs.forEachIndexed { index, (tab, _) ->
-                                        tab at (size.width.toFloat() * index / tabs.size)
-                                    }
-                                },
-                                active,
-                            )
-                        }
-                    },
-            ) {
+            val highlightOffset by animateDpAsState(
+                targetValue = itemWidth * activeIndex,
+                animationSpec = spring(
+                    dampingRatio = .9f,
+                    stiffness = 520f,
+                    visibilityThreshold = .5.dp,
+                ),
+                label = "tab highlight position",
+            )
+            Box(Modifier.matchParentSize()) {
                 Box(
-                    Modifier.align(Alignment.CenterStart)
-                        .offset {
-                            val offset = dragState.offset
-                            IntOffset(
-                                x = if (offset.isFinite()) offset.roundToInt() else (itemWidthPx * activeIndex).roundToInt(),
-                                y = 0,
-                            )
-                        }
-                        .fillMaxWidth(1f / tabs.size)
-                        .fillMaxHeight()
-                        .graphicsLayer {
-                            val offset = dragState.offset
-                            val position = if (offset.isFinite() && itemWidthPx > 0f) {
-                                offset / itemWidthPx
-                            } else {
-                                activeIndex.toFloat()
-                            }
-                            val progress = position - floor(position)
-                            val stretch = sin(progress * PI).toFloat().coerceIn(0f, 1f)
-                            scaleX = 1f + stretch * .14f
-                            scaleY = 1f - stretch * .06f
-                        }
-                        .shadow(8.dp, CircleShape)
-                        .drawBackdrop(
-                            backdrop = backdrop,
-                            shape = { CircleShape },
-                            effects = {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    vibrancy()
-                                    blur(2.dp.toPx())
-                                    lens(
-                                        refractionHeight = 14.dp.toPx(),
-                                        refractionAmount = 22.dp.toPx(),
-                                        depthEffect = true,
-                                        chromaticAberration = true,
-                                    )
-                                }
-                            },
-                            onDrawSurface = {
-                                drawRect(Color.White.copy(.10f))
-                                drawRect(WavvPink.copy(.10f))
-                            },
-                        )
+                    Modifier.align(Alignment.CenterStart).offset(x = highlightOffset).width(itemWidth).fillMaxHeight()
                         .clip(CircleShape)
-                        .border(
-                            1.dp,
-                            Brush.verticalGradient(
-                                0f to Color.White.copy(.38f),
-                                1f to Color.White.copy(.1f),
-                            ),
-                            CircleShape,
-                        ),
-                ) {
-                    Box(
-                        Modifier.align(Alignment.TopCenter).fillMaxWidth(.58f).height(1.dp).background(
-                            Brush.horizontalGradient(
-                                0f to Color.Transparent,
-                                .5f to Color.White.copy(.62f),
-                                1f to Color.Transparent,
-                            ),
-                        ),
-                    )
-                }
+                        .background(Color(0x1FFFEBE0))
+                        .border(1.dp, Color.White.copy(.1f), CircleShape),
+                )
             }
-            Row(Modifier.fillMaxWidth().selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 tabs.forEach { (tab, label) ->
                     val selected = tab == active
                     val itemTransition = updateTransition(selected, label = "$label selection")
@@ -1255,12 +1167,9 @@ internal fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop,
                     val iconScale by itemTransition.animateFloat(label = "$label icon scale") { isSelected -> if (isSelected) 1.06f else 1f }
                     val iconOffsetY by itemTransition.animateFloat(label = "$label icon offset") { isSelected -> if (isSelected) -1f else 0f }
                     Column(
-                        Modifier.weight(1f)
-                            .clip(CircleShape)
-                            .selectable(selected = selected, role = Role.Tab, onClick = { onChange(tab) })
-                            .padding(top = 10.dp, bottom = 9.dp),
+                        Modifier.weight(1f).fillMaxHeight().clip(CircleShape).clickable(role = Role.Tab) { onChange(tab) },
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.Center,
                     ) {
                         Image(
                             painter = androidx.compose.ui.res.painterResource(
@@ -1273,12 +1182,13 @@ internal fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop,
                             ),
                             contentDescription = label,
                             colorFilter = if (tab == Tab.Library) null else androidx.compose.ui.graphics.ColorFilter.tint(iconColor),
-                            modifier = Modifier.size(if (tab == Tab.Library) 22.dp else 24.dp, if (tab == Tab.Library) 24.dp else 23.dp).graphicsLayer {
+                            modifier = Modifier.size(if (tab == Tab.Library) 18.dp else 20.dp, 20.dp).graphicsLayer {
                                 scaleX = iconScale
                                 scaleY = iconScale
                                 translationY = iconOffsetY.dp.toPx()
                             },
                         )
+                        Spacer(Modifier.height(3.dp))
                         Text(label, color = labelColor, fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
                     }
                 }
@@ -1288,106 +1198,96 @@ internal fun BottomNav(active: Tab, onChange: (Tab) -> Unit, backdrop: Backdrop,
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, backdrop: Backdrop, expanded: Boolean, height: Dp, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
-    val cornerRadius by animateDpAsState(if (expanded) 30.dp else 999.dp, tween(320, easing = WavvMotionEasing), label = "player bar corners")
+private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
+    val captureState = remember { AtomicBoolean(false) }
+    val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
+    val barTransition = updateTransition(barMode, label = "now playing bar mode")
+    val height by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar height") {
+        if (it == NowPlayingBarMode.Expanded) 144.dp else 60.dp
+    }
+    val cornerRadius by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar corners") {
+        if (it == NowPlayingBarMode.Expanded) 28.dp else 30.dp
+    }
+    val barOffset by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar home position") {
+        when (it) { NowPlayingBarMode.Stacked -> (-178).dp; NowPlayingBarMode.Expanded -> (-24).dp; NowPlayingBarMode.Docked -> 0.dp }
+    }
+    val artworkSize by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork size") {
+        if (it == NowPlayingBarMode.Expanded) 50.dp else 40.dp
+    }
+    val artworkX by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork horizontal position") {
+        16.dp
+    }
+    val artworkY by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork vertical position") {
+        10.dp
+    }
+    val artworkCorner by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork corners") {
+        if (it == NowPlayingBarMode.Expanded) 11.dp else 10.dp
+    }
     val shape = RoundedCornerShape(cornerRadius)
     val durationMs = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
     val positionMs = state.positionMs.coerceIn(0L, durationMs)
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        val density = LocalDensity.current
-        val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
-        val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
-        val dockOffsetPx = with(density) {
-            (statusBarTop + 70.dp - (maxHeight - navigationBarBottom - 96.dp - height)).toPx()
-        }
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 20.dp)
-                .navigationBarsPadding().padding(bottom = 96.dp).height(height)
-                .graphicsLayer { translationY = dockOffsetPx * stackDockProgress.value.coerceIn(0f, 1f) }
-            .shadow(18.dp, shape)
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { shape },
-                effects = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        vibrancy()
-                        blur(4.dp.toPx())
-                        lens(
-                            refractionHeight = 12.dp.toPx(),
-                            refractionAmount = 18.dp.toPx(),
-                            depthEffect = true,
-                            chromaticAberration = true,
-                        )
+    val density = LocalDensity.current
+    val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+    val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    BoxWithConstraints(modifier) {
+    val dockProgress = if (stackDockEnabled) stackDockProgress.value.coerceIn(0f, 1f) else 0f
+    val bottomPosition = maxHeight - navigationBarBottom - 96.dp - height + barOffset
+    val topPosition = statusBarTop + 70.dp
+    val barPosition = bottomPosition * (1f - dockProgress) + topPosition * dockProgress
+    Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).offset(y = barPosition).height(height)
+        .pointerInput(expanded, stacked, onCollapse, onExpand) {
+            if (!expanded && !stacked) return@pointerInput
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                var swiped = false
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    val delta = change.position - down.position
+                    if (!swiped && kotlin.math.abs(delta.y) > viewConfiguration.touchSlop && kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x)) {
+                        if (expanded && delta.y < 0f) {
+                            swiped = true
+                            change.consume()
+                            onCollapse()
+                        } else if (stacked && delta.y > 0f) {
+                            swiped = true
+                            change.consume()
+                            onExpand()
+                        }
+                    } else if (swiped) {
+                        change.consume()
                     }
-                },
-                onDrawSurface = {
-                    drawRect(Color(0x881A1920))
-                    drawRect(
-                        Brush.linearGradient(
-                            colors = listOf(Color(0x33F8B65E), WavvPink.copy(.13f), Color(0x24345DA8)),
-                            start = Offset.Zero,
-                            end = Offset(size.width, size.height),
-                        ),
-                    )
-                },
-            )
-            .clip(shape)
-            .border(
-                1.dp,
-                Brush.verticalGradient(
-                    0f to Color.White.copy(.34f),
-                    .42f to WavvPink.copy(.22f),
-                    1f to Color.White.copy(.08f),
-                ),
-                shape,
-            )
-                .clickable(role = Role.Button, onClick = onOpen),
+                }
+            }
+        }
+        .shadow(18.dp, shape).clip(shape)
+        .border(.75.dp, HomeFrostedBorder, shape).clickable(onClick = onOpen)) {
+        FrostedBackdrop(
+            captureState,
+            blurRadiusDp = 34f,
+            tint = HomeFrostedGlass,
+            modifier = Modifier.matchParentSize(),
+        )
+        Box(
+            Modifier.align(Alignment.TopStart).offset(x = artworkX, y = artworkY).size(artworkSize)
+                .sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible),
         ) {
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0f to Color.White.copy(.10f), .42f to Color.Transparent, 1f to Color.Black.copy(.14f)),
-            ),
-        )
-        Box(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth(.62f).height(1.dp).background(
-                Brush.horizontalGradient(
-                    0f to Color.Transparent,
-                    .24f to WavvPink.copy(.25f),
-                    .5f to Color.White.copy(.62f),
-                    .76f to Color(0xFFFFC76C).copy(.3f),
-                    1f to Color.Transparent,
-                ),
-            ),
-        )
+            AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(artworkCorner)), song.title, artworkCorner)
+        }
         AnimatedContent(
             targetState = expanded,
             transitionSpec = {
-                if (targetState) {
-                    (fadeIn(tween(350, delayMillis = 120, easing = WavvMotionEasing)) +
-                        scaleIn(initialScale = .96f, animationSpec = tween(400, delayMillis = 100, easing = WavvMotionEasing))) togetherWith
-                        fadeOut(tween(180, easing = WavvMotionEasing))
-                } else {
-                    fadeIn(tween(180, easing = WavvScreenEasing)) togetherWith
-                        (fadeOut(tween(350, delayMillis = 120, easing = WavvMotionEasing)) +
-                            scaleOut(targetScale = .96f, animationSpec = tween(400, delayMillis = 100, easing = WavvMotionEasing)))
-                }
+                fadeIn(tween(200, easing = WavvMotionEasing)) togetherWith fadeOut(tween(160, easing = WavvMotionEasing))
             },
             label = "player bar content",
         ) { big ->
             if (big) {
                 Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.size(50.dp).sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible && big == expanded)) {
-                            AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(11.dp)), song.title, 11.dp)
-                        }
+                    Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Spacer(Modifier.width(50.dp))
                         TrackText(song, Modifier.weight(1f), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp)
-                        IconButton(
-                            onClick = onLike,
-                            modifier = Modifier.size(48.dp).semantics {
-                                contentDescription = if (liked) "Remove from liked songs" else "Add to liked songs"
-                                stateDescription = if (liked) "Liked" else "Not liked"
-                            },
-                        ) { FigmaFavouriteIcon(liked, 30.dp) }
+                        Box(Modifier.size(38.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) { FigmaFavouriteIcon(liked, 30.dp) }
                     }
                     Spacer(Modifier.height(12.dp))
                     Column {
@@ -1399,23 +1299,32 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, backdrop: Backdrop, 
                             Text("-${formatTime(durationMs - positionMs)}", color = Color.White.copy(.32f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 40.dp, centerIconSize = 38.dp, modifier = Modifier.weight(1f))
+                    Row(
+                        Modifier.fillMaxWidth().weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(38.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Image(androidx.compose.ui.res.painterResource(R.drawable.skip_prev), "Previous", Modifier.size(40.dp).clickable(role = Role.Button, onClick = onPrevious))
+                        Image(
+                            androidx.compose.ui.res.painterResource(if (state.isPlaying) R.drawable.image_16 else R.drawable.play_button),
+                            if (state.isPlaying) "Pause" else "Play",
+                            Modifier.size(38.dp).clickable(role = Role.Button, onClick = onToggle),
+                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+                        )
+                        Image(androidx.compose.ui.res.painterResource(R.drawable.skip_next), "Next", Modifier.size(40.dp).clickable(role = Role.Button, onClick = onNext))
+                    }
                 }
             } else {
-                Row(Modifier.fillMaxSize().padding(start = 16.dp, end = 10.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(Modifier.size(48.dp).sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible && big == expanded)) {
-                        AlbumArt(song, Modifier.fillMaxSize(), song.title, 10.dp)
-                    }
+                Row(Modifier.fillMaxSize().padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Spacer(Modifier.width(40.dp))
                     TrackText(song, Modifier.weight(1f), 14.sp)
-                    IconButton(onClick = onPrevious, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(20.dp), tint = Color.White.copy(.78f))
-                    }
-                    IconButton(onClick = onToggle, modifier = Modifier.size(36.dp)) {
-                        Icon(if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (state.isPlaying) "Pause" else "Play", Modifier.size(22.dp), tint = Color.White)
-                    }
-                    IconButton(onClick = onNext, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.SkipNext, "Next", Modifier.size(20.dp).alpha(.78f), tint = Color.White)
-                    }
+                    Image(
+                        androidx.compose.ui.res.painterResource(if (state.isPlaying) R.drawable.image_16 else R.drawable.play_button),
+                        if (state.isPlaying) "Pause" else "Play",
+                        Modifier.size(22.dp).clickable(role = Role.Button, onClick = onToggle),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+                    )
+                    Image(androidx.compose.ui.res.painterResource(R.drawable.skip_next), "Next", Modifier.size(20.dp).alpha(.6f).clickable(role = Role.Button, onClick = onNext))
                 }
             }
         }
@@ -1447,11 +1356,16 @@ private fun Modifier.sharedPlayerArtwork(scope: SharedTransitionScope, visible: 
     }
 
 @Composable
-private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, iconSize: Dp, centerIconSize: Dp = iconSize, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(38.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(iconSize).clickable(role = Role.Button, onClick = onPrevious), tint = Color.White)
-        Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (isPlaying) "Pause" else "Play", Modifier.size(centerIconSize).clickable(role = Role.Button, onClick = onToggle), tint = Color.White)
-        Icon(Icons.Default.SkipNext, "Next", Modifier.size(iconSize).clickable(role = Role.Button, onClick = onNext), tint = Color.White)
+private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, iconSize: Dp) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(38.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+        Image(androidx.compose.ui.res.painterResource(R.drawable.skip_prev), "Previous", Modifier.size(iconSize).clickable(role = Role.Button, onClick = onPrevious))
+        Image(
+            androidx.compose.ui.res.painterResource(if (isPlaying) R.drawable.image_16 else R.drawable.play_button),
+            if (isPlaying) "Pause" else "Play",
+            Modifier.size(iconSize).clickable(role = Role.Button, onClick = onToggle),
+            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+        )
+        Image(androidx.compose.ui.res.painterResource(R.drawable.skip_next), "Next", Modifier.size(iconSize).clickable(role = Role.Button, onClick = onNext))
     }
 }
 
@@ -1574,7 +1488,6 @@ private fun FullPlayer(
     playerVisible: Boolean,
     sharedArtworkTransitionActive: Boolean,
 ) {
-    val context = LocalContext.current
     var showLyrics by remember(song.id) { mutableStateOf(false) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
@@ -1584,10 +1497,8 @@ private fun FullPlayer(
     var playerDragOffset by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
     val gestureScope = rememberCoroutineScope()
-    BackHandler(enabled = showLyrics || showQueue) {
-        if (showLyrics) showLyrics = false else onHideQueue()
-    }
-    val nextTitle = nextQueuedSongs(state.queue, song.id, limit = 1).firstOrNull()?.title ?: "Next Up"
+    BackHandler(enabled = showLyrics) { showLyrics = false }
+    val nextTitle = state.queue.firstOrNull { it.id != song.id }?.title ?: "Next Up"
     LaunchedEffect(showQueue, nextTitle) {
         while (isActive && !showQueue) {
             delay(4_000)
@@ -1699,17 +1610,8 @@ private fun FullPlayer(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TrackText(song, Modifier.weight(1f).padding(end = 12.dp), 28.sp, 20.sp, (-.65).sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = onLike,
-                            modifier = Modifier.size(48.dp).semantics {
-                                contentDescription = if (liked) "Remove from liked songs" else "Add to liked songs"
-                                stateDescription = if (liked) "Liked" else "Not liked"
-                            },
-                        ) { FigmaFavouriteIcon(liked, 30.dp) }
-                        IconButton(
-                            onClick = { showTrackOptions = true },
-                            modifier = Modifier.size(48.dp).semantics { contentDescription = "More track options" },
-                        ) { FigmaMoreIcon(30.dp) }
+                        Box(Modifier.size(38.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) { FigmaFavouriteIcon(liked, 30.dp) }
+                        Box(Modifier.size(38.dp).clickable { showTrackOptions = true }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
                     }
                 }
                 val duration = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
@@ -1740,7 +1642,7 @@ private fun FullPlayer(
             }
             PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 48.dp)
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { showLyrics = true }) { Icon(Icons.AutoMirrored.Filled.Subject, "Lyrics", Modifier.size(24.dp).alpha(.7f), tint = Color.White) }
+                IconButton(onClick = { showLyrics = true }) { Image(androidx.compose.ui.res.painterResource(R.drawable.song_lyrics), "Lyrics", Modifier.size(24.dp).alpha(.7f), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)) }
                 IconButton(onClick = { showOutputs = true }) { Image(androidx.compose.ui.res.painterResource(R.drawable.output_device), "Audio output", Modifier.size(24.dp).alpha(.7f)) }
                 IconButton(onClick = onCycleLoop) {
                     Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
@@ -1795,24 +1697,8 @@ private fun FullPlayer(
                     }
                 }
                 Spacer(Modifier.height(14.dp))
-                SheetActionRow(Icons.Default.SkipNext, "Play next") {
-                    close()
-                    if (song.id == state.song?.id) {
-                        Toast.makeText(context, "This track is already playing", Toast.LENGTH_SHORT).show()
-                    } else {
-                        onPlayNext(song)
-                        Toast.makeText(context, "Will play next: ${song.title}", Toast.LENGTH_SHORT).show()
-                    }
-                }
-                SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") {
-                    close()
-                    if (state.queue.any { it.id == song.id }) {
-                        Toast.makeText(context, "This track is already in the queue", Toast.LENGTH_SHORT).show()
-                    } else {
-                        onAddToQueue(song)
-                        Toast.makeText(context, "Added to queue: ${song.title}", Toast.LENGTH_SHORT).show()
-                    }
-                }
+                SheetActionRow(Icons.Default.SkipNext, "Play next") { close(); onPlayNext(song) }
+                SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") { close(); onAddToQueue(song) }
                 SheetActionRow(Icons.Default.Add, "Add to playlist") { playlistSong = song; close() }
                 SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
                 SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
@@ -1842,7 +1728,7 @@ private fun FullPlayer(
 }
 
 @Composable
-private fun NowPlayingAmbientBackdrop(song: Song, isPlaying: Boolean) {
+internal fun NowPlayingAmbientBackdrop(song: Song, isPlaying: Boolean) {
     val pulseTransition = rememberInfiniteTransition(label = "album ambient glow")
     val pulse by pulseTransition.animateFloat(
         initialValue = .35f,

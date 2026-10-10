@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.Index
@@ -69,6 +70,12 @@ data class ListeningEventEntity(
     val selectionSource: String? = null,
     val playlistId: Long? = null,
     val recommendationId: String? = null,
+)
+
+data class PlaybackHistoryRow(
+    val historyId: Long,
+    @Embedded val song: SongEntity,
+    val playedAt: Long,
 )
 
 @Entity(tableName = "playlists")
@@ -184,6 +191,18 @@ interface SongUserStateDao {
 interface ListeningEventDao {
     @Insert
     suspend fun insert(event: ListeningEventEntity)
+
+    @Query(
+        """
+        SELECT listening_events.id AS historyId, songs.*, listening_events.timestamp AS playedAt
+        FROM listening_events
+        INNER JOIN songs ON songs.id = listening_events.songId
+        WHERE listening_events.eventType = 'play'
+        ORDER BY listening_events.timestamp DESC
+        LIMIT 1000
+        """,
+    )
+    suspend fun getPlaybackHistory(): List<PlaybackHistoryRow>
 
     @Query("SELECT * FROM listening_events WHERE timestamp >= :sinceMs ORDER BY timestamp DESC LIMIT :limit")
     fun observeRecent(sinceMs: Long, limit: Int): Flow<List<ListeningEventEntity>>
@@ -472,6 +491,9 @@ class LibraryStore(private val database: WavvDatabase) {
     suspend fun getFavoriteIds(): Set<Long> = database.songDao().getFavoriteIds().toSet()
 
     suspend fun getRecentlyPlayed(): List<Song> = database.songDao().getRecentlyPlayed().map(SongEntity::toSong)
+
+    suspend fun getPlaybackHistory(): List<PlaybackHistoryEntry> =
+        database.listeningEventDao().getPlaybackHistory().map { PlaybackHistoryEntry(it.historyId, it.song.toSong(), it.playedAt) }
 
     suspend fun getPlaylists(): List<UserPlaylist> = database.playlistDao().getAll().map { playlist ->
         UserPlaylist(playlist.id, playlist.name, database.playlistDao().getSongIds(playlist.id), playlist.updatedAt)

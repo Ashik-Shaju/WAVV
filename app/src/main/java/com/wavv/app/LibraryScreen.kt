@@ -1,109 +1,289 @@
 package com.wavv.app
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint as AndroidPaint
+import android.graphics.PorterDuff
+import android.graphics.Rect as AndroidRect
+import android.graphics.RenderEffect as AndroidRenderEffect
+import android.graphics.Shader as AndroidShader
+import android.Manifest
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.util.LruCache
+import android.view.View
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.SystemBarStyle
+import androidx.compose.animation.animateColor
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateDp
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PrivacyTip
+import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.AlertDialog
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
-import com.kyant.backdrop.effects.blur
-import kotlinx.coroutines.delay
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.mediarouter.media.MediaControlIntent
+import androidx.mediarouter.media.MediaRouter
+import androidx.mediarouter.media.MediaRouteSelector
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
+import java.util.Date
+import java.util.Locale
 import kotlin.math.max
+import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+private fun expressiveFontFor(page: LibraryPage): FontFamily = when (page) {
+    LibraryPage.Artist, LibraryPage.Artists -> FontFamily.SansSerif
+    LibraryPage.Album, LibraryPage.Albums -> FontFamily.Serif
+    LibraryPage.Playlist, LibraryPage.Playlists -> WavvFontFamily
+    else -> WavvFontFamily
+}
 
 @Composable
 internal fun LibraryScreen(
     destination: LibraryDestination,
     songs: List<Song>,
+    playbackHistory: List<PlaybackHistoryEntry>,
+    historyVisible: Boolean,
+    onToggleHistory: () -> Unit,
     hasNowPlaying: Boolean,
     favoriteIds: Set<Long>,
     playlists: List<UserPlaylist>,
@@ -154,9 +334,21 @@ internal fun LibraryScreen(
         LibraryPage.Album -> destination.subtitle
         else -> ""
     }
-    val bottomOverlayClearance = if (hasNowPlaying) 192.dp else 104.dp
 
+    Box(Modifier.fillMaxSize()) {
     AnimatedContent(
+        targetState = historyVisible,
+        transitionSpec = { fadeIn(tween(230, easing = WavvMotionEasing)) togetherWith fadeOut(tween(180, easing = WavvMotionEasing)) },
+        label = "library history toggle",
+    ) { route ->
+        if (route) {
+            LibraryHistoryScreen(
+                history = playbackHistory,
+                allSongs = songs,
+                hasNowPlaying = hasNowPlaying,
+                onPlay = onPlay,
+            )
+        } else AnimatedContent(
         targetState = destination,
         transitionSpec = {
             (fadeIn(tween(220)) + slideInHorizontally(tween(420, easing = WavvMotionEasing)) { it / 10 }) togetherWith
@@ -168,8 +360,8 @@ internal fun LibraryScreen(
             LibraryPage.Main -> Column(Modifier.fillMaxSize()) {
                 ScreenHeader("Library")
                 LazyColumn(
-                    Modifier.fillMaxSize().padding(bottom = bottomOverlayClearance),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp),
                 ) {
                     item {
                         Column(Modifier.padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -263,10 +455,7 @@ internal fun LibraryScreen(
                         }
                     }
                     val cardRows = remember(orderedCards) { orderedCards.chunked(2) }
-                    LazyColumn(
-                        Modifier.fillMaxSize().padding(bottom = bottomOverlayClearance),
-                        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 16.dp),
-                    ) {
+                    LazyColumn(contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 16.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp)) {
                         if (layout == LibraryLayout.Grid) {
                             items(cardRows.size) { rowIndex ->
                                 Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -298,7 +487,7 @@ internal fun LibraryScreen(
                                 Row(Modifier.fillMaxWidth().clickable(onClick = card.onClick).padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                     AlbumArt(card.artSong?.albumArtUri, Modifier.size(58.dp), card.title, 10.dp, card.artSong?.uri)
                                     Column(Modifier.weight(1f)) {
-                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp)
                                     }
                                     if (route.page == LibraryPage.Playlists) {
@@ -322,10 +511,10 @@ internal fun LibraryScreen(
             }
 
             LibraryPage.Liked, LibraryPage.Songs, LibraryPage.Playlist, LibraryPage.Artist, LibraryPage.Album -> {
-                LibraryCollectionScreen(
+                    LibraryCollectionScreen(
+                    page = route.page,
                     title = if (route == destination) collectionTitle else route.title,
                     subtitle = if (route == destination) collectionSubtitle else route.subtitle,
-                    page = route.page,
                     songs = if (route == destination) collectionSongs else when (route.page) {
                         LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
                         LibraryPage.Songs -> songs
@@ -337,7 +526,7 @@ internal fun LibraryScreen(
                     favoriteIds = favoriteIds,
                     sortMode = sortMode,
                     playAsText = route.page == LibraryPage.Liked || route.page == LibraryPage.Songs || route.page == LibraryPage.Playlist,
-                    bottomOverlayClearance = bottomOverlayClearance,
+                    hasNowPlaying = hasNowPlaying,
                     isPlaylist = route.page == LibraryPage.Playlist,
                     isDetail = route.isDetail,
                     onBack = onBack,
@@ -359,6 +548,26 @@ internal fun LibraryScreen(
                 )
             }
         }
+    }
+    }
+    Box(
+        Modifier.align(Alignment.BottomEnd)
+            .padding(end = 20.dp, bottom = if (hasNowPlaying) 176.dp else 92.dp)
+            .size(56.dp)
+            .shadow(14.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Color(0xFF34343A))
+            .border(1.dp, Color.White.copy(.14f), CircleShape)
+            .clickable(onClick = onToggleHistory),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
+            contentDescription = if (historyVisible) "Return to library" else "Listening history",
+            tint = Color.White,
+            modifier = Modifier.size(24.dp),
+        )
+    }
     }
 
     if (sortMenu) {
@@ -402,13 +611,96 @@ internal fun LibraryScreen(
     }
 }
 
-private data class LibraryCard(val id: String, val title: String, val subtitle: String, val artSong: Song?, val onClick: () -> Unit)
-
-private fun expressiveFontFor(page: LibraryPage): FontFamily = when (page) {
-    LibraryPage.Artist, LibraryPage.Artists -> FontFamily.SansSerif
-    LibraryPage.Album, LibraryPage.Albums -> FontFamily.Serif
-    else -> WavvFontFamily
+@Composable
+private fun LibraryHistoryScreen(
+    history: List<PlaybackHistoryEntry>,
+    allSongs: List<Song>,
+    hasNowPlaying: Boolean,
+    onPlay: (Song, List<Song>) -> Unit,
+) {
+    val groupedHistory = remember(history) {
+        history.groupBy { localDayStart(it.playedAt) }
+            .toSortedMap(compareByDescending { it })
+    }
+    val surfaceShape = RoundedCornerShape(26.dp)
+    val surfaceBottomInset = if (hasNowPlaying) 250.dp else 164.dp
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        ScreenHeader("History", showAmbient = false)
+        if (history.isEmpty()) {
+            Box(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = surfaceBottomInset)
+                    .clip(surfaceShape).background(Color(0xFF242428)),
+                contentAlignment = Alignment.Center,
+            ) {
+                LibraryEmpty("No listening history", "Songs you play will appear here.")
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = surfaceBottomInset)
+                    .clip(surfaceShape).background(Color(0xFF242428)),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 14.dp),
+            ) {
+                groupedHistory.forEach { (day, entries) ->
+                    item(key = "history-day-$day") {
+                        Text(
+                            historyDayLabel(day),
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                            color = Color.White.copy(.66f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = .2.sp,
+                        )
+                    }
+                    items(entries, key = PlaybackHistoryEntry::id) { entry ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onPlay(entry.song, allSongs) }
+                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            AlbumArt(
+                                entry.song,
+                                Modifier.size(48.dp).clip(RoundedCornerShape(9.dp)),
+                                entry.song.title,
+                                9.dp,
+                            )
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(entry.song.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(entry.song.artist, color = Color.White.copy(.48f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text(historyTimeLabel(entry.playedAt), color = Color.White.copy(.4f), fontSize = 11.sp, maxLines = 1)
+                        }
+                        Box(Modifier.fillMaxWidth().padding(start = 76.dp, end = 16.dp).height(1.dp).background(Color.White.copy(.085f)))
+                    }
+                }
+            }
+        }
+    }
 }
+
+private fun localDayStart(timestamp: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = timestamp
+    set(Calendar.HOUR_OF_DAY, 0)
+    set(Calendar.MINUTE, 0)
+    set(Calendar.SECOND, 0)
+    set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+private fun historyDayLabel(dayStart: Long): String {
+    val today = localDayStart(System.currentTimeMillis())
+    val yesterday = Calendar.getInstance().apply { timeInMillis = today; add(Calendar.DAY_OF_YEAR, -1) }.timeInMillis
+    val date = SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(Date(dayStart))
+    return when (dayStart) {
+        today -> "Today · $date"
+        yesterday -> "Yesterday · $date"
+        else -> SimpleDateFormat("EEEE, MMM d, yyyy", Locale.getDefault()).format(Date(dayStart))
+    }
+}
+
+private fun historyTimeLabel(timestamp: Long): String =
+    SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+
+private data class LibraryCard(val id: String, val title: String, val subtitle: String, val artSong: Song?, val onClick: () -> Unit)
 
 @Composable
 private fun LibraryBrowseHeader(
@@ -493,6 +785,7 @@ internal fun WavvBottomSheet(
                         .clip(RoundedCornerShape(32.dp))
                         .background(Brush.verticalGradient(listOf(Color(0xF41C1419), Color(0xF20A0A0E))))
                         .border(1.dp, Color.White.copy(.13f), RoundedCornerShape(32.dp))
+                        .clickable { }
                         .navigationBarsPadding()
                         .padding(horizontal = 18.dp, vertical = 14.dp),
                 ) {
@@ -512,15 +805,15 @@ internal fun WavvBottomSheet(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LibraryCollectionScreen(
+    page: LibraryPage,
     title: String,
     subtitle: String,
-    page: LibraryPage,
     songs: List<Song>,
     playlists: List<UserPlaylist>,
     favoriteIds: Set<Long>,
     sortMode: String,
     playAsText: Boolean,
-    bottomOverlayClearance: Dp,
+    hasNowPlaying: Boolean,
     isPlaylist: Boolean,
     isDetail: Boolean,
     onBack: () -> Unit,
@@ -561,25 +854,10 @@ private fun LibraryCollectionScreen(
     BoxWithConstraints(Modifier.fillMaxSize().background(WavvBackground)) {
         val height = minOf(620.dp, maxWidth + 170.dp)
         val artworkHeight = minOf(maxWidth, 480.dp)
-        if (featured != null) {
-            AnimatedContent(
-                targetState = featured,
-                transitionSpec = {
-                    fadeIn(
-                        initialAlpha = .35f,
-                        animationSpec = tween(900, easing = CubicBezierEasing(.25f, .1f, .25f, 1f)),
-                    ) togetherWith fadeOut(tween(1))
-                },
-                contentKey = { it.id },
-                label = "collection color wash",
-            ) { washSong ->
-                AlbumArt(washSong, Modifier.fillMaxSize().scale(1.16f).blur(62.dp).alpha(.55f), null, 0.dp)
-            }
-        }
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(.12f), Color.Transparent, Color(0xD908070A)))))
+        SongListArtworkBackdrop(featured, Modifier.matchParentSize())
         LazyColumn(
-            Modifier.fillMaxSize().padding(bottom = bottomOverlayClearance),
-            contentPadding = PaddingValues(bottom = 16.dp),
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = if (hasNowPlaying) 260.dp else 176.dp),
         ) {
             item {
                 Box(Modifier.fillMaxWidth().height(height)) {
@@ -725,19 +1003,3 @@ private fun LibraryCollectionScreen(
         )
     }
 }
-
-private fun Modifier.edgeBlendedArtworkMask(): Modifier =
-    graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen).drawWithContent {
-        drawContent()
-        drawRect(
-            brush = Brush.verticalGradient(
-                0f to Color.Transparent,
-                .12f to Color.Black.copy(alpha = .22f),
-                .30f to Color.Black,
-                .58f to Color.Black,
-                .84f to Color.Black.copy(alpha = .72f),
-                1f to Color.Transparent,
-            ),
-            blendMode = BlendMode.DstIn,
-        )
-    }

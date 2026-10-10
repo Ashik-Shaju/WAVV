@@ -26,6 +26,7 @@ sealed interface LibraryUiState {
         val songs: List<Song>,
         val favoriteIds: Set<Long> = emptySet(),
         val recentlyPlayed: List<Song> = emptyList(),
+        val playbackHistory: List<PlaybackHistoryEntry> = emptyList(),
         val playlists: List<UserPlaylist> = emptyList(),
         val searchResults: List<Song>? = null,
         val semanticLoading: Boolean = false,
@@ -178,6 +179,7 @@ class LibraryViewModel(
             songs = songs,
             favoriteIds = currentFavorites,
             recentlyPlayed = libraryStore.getRecentlyPlayed(),
+            playbackHistory = libraryStore.getPlaybackHistory(),
             playlists = libraryStore.getPlaylists(),
         )
         observeDiscovery(songs)
@@ -204,10 +206,12 @@ class LibraryViewModel(
                         )
                     }
                     val recentlyPlayed = libraryStore.getRecentlyPlayed()
+                    val playbackHistory = libraryStore.getPlaybackHistory()
                     _state.update { state ->
                         if (state is LibraryUiState.Ready && state.songs.map(Song::id) == songs.map(Song::id)) {
                             state.copy(
                                 recentlyPlayed = recentlyPlayed,
+                                playbackHistory = playbackHistory,
                                 personalizedRecommendations = discovery.recommendations,
                                 smartMixes = discovery.mixes,
                             )
@@ -326,7 +330,10 @@ class LibraryViewModel(
             try {
                 libraryStore.clearListeningHistory()
                 _state.update { current ->
-                    if (current is LibraryUiState.Ready) current.copy(recentlyPlayed = emptyList()) else current
+                    if (current is LibraryUiState.Ready) current.copy(
+                        recentlyPlayed = emptyList(),
+                        playbackHistory = emptyList(),
+                    ) else current
                 }
             } catch (error: CancellationException) {
                 throw error

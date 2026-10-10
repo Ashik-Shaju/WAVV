@@ -32,3 +32,9 @@ data class UserPlaylist(
     val songIds: List<Long> = emptyList(),
     val updatedAt: Long,
 )
+
+data class PlaybackHistoryEntry(
+    val id: Long,
+    val song: Song,
+    val playedAt: Long,
+)
