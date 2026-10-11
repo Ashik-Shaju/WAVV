@@ -67,6 +67,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -114,7 +115,6 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
@@ -199,6 +199,7 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -803,7 +804,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val artworkRetargetThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
     val homePlayerExpanded = activeSong != null && playerExpanded
     val homeStackExpansionProgress = animateFloatAsState(
-        targetValue = if (tab == Tab.Home && homeStackListExpanded && songs.isNotEmpty() && !showPlayer) 1f else 0f,
+        // Keep the mini-player docked at its current stack/list position behind the full player.
+        // Resetting this while opening moves the thumbnail target toward the screen middle.
+        targetValue = if (tab == Tab.Home && homeStackListExpanded && songs.isNotEmpty()) 1f else 0f,
         animationSpec = tween(560, easing = WavvMotionEasing),
         label = "home stack expansion",
     )
@@ -877,7 +880,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         artworkFlightScope.launch {
             artworkFlightProgress.snapTo(0f)
             artworkFlightTracksFinger = false
-            artworkFlightProgress.animateTo(1f, tween(620, easing = WavvMotionEasing))
+            artworkFlightProgress.animateTo(1f, tween(480, easing = WavvMotionEasing))
             if (artworkFlight?.id == flight.id) {
                 artworkFlight = null
                 gestureArtworkProgress.floatValue = 0f
@@ -894,6 +897,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 val currentFrame = interpolateArtworkFrame(currentFlight.from, currentFlight.to, fingerProgress)
                 val closingFlight = currentFlight.copy(
                     direction = PlayerArtworkFlightDirection.Closing,
+                    // The flight can outlive the song that opened Now Playing. Rebind it to
+                    // the currently active track before animating toward the mini player.
+                    song = activeSong,
                     from = currentFrame,
                     to = destination ?: currentFlight.to,
                     progressOrigin = 0f,
@@ -1135,9 +1141,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
         AnimatedVisibility(
             visible = showPlayer,
-            enter = fadeIn(tween(620, easing = WavvMotionEasing)),
-            exit = fadeOut(tween(620, easing = WavvMotionEasing)) +
-                slideOutVertically(tween(620, easing = WavvMotionEasing)) { (it * .38f).roundToInt() },
+            enter = fadeIn(tween(480, easing = WavvMotionEasing)),
+            exit = fadeOut(tween(390, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) +
+                slideOutVertically(tween(390, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) { (it * .38f).roundToInt() },
         ) {
             activeSong?.let {
                 FullPlayer(
@@ -1791,7 +1797,7 @@ private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious
 internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
     val fillProgress by animateFloatAsState(
         targetValue = if (filled) 1f else 0f,
-        animationSpec = spring(dampingRatio = .55f, stiffness = Spring.StiffnessMedium),
+        animationSpec = spring(dampingRatio = .86f, stiffness = Spring.StiffnessMedium),
         label = "favorite icon transition",
     )
     Canvas(Modifier.size(iconSize)) {
@@ -1834,20 +1840,22 @@ internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
         }) {
             drawPath(
                 star,
-                Brush.linearGradient(
-                    colors = listOf(Color(0xFFFFF0BD), Color(0xFFFFC76C), WavvPink, Color(0xFF9B72FF)),
-                    start = Offset(size.width * .24f, size.height * .18f),
-                    end = Offset(size.width * .82f, size.height * .84f),
-                ),
-                alpha = fillAlpha,
-            )
-            drawPath(
-                star,
-                Brush.linearGradient(listOf(Color.White, WavvPink, Color(0xFFFFC76C))),
+                color = Color.White,
                 alpha = 1f - fillAlpha,
                 style = Stroke(width = .95f * unit, join = androidx.compose.ui.graphics.StrokeJoin.Round),
             )
         }
+        val tick = Path().apply {
+            moveTo(7.0f * unit, 12.2f * unit)
+            lineTo(10.4f * unit, 15.6f * unit)
+            lineTo(17.4f * unit, 8.4f * unit)
+        }
+        drawPath(
+            tick,
+            color = WavvPink,
+            alpha = fillAlpha,
+            style = Stroke(width = 2.2f * unit, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+        )
         val reflection = Path().apply {
             moveTo(8.1f * unit, 9.3f * unit)
             quadraticTo(9.1f * unit, 7.45f * unit, 12f * unit, 7.1f * unit)
@@ -1855,12 +1863,12 @@ internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
         }
         drawPath(
             reflection,
-            Color.White.copy(alpha = fillAlpha * .82f),
+            Color.White.copy(alpha = (1f - fillAlpha) * .82f),
             style = Stroke(width = .7f * unit, cap = androidx.compose.ui.graphics.StrokeCap.Round),
         )
         val sparkleCenter = Offset(19.1f * unit, 5.5f * unit)
-        drawLine(Color.White.copy(alpha = fillAlpha * .9f), sparkleCenter.copy(y = sparkleCenter.y - 1.45f * unit), sparkleCenter.copy(y = sparkleCenter.y + 1.45f * unit), .7f * unit)
-        drawLine(Color.White.copy(alpha = fillAlpha * .9f), sparkleCenter.copy(x = sparkleCenter.x - 1.45f * unit), sparkleCenter.copy(x = sparkleCenter.x + 1.45f * unit), .7f * unit)
+        drawLine(Color.White.copy(alpha = (1f - fillAlpha) * .9f), sparkleCenter.copy(y = sparkleCenter.y - 1.45f * unit), sparkleCenter.copy(y = sparkleCenter.y + 1.45f * unit), .7f * unit)
+        drawLine(Color.White.copy(alpha = (1f - fillAlpha) * .9f), sparkleCenter.copy(x = sparkleCenter.x - 1.45f * unit), sparkleCenter.copy(x = sparkleCenter.x + 1.45f * unit), .7f * unit)
     }
 }
 
@@ -1913,6 +1921,11 @@ private fun FullPlayer(
     var playlistSong by remember(song.id) { mutableStateOf<Song?>(null) }
     var showNextSong by remember { mutableStateOf(false) }
     var nudgeNextUp by remember { mutableStateOf(false) }
+    val nextUpNudgePx by animateFloatAsState(
+        targetValue = if (nudgeNextUp) -3f else 0f,
+        animationSpec = tween(420, easing = WavvEaseInOut),
+        label = "next up nudge",
+    )
     var playerDragOffset by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
     var artworkGestureStarted by remember(song.id) { mutableStateOf(false) }
@@ -1941,7 +1954,7 @@ private fun FullPlayer(
         val playerHeightPx = with(density) { maxHeight.toPx() }
         val targetArtworkSize = if (state.isPlaying) playerMaxWidth else minOf(playerMaxWidth * .76f, 320.dp)
         val artworkSize by animateDpAsState(targetArtworkSize, tween(620, easing = WavvMotionEasing), label = "player artwork size")
-        val artworkTop by animateDpAsState(if (state.isPlaying) 64.dp else 84.dp, tween(620, easing = WavvMotionEasing), label = "player artwork position")
+        val artworkTop by animateDpAsState(if (state.isPlaying) 56.dp else 76.dp, tween(620, easing = WavvMotionEasing), label = "player artwork position")
         val artworkRadius by animateDpAsState(if (state.isPlaying) 0.dp else 16.dp, tween(620, easing = WavvMotionEasing), label = "player artwork corners")
         val artworkShadow by animateDpAsState(if (state.isPlaying) 0.dp else 20.dp, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "player artwork shadow")
         val regularArtAlpha by animateFloatAsState(if (state.isPlaying) 0f else 1f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "regular artwork fade")
@@ -1994,10 +2007,15 @@ private fun FullPlayer(
                 .background(Color.Black)
                 .pointerInput(showQueue, isDismissing, playerHeightPx) {
             var total = 0f
+            var downwardDragStarted = false
             detectVerticalDragGestures(
-                onDragStart = { total = 0f },
+                onDragStart = {
+                    total = 0f
+                    downwardDragStarted = false
+                },
                 onVerticalDrag = { _, amount ->
                     total += amount
+                    if (amount > 0f) downwardDragStarted = true
                     if (!showQueue && !isDismissing) {
                         val nextOffset = (playerDragOffset + amount).coerceAtLeast(0f)
                         if (nextOffset > 0f && !artworkGestureStarted) {
@@ -2023,7 +2041,7 @@ private fun FullPlayer(
                         onHideQueue()
                     } else if (!showQueue && playerDragOffset > 100f) {
                         dismissPlayer()
-                    } else if (total < -80 && !showQueue) {
+                    } else if (total < -80 && !downwardDragStarted && playerDragOffset <= 0f && !showQueue) {
                         onShowQueue()
                     } else {
                         settlePlayer()
@@ -2111,15 +2129,26 @@ private fun FullPlayer(
                     Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
                 }
             }
-            AnimatedContent(targetState = showNextSong, label = "next up label") { showSong ->
+            AnimatedContent(
+                targetState = showNextSong,
+                transitionSpec = { fadeIn(tween(220, easing = WavvEaseInOut)) togetherWith fadeOut(tween(180, easing = WavvEaseInOut)) },
+                label = "next up label",
+            ) { showSong ->
                 Text(
                     if (showSong) nextTitle else "Next Up",
-                    Modifier.fillMaxWidth().clickable(onClick = onShowQueue).graphicsLayer { translationY = if (nudgeNextUp) -5f else 0f }.padding(bottom = 4.dp),
+                    Modifier.fillMaxWidth().clickable(onClick = onShowQueue).graphicsLayer { translationY = nextUpNudgePx }.padding(bottom = 4.dp),
                     color = Color.White.copy(.45f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        AnimatedVisibility(visible = showQueue, enter = slideInVertically(tween(440, easing = WavvMotionEasing)) { it }, exit = slideOutVertically(tween(440, easing = WavvMotionEasing)) { it }) {
+        AnimatedVisibility(
+            visible = showQueue,
+            enter = fadeIn(tween(150, easing = WavvEaseInOut)) + slideInVertically(tween(280, easing = WavvMotionEasing)) { it / 2 },
+            exit = fadeOut(tween(130, easing = WavvEaseInOut)) + slideOutVertically(tween(240, easing = WavvMotionEasing)) { it / 2 },
+        ) {
             QueuePanel(
                 song = song,
                 queue = state.queue,
@@ -2266,11 +2295,29 @@ private fun Modifier.radialArtworkGlowMask(): Modifier =
     }
 
 @Composable
-private fun PlayerProgress(state: PlaybackState, song: Song, onSeek: (Long) -> Unit = {}) {
+private fun PlayerProgress(
+    state: PlaybackState,
+    song: Song,
+    onSeek: (Long) -> Unit = {},
+    accentColor: Color = Color(0xFFFFAE46),
+    sliderHeight: androidx.compose.ui.unit.Dp = 20.dp,
+) {
     val duration = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
     val position = state.positionMs.coerceIn(0L, duration)
     Column(Modifier.fillMaxWidth()) {
-        Slider(value = position.toFloat(), onValueChange = { onSeek(it.toLong()) }, valueRange = 0f..duration.toFloat(), modifier = Modifier.fillMaxWidth().height(20.dp), colors = SliderDefaults.colors(thumbColor = Color(0xFFFFAE46), activeTrackColor = Color(0xFFFFAE46), inactiveTrackColor = Color.White.copy(.22f)))
+        Slider(
+            value = position.toFloat(),
+            onValueChange = { onSeek(it.toLong()) },
+            valueRange = 0f..duration.toFloat(),
+            modifier = Modifier.fillMaxWidth().height(sliderHeight),
+            colors = SliderDefaults.colors(
+                thumbColor = accentColor,
+                activeTrackColor = accentColor,
+                inactiveTrackColor = Color.White.copy(.2f),
+                activeTickColor = Color.Transparent,
+                inactiveTickColor = Color.Transparent,
+            ),
+        )
         Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(formatTime(position), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.width(12.dp))
@@ -2626,42 +2673,111 @@ private fun QueuePanel(
 ) {
     var menuIndex by remember { mutableStateOf<Int?>(null) }
     var playlistSong by remember { mutableStateOf<Song?>(null) }
-    val rowStepPx = with(LocalDensity.current) { 62.dp.toPx() }
-    Column(Modifier.fillMaxSize().background(Color(0xB8000008)).statusBarsPadding().navigationBarsPadding().padding(top = 12.dp)) {
-        Box(
-            Modifier.fillMaxWidth().height(72.dp).pointerInput(onClose) {
-                var dragDistance = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { dragDistance = 0f },
-                    onVerticalDrag = { _, amount -> dragDistance += amount },
-                    onDragEnd = { if (dragDistance > 80f) onClose() },
-                )
-            },
+    var currentSongMenuExpanded by remember { mutableStateOf(false) }
+    var draggingSongKey by remember { mutableStateOf<String?>(null) }
+    var draggingSongIndex by remember { mutableIntStateOf(-1) }
+    var draggingOffset by remember { mutableFloatStateOf(0f) }
+    var draggingPointerY by remember { mutableFloatStateOf(Float.NaN) }
+    val queueListState = rememberLazyListState()
+    val (rowStepPx, handleTopInsetPx) = with(LocalDensity.current) {
+        62.dp.toPx() to ((62.dp - 36.dp).toPx() / 2f)
+    }
+    val captureState = remember { AtomicBoolean(false) }
+    fun moveDraggedRowOneStep() {
+        val direction = when {
+            draggingOffset >= rowStepPx -> 1
+            draggingOffset <= -rowStepPx -> -1
+            else -> 0
+        }
+        val targetIndex = draggingSongIndex + direction
+        if (direction != 0 && draggingSongIndex in queue.indices && targetIndex in queue.indices) {
+            onMoveQueueItem(draggingSongIndex, targetIndex)
+            draggingSongIndex = targetIndex
+            draggingOffset -= rowStepPx * direction
+        }
+    }
+    LaunchedEffect(draggingSongKey) {
+        while (draggingSongKey != null) {
+            val layout = queueListState.layoutInfo
+            val edgeSize = rowStepPx * 1.15f
+            val pointerY = draggingPointerY
+            val viewportStart = layout.viewportStartOffset.toFloat()
+            val viewportEnd = layout.viewportEndOffset.toFloat()
+            val scrollDelta = when {
+                pointerY.isNaN() -> 0f
+                pointerY < viewportStart + edgeSize ->
+                    -(((viewportStart + edgeSize - pointerY) / edgeSize).coerceIn(0f, 1f) * 18f)
+                pointerY > viewportEnd - edgeSize ->
+                    (((pointerY - (viewportEnd - edgeSize)) / edgeSize).coerceIn(0f, 1f) * 18f)
+                else -> 0f
+            }
+            if (scrollDelta != 0f) {
+                val consumed = queueListState.scrollBy(scrollDelta)
+                // The list moves beneath the held pointer. Offset the dragged row by
+                // the same amount, then advance at most one queue position per frame.
+                draggingOffset += consumed
+                moveDraggedRowOneStep()
+            }
+            delay(16)
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        FrostedBackdrop(
+            captureState = captureState,
+            blurRadiusDp = 38f,
+            tint = Color(0xA9101117),
+            modifier = Modifier.matchParentSize(),
+            refreshEnabled = true,
+        )
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            AlbumArt(song, Modifier.padding(start = 24.dp).size(64.dp), song.title, 10.dp)
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.align(Alignment.TopEnd).padding(end = 16.dp).size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)),
-            ) {
-                Icon(Icons.Default.ArrowDownward, contentDescription = "Back to player", tint = Color.White.copy(.85f))
+            AlbumArt(song, Modifier.size(52.dp), song.title, 10.dp)
+            TrackText(song, Modifier.weight(1f), 15.sp)
+            Box(Modifier.size(36.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) {
+                FigmaFavouriteIcon(liked, 29.dp)
+            }
+            Box {
+                Box(Modifier.size(36.dp).clickable { currentSongMenuExpanded = true }, contentAlignment = Alignment.Center) {
+                    FigmaMoreIcon(28.dp)
+                }
+                DropdownMenu(expanded = currentSongMenuExpanded, onDismissRequest = { currentSongMenuExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Play next") }, onClick = { currentSongMenuExpanded = false; onPlayNext(song) })
+                    DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { currentSongMenuExpanded = false; playlistSong = song })
+                    DropdownMenuItem(text = { Text("Go to album") }, onClick = { currentSongMenuExpanded = false; onNavigateToAlbum(song) })
+                    DropdownMenuItem(text = { Text("Go to artist") }, onClick = { currentSongMenuExpanded = false; onNavigateToArtist(song) })
+                }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(start = 102.dp, end = 24.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            TrackText(song, Modifier.weight(1f), 16.sp)
-            Box(Modifier.size(38.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) { FigmaFavouriteIcon(liked, 30.dp) }
-        }
-        Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 10.dp)) { ShelfLabel("Up Next") }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
-            itemsIndexed(queue, key = { index, item -> "${item.id}:$index" }) { index, item ->
+        Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 6.dp, bottom = 6.dp)) { ShelfLabel("Up Next") }
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+            state = queueListState,
+            contentPadding = PaddingValues(bottom = 8.dp),
+        ) {
+            itemsIndexed(queue, key = { index, item -> "${item.id}:${queue.take(index).count { it.id == item.id }}" }) { index, item ->
+                val rowKey = "${item.id}:${queue.take(index).count { it.id == item.id }}"
                 val isCurrent = item.id == song.id
+                val isBeingDragged = rowKey == draggingSongKey
                 Row(
-                    Modifier.fillMaxWidth()
-                        .combinedClickable(
-                            role = Role.Button,
-                            onClick = { onPlaySong(item) },
-                            onLongClick = { menuIndex = index },
-                        )
-                        .padding(vertical = 8.dp),
+                    (if (isBeingDragged) Modifier else Modifier.animateItem(
+                        placementSpec = tween(140, easing = CubicBezierEasing(.2f, 0f, 0f, 1f)),
+                    ))
+                        .fillMaxWidth()
+                        .zIndex(if (isBeingDragged) 1f else 0f)
+                        // Move the opaque selection and the song content together.
+                        .graphicsLayer {
+                            translationY = if (isBeingDragged) draggingOffset else 0f
+                            shadowElevation = if (isBeingDragged) 8.dp.toPx() else 0f
+                        }
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isBeingDragged) Color(0xFF24252A) else Color.Transparent)
+                        .border(1.dp, if (isBeingDragged) Color.White.copy(.08f) else Color.Transparent, RoundedCornerShape(16.dp))
+                        .clickable(role = Role.Button, onClick = { onPlaySong(item) })
+                        .padding(horizontal = 6.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -2669,7 +2785,7 @@ private fun QueuePanel(
                     TrackText(item, Modifier.weight(1f), 14.sp)
                     if (isCurrent) Box(Modifier.size(5.dp).clip(CircleShape).background(Color.White))
                     Box {
-                        Box(Modifier.size(34.dp).clickable { menuIndex = index }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
+                        Box(Modifier.size(34.dp).clickable { menuIndex = index }, contentAlignment = Alignment.Center) { FigmaMoreIcon(28.dp) }
                         DropdownMenu(expanded = menuIndex == index, onDismissRequest = { menuIndex = null }) {
                             DropdownMenuItem(text = { Text("Play next") }, onClick = { menuIndex = null; onPlayNext(item) })
                             DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { menuIndex = null; playlistSong = item })
@@ -2678,20 +2794,38 @@ private fun QueuePanel(
                             if (!isCurrent) DropdownMenuItem(text = { Text("Remove from queue") }, onClick = { menuIndex = null; onRemoveQueueItem(index) })
                         }
                     }
-                    IconButton(
-                        onClick = { if (index < queue.lastIndex) onMoveQueueItem(index, index + 1) },
-                        modifier = Modifier.size(36.dp).pointerInput(index, queue.size) {
-                            var dragDistance = 0f
+                    Box(
+                        Modifier.size(36.dp).pointerInput(rowKey) {
                             detectDragGesturesAfterLongPress(
-                                onDragStart = { dragDistance = 0f },
-                                onDragEnd = {
-                                    val steps = (dragDistance / rowStepPx).toInt()
-                                    if (steps != 0) onMoveQueueItem(index, (index + steps).coerceIn(0, queue.lastIndex))
+                            onDragStart = { start ->
+                                    draggingSongKey = rowKey
+                                    draggingSongIndex = index
+                                    draggingOffset = 0f
+                                    val itemInfo = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
+                                    draggingPointerY = itemInfo?.let { it.offset + handleTopInsetPx + start.y }
+                                        ?: Float.NaN
                                 },
-                                onDragCancel = { dragDistance = 0f },
-                                onDrag = { change, amount -> change.consume(); dragDistance += amount.y },
+                                onDragEnd = {
+                                    draggingSongKey = null
+                                    draggingSongIndex = -1
+                                    draggingOffset = 0f
+                                    draggingPointerY = Float.NaN
+                                },
+                                onDragCancel = {
+                                    draggingSongKey = null
+                                    draggingSongIndex = -1
+                                    draggingOffset = 0f
+                                    draggingPointerY = Float.NaN
+                                },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    draggingOffset += amount.y
+                                    draggingPointerY += amount.y
+                                    moveDraggedRowOneStep()
+                                },
                             )
                         },
+                        contentAlignment = Alignment.Center,
                     ) {
                         Image(androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle), "Hold and drag to reorder ${item.title}", Modifier.size(18.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.42f)))
                     }
@@ -2721,6 +2855,7 @@ private fun QueuePanel(
                     tint = if (loopMode == LoopMode.Off) Color.White.copy(.5f) else Color.White,
                 )
             }
+        }
         }
     }
     playlistSong?.let { selectedSong ->
@@ -2823,6 +2958,8 @@ private fun LyricsPanel(song: Song, positionMs: Long, durationMs: Long, onSeek: 
                 state = PlaybackState(positionMs = positionMs, durationMs = durationMs),
                 song = song,
                 onSeek = onSeek,
+                accentColor = WavvPink,
+                sliderHeight = 20.dp,
             )
         }
     }

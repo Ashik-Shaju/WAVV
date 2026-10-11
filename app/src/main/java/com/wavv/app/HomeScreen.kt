@@ -677,7 +677,7 @@ private fun HomeStackCard(
     onEntryClick: (HomeStackEntry) -> Unit,
 ) {
     val captureState = remember { AtomicBoolean(false) }
-    val tileWidth = ((LocalConfiguration.current.screenWidthDp.dp - 88.dp) / 3).coerceIn(64.dp, 94.dp)
+    val tileWidth = ((LocalConfiguration.current.screenWidthDp.dp - 96.dp) / 3).coerceIn(64.dp, 88.dp)
     val cardShape = RoundedCornerShape(28.dp)
     Box(modifier.clip(cardShape)) {
         FrostedBackdrop(
@@ -694,22 +694,22 @@ private fun HomeStackCard(
                     val wash = Brush.linearGradient(listOf(Color.White.copy(.055f), Color.White.copy(.012f), Color.Transparent))
                     onDrawBehind { drawRect(wash) }
                 }
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 3.dp).padding(bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(section.label.uppercase(), color = Color.White, fontSize = 15.sp, lineHeight = 18.sp, fontWeight = FontWeight.Black, letterSpacing = .55.sp, fontFamily = FontFamily.SansSerif)
+            Text(section.label.uppercase(), color = Color.White, fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black, letterSpacing = .45.sp, fontFamily = FontFamily.SansSerif)
             Text(
                 if (section.mix != null) "PLAY MIX" else "Swipe to explore",
                 Modifier.then(if (section.mix != null) Modifier.clickable { onPlayMix(section.mix) } else Modifier),
-                color = Color.White.copy(.48f), fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                color = Color.White.copy(.48f), fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
             )
         }
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 3.dp),
         ) {
             itemsIndexed(
@@ -735,10 +735,10 @@ private fun HomeStackCard(
                             )
                             Text(
                                 entry.title,
-                                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 7.dp, vertical = 7.dp),
+                                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 7.dp, vertical = 6.dp),
                                 color = Color.White,
-                                fontSize = 10.sp,
-                                lineHeight = 12.sp,
+                                fontSize = 9.sp,
+                                lineHeight = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,

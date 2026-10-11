@@ -456,15 +456,15 @@ internal fun LibraryScreen(
                         }
                     }
                     val cardRows = remember(orderedCards) { orderedCards.chunked(2) }
-                    LazyColumn(contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 16.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp)) {
+                    LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp)) {
                         if (layout == LibraryLayout.Grid) {
                             items(cardRows.size) { rowIndex ->
-                                Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Row(Modifier.fillMaxWidth().padding(bottom = 22.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                     cardRows[rowIndex].forEach { card ->
                                         Column(Modifier.weight(1f).clickable(onClick = card.onClick)) {
                                             AlbumArt(card.artSong?.albumArtUri, Modifier.fillMaxWidth().aspectRatio(1f), card.title, 13.dp, card.artSong?.uri)
-                                            Text(card.title, Modifier.padding(top = 8.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(card.title, Modifier.padding(top = 7.dp), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(card.subtitle, color = Color.White.copy(.48f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             if (route.page == LibraryPage.Playlists) {
                                                 val playlistId = card.id.toLongOrNull()
                                                 Box {
