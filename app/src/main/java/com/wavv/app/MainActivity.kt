@@ -61,7 +61,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -178,6 +177,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -1772,10 +1772,18 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
 }
 
 @Composable
-private fun TrackText(song: Song, modifier: Modifier = Modifier, titleSize: TextUnit = 14.sp, subtitleSize: TextUnit = 12.sp, titleLetterSpacing: TextUnit = TextUnit.Unspecified) {
+private fun TrackText(
+    song: Song,
+    modifier: Modifier = Modifier,
+    titleSize: TextUnit = 14.sp,
+    subtitleSize: TextUnit = 12.sp,
+    titleLetterSpacing: TextUnit = TextUnit.Unspecified,
+    titleColor: Color = Color.White,
+    subtitleColor: Color = Color.White.copy(.5f),
+) {
     Column(modifier) {
-        Text(song.title, color = Color.White, fontSize = titleSize, fontWeight = FontWeight.Bold, letterSpacing = titleLetterSpacing, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(song.artist, color = Color.White.copy(.5f), fontSize = subtitleSize, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+        Text(song.title, color = titleColor, fontSize = titleSize, fontWeight = FontWeight.Bold, letterSpacing = titleLetterSpacing, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(song.artist, color = subtitleColor, fontSize = subtitleSize, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -2649,6 +2657,11 @@ private fun OutputGlyph(kind: String, color: Color, modifier: Modifier = Modifie
     }
 }
 
+private data class QueueDragEntry(
+    val key: String,
+    val song: Song,
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QueuePanel(
@@ -2676,58 +2689,249 @@ private fun QueuePanel(
     var currentSongMenuExpanded by remember { mutableStateOf(false) }
     var draggingSongKey by remember { mutableStateOf<String?>(null) }
     var draggingSongIndex by remember { mutableIntStateOf(-1) }
-    var draggingOffset by remember { mutableFloatStateOf(0f) }
     var draggingPointerY by remember { mutableFloatStateOf(Float.NaN) }
+    var draggingTouchOffsetY by remember { mutableFloatStateOf(0f) }
+    var queueListTopInRootPx by remember { mutableFloatStateOf(0f) }
+    var localQueueOrder by remember { mutableStateOf<List<QueueDragEntry>?>(null) }
+    var pendingQueueIds by remember { mutableStateOf<List<Long>?>(null) }
+    var settlingSongKey by remember { mutableStateOf<String?>(null) }
+    var settlingOverlayStartTopPx by remember { mutableFloatStateOf(0f) }
+    var settlingOverlayTargetTopPx by remember { mutableFloatStateOf(0f) }
+    var settlingTargetReady by remember { mutableStateOf(false) }
     val queueListState = rememberLazyListState()
-    val (rowStepPx, handleTopInsetPx) = with(LocalDensity.current) {
-        62.dp.toPx() to ((62.dp - 36.dp).toPx() / 2f)
-    }
-    val captureState = remember { AtomicBoolean(false) }
-    fun moveDraggedRowOneStep() {
-        val direction = when {
-            draggingOffset >= rowStepPx -> 1
-            draggingOffset <= -rowStepPx -> -1
-            else -> 0
+    val density = LocalDensity.current
+    val rowStepPx = with(density) { 62.dp.toPx() }
+    val edgeZonePx = with(density) { 84.dp.toPx() }
+    val maxAutoScrollPxPerSecond = with(density) { 1_100.dp.toPx() }
+    val dragHandleBounds = remember { mutableMapOf<String, Rect>() }
+    val queueRootCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    val latestQueue = rememberUpdatedState(queue)
+    val latestMoveQueueItem = rememberUpdatedState(onMoveQueueItem)
+    val externalQueueEntries = remember(queue) {
+        val occurrences = mutableMapOf<Long, Int>()
+        queue.map { queuedSong ->
+            val occurrence = occurrences.getOrDefault(queuedSong.id, 0)
+            occurrences[queuedSong.id] = occurrence + 1
+            QueueDragEntry("${queuedSong.id}:$occurrence", queuedSong)
         }
-        val targetIndex = draggingSongIndex + direction
-        if (direction != 0 && draggingSongIndex in queue.indices && targetIndex in queue.indices) {
-            onMoveQueueItem(draggingSongIndex, targetIndex)
-            draggingSongIndex = targetIndex
-            draggingOffset -= rowStepPx * direction
+    }
+    val displayedQueueEntries = localQueueOrder ?: externalQueueEntries
+    val queueControlsEnabled = draggingSongKey == null && pendingQueueIds == null
+    val settleProgress by animateFloatAsState(
+        targetValue = if (settlingSongKey != null && settlingTargetReady) 1f else 0f,
+        animationSpec = tween(230, easing = WavvScreenEasing),
+        label = "queue row drop settle",
+    )
+    val captureState = remember { AtomicBoolean(false) }
+    LaunchedEffect(queue, pendingQueueIds, draggingSongKey) {
+        val expectedIds = pendingQueueIds
+        if (expectedIds != null && queue.map { it.id } == expectedIds) {
+            // Keep the locally animated order until Media3 reports the committed move.
+            localQueueOrder = null
+            pendingQueueIds = null
+        } else if (expectedIds == null && draggingSongKey == null) {
+            localQueueOrder = null
+        }
+    }
+    fun moveDraggedRowLocally() {
+        val key = draggingSongKey ?: return
+        val currentRows = localQueueOrder ?: displayedQueueEntries
+        val currentIndex = currentRows.indexOfFirst { it.key == key }
+        if (currentIndex !in currentRows.indices) return
+        val pointerY = draggingPointerY
+        if (pointerY.isNaN()) return
+        val overlayCenterY = pointerY - draggingTouchOffsetY + rowStepPx / 2f
+        val visibleItems = queueListState.layoutInfo.visibleItemsInfo
+        val nextEntry = currentRows.getOrNull(currentIndex + 1)
+        val nextCenterY = nextEntry?.let { next ->
+            visibleItems.firstOrNull { it.key == next.key }?.let { it.offset + it.size / 2f }
+        }
+        val previousEntry = currentRows.getOrNull(currentIndex - 1)
+        val previousCenterY = previousEntry?.let { previous ->
+            visibleItems.firstOrNull { it.key == previous.key }?.let { it.offset + it.size / 2f }
+        }
+        val targetIndex = when {
+            nextCenterY != null && overlayCenterY > nextCenterY -> currentIndex + 1
+            previousCenterY != null && overlayCenterY < previousCenterY -> currentIndex - 1
+            else -> currentIndex
+        }
+        if (targetIndex != currentIndex) {
+            val reorderedRows = currentRows.toMutableList()
+            val draggedRow = reorderedRows.removeAt(currentIndex)
+            reorderedRows.add(targetIndex, draggedRow)
+            localQueueOrder = reorderedRows
+        }
+    }
+    fun finishQueueDrag() {
+        val key = draggingSongKey ?: return
+        val finalRows = localQueueOrder ?: displayedQueueEntries
+        val destinationIndex = finalRows.indexOfFirst { it.key == key }
+        val sourceIndex = draggingSongIndex
+        settlingOverlayStartTopPx = draggingPointerY - draggingTouchOffsetY
+        settlingOverlayTargetTopPx = settlingOverlayStartTopPx
+        settlingTargetReady = false
+        settlingSongKey = key
+        draggingSongKey = null
+        draggingSongIndex = -1
+        draggingPointerY = Float.NaN
+        if (sourceIndex >= 0 && destinationIndex >= 0 && sourceIndex != destinationIndex) {
+            // One Media3 queue update at drop; frame-by-frame reorder stays Compose-local.
+            pendingQueueIds = finalRows.map { it.song.id }
+            latestMoveQueueItem.value(sourceIndex, destinationIndex)
+        } else {
+            localQueueOrder = null
+        }
+    }
+    val latestBeginQueueDrag = rememberUpdatedState<(String, Float) -> Boolean> { rowKey, pointerRootY ->
+        val currentQueue = latestQueue.value
+        var sourceIndex = -1
+        val occurrences = mutableMapOf<Long, Int>()
+        currentQueue.forEachIndexed { queueIndex, queuedSong ->
+            val occurrence = occurrences.getOrDefault(queuedSong.id, 0)
+            occurrences[queuedSong.id] = occurrence + 1
+            if ("${queuedSong.id}:$occurrence" == rowKey) sourceIndex = queueIndex
+        }
+        val itemInfo = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
+        if (sourceIndex >= 0 && itemInfo != null && pendingQueueIds == null && draggingSongKey == null) {
+            settlingSongKey = null
+            settlingTargetReady = false
+            menuIndex = null
+            localQueueOrder = displayedQueueEntries
+            draggingSongKey = rowKey
+            draggingSongIndex = sourceIndex
+            draggingTouchOffsetY = (pointerRootY - queueListTopInRootPx - itemInfo.offset)
+                .coerceIn(0f, rowStepPx)
+            draggingPointerY = pointerRootY - queueListTopInRootPx
+            true
+        } else {
+            false
+        }
+    }
+    val latestUpdateQueueDragPointer = rememberUpdatedState<(Float) -> Unit> { pointerRootY ->
+        if (draggingSongKey != null) {
+            draggingPointerY = pointerRootY - queueListTopInRootPx
+            moveDraggedRowLocally()
+        }
+    }
+    val latestFinishQueueDrag = rememberUpdatedState { finishQueueDrag() }
+    LaunchedEffect(settlingSongKey) {
+        val key = settlingSongKey ?: return@LaunchedEffect
+        settlingTargetReady = false
+        withFrameNanos { }
+        settlingOverlayTargetTopPx = queueListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == key }
+            ?.offset
+            ?.toFloat()
+            ?: settlingOverlayStartTopPx
+        settlingTargetReady = true
+        delay(240)
+        if (settlingSongKey == key) {
+            settlingSongKey = null
+            settlingTargetReady = false
         }
     }
     LaunchedEffect(draggingSongKey) {
+        var previousFrameNanos = 0L
         while (draggingSongKey != null) {
+            val frameNanos = withFrameNanos { it }
+            val frameSeconds = if (previousFrameNanos == 0L) 1f / 60f
+                else ((frameNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(0f, .05f)
+            previousFrameNanos = frameNanos
             val layout = queueListState.layoutInfo
-            val edgeSize = rowStepPx * 1.15f
             val pointerY = draggingPointerY
             val viewportStart = layout.viewportStartOffset.toFloat()
             val viewportEnd = layout.viewportEndOffset.toFloat()
-            val scrollDelta = when {
-                pointerY.isNaN() -> 0f
-                pointerY < viewportStart + edgeSize ->
-                    -(((viewportStart + edgeSize - pointerY) / edgeSize).coerceIn(0f, 1f) * 18f)
-                pointerY > viewportEnd - edgeSize ->
-                    (((pointerY - (viewportEnd - edgeSize)) / edgeSize).coerceIn(0f, 1f) * 18f)
-                else -> 0f
+            val edgeDirection: Float
+            val edgeProgress: Float
+            when {
+                pointerY.isNaN() -> {
+                    edgeDirection = 0f
+                    edgeProgress = 0f
+                }
+                pointerY < viewportStart + edgeZonePx -> {
+                    edgeDirection = -1f
+                    edgeProgress = ((viewportStart + edgeZonePx - pointerY) / edgeZonePx).coerceIn(0f, 1f)
+                }
+                pointerY > viewportEnd - edgeZonePx -> {
+                    edgeDirection = 1f
+                    edgeProgress = ((pointerY - (viewportEnd - edgeZonePx)) / edgeZonePx).coerceIn(0f, 1f)
+                }
+                else -> {
+                    edgeDirection = 0f
+                    edgeProgress = 0f
+                }
             }
-            if (scrollDelta != 0f) {
-                val consumed = queueListState.scrollBy(scrollDelta)
-                // The list moves beneath the held pointer. Offset the dragged row by
-                // the same amount, then advance at most one queue position per frame.
-                draggingOffset += consumed
-                moveDraggedRowOneStep()
+            if (edgeDirection != 0f) {
+                val easedEdgeProgress = edgeProgress * edgeProgress
+                val scrollDelta = edgeDirection * maxAutoScrollPxPerSecond * easedEdgeProgress * frameSeconds
+                queueListState.scrollBy(scrollDelta)
             }
-            delay(16)
+            // Re-evaluate against the currently laid-out neighbors each frame. The
+            // dragged artwork stays in a separate overlay while the list slot moves.
+            moveDraggedRowLocally()
         }
     }
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier.fillMaxSize()
+            .onGloballyPositioned { queueRootCoordinates[0] = it }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val rootCoordinates = queueRootCoordinates[0] ?: return@awaitEachGesture
+                    val downInRoot = rootCoordinates.localToRoot(down.position)
+                    val rowKey = dragHandleBounds.entries.firstOrNull { (_, bounds) ->
+                        bounds.contains(downInRoot)
+                    }?.key ?: return@awaitEachGesture
+                    var dragStarted = false
+                    var dragFinished = false
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                if (dragStarted) {
+                                    latestFinishQueueDrag.value()
+                                    dragFinished = true
+                                    dragStarted = false
+                                }
+                                break
+                            }
+                            val pointerInRoot = rootCoordinates.localToRoot(change.position)
+                            if (!dragStarted) {
+                                if (change.isConsumed) break
+                                val delta = pointerInRoot - downInRoot
+                                if (kotlin.math.abs(delta.y) > viewConfiguration.touchSlop &&
+                                    kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x)
+                                ) {
+                                    // Claim only handle-origin vertical drags, before LazyColumn
+                                    // can turn the same gesture into a scroll and cancel it.
+                                    dragStarted = latestBeginQueueDrag.value(rowKey, downInRoot.y)
+                                    if (dragStarted) {
+                                        change.consume()
+                                        latestUpdateQueueDragPointer.value(pointerInRoot.y)
+                                    } else {
+                                        break
+                                    }
+                                }
+                            } else {
+                                change.consume()
+                                latestUpdateQueueDragPointer.value(pointerInRoot.y)
+                            }
+                        }
+                    } finally {
+                        if (dragStarted && !dragFinished) latestFinishQueueDrag.value()
+                    }
+                }
+            },
+    ) {
         FrostedBackdrop(
             captureState = captureState,
             blurRadiusDp = 38f,
             tint = Color(0xA9101117),
             modifier = Modifier.matchParentSize(),
-            refreshEnabled = true,
+            // The backdrop itself is static while queue rows move. Freezing the capture
+            // during a drag avoids spending a frame budget re-blurring the whole screen.
+            refreshEnabled = draggingSongKey == null && settlingSongKey == null,
         )
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 8.dp)) {
         Row(
@@ -2754,38 +2958,78 @@ private fun QueuePanel(
         }
         Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 6.dp, bottom = 6.dp)) { ShelfLabel("Up Next") }
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+            Modifier.weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .onGloballyPositioned { coordinates ->
+                    queueListTopInRootPx = coordinates.boundsInRoot().top
+                },
             state = queueListState,
             contentPadding = PaddingValues(bottom = 8.dp),
         ) {
-            itemsIndexed(queue, key = { index, item -> "${item.id}:${queue.take(index).count { it.id == item.id }}" }) { index, item ->
-                val rowKey = "${item.id}:${queue.take(index).count { it.id == item.id }}"
+            itemsIndexed(displayedQueueEntries, key = { _, entry -> entry.key }) { index, entry ->
+                val item = entry.song
+                val rowKey = entry.key
                 val isCurrent = item.id == song.id
                 val isBeingDragged = rowKey == draggingSongKey
+                val isSettling = rowKey == settlingSongKey
+                val rowAlpha = when {
+                    isBeingDragged -> 0f
+                    isSettling -> settleProgress
+                    else -> 1f
+                }
+                val rowScale = if (isSettling) .97f + .03f * settleProgress else 1f
                 Row(
-                    (if (isBeingDragged) Modifier else Modifier.animateItem(
-                        placementSpec = tween(140, easing = CubicBezierEasing(.2f, 0f, 0f, 1f)),
-                    ))
+                    Modifier.animateItem(
+                        placementSpec = if (isBeingDragged) androidx.compose.animation.core.snap()
+                            else androidx.compose.animation.core.spring(
+                                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessHigh,
+                            ),
+                    )
                         .fillMaxWidth()
-                        .zIndex(if (isBeingDragged) 1f else 0f)
-                        // Move the opaque selection and the song content together.
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (isSettling) WavvPink.copy(alpha = .08f * (1f - settleProgress))
+                            else Color.Transparent,
+                        )
                         .graphicsLayer {
-                            translationY = if (isBeingDragged) draggingOffset else 0f
-                            shadowElevation = if (isBeingDragged) 8.dp.toPx() else 0f
+                            alpha = rowAlpha
+                            scaleX = rowScale
+                            scaleY = rowScale
                         }
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(if (isBeingDragged) Color(0xFF24252A) else Color.Transparent)
-                        .border(1.dp, if (isBeingDragged) Color.White.copy(.08f) else Color.Transparent, RoundedCornerShape(16.dp))
-                        .clickable(role = Role.Button, onClick = { onPlaySong(item) })
                         .padding(horizontal = 6.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    AlbumArt(item, Modifier.size(46.dp), item.title, 9.dp)
-                    TrackText(item, Modifier.weight(1f), 14.sp)
-                    if (isCurrent) Box(Modifier.size(5.dp).clip(CircleShape).background(Color.White))
+                    Row(
+                        Modifier.weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(
+                                enabled = queueControlsEnabled,
+                                role = Role.Button,
+                                onClick = { onPlaySong(item) },
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        AlbumArt(item, Modifier.size(46.dp), item.title, 9.dp)
+                        TrackText(
+                            item,
+                            Modifier.weight(1f),
+                            14.sp,
+                            titleColor = if (isCurrent) WavvPink else Color.White,
+                            subtitleColor = if (isCurrent) WavvPink.copy(alpha = .68f) else Color.White.copy(.5f),
+                        )
+                    }
+                    if (isCurrent) Box(Modifier.size(5.dp).clip(CircleShape).background(WavvPink))
                     Box {
-                        Box(Modifier.size(34.dp).clickable { menuIndex = index }, contentAlignment = Alignment.Center) { FigmaMoreIcon(28.dp) }
+                        Box(
+                            Modifier.size(34.dp).clickable(enabled = queueControlsEnabled) {
+                                menuIndex = index
+                            },
+                            contentAlignment = Alignment.Center,
+                        ) { FigmaMoreIcon(28.dp) }
                         DropdownMenu(expanded = menuIndex == index, onDismissRequest = { menuIndex = null }) {
                             DropdownMenuItem(text = { Text("Play next") }, onClick = { menuIndex = null; onPlayNext(item) })
                             DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { menuIndex = null; playlistSong = item })
@@ -2795,39 +3039,20 @@ private fun QueuePanel(
                         }
                     }
                     Box(
-                        Modifier.size(36.dp).pointerInput(rowKey) {
-                            detectDragGesturesAfterLongPress(
-                            onDragStart = { start ->
-                                    draggingSongKey = rowKey
-                                    draggingSongIndex = index
-                                    draggingOffset = 0f
-                                    val itemInfo = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
-                                    draggingPointerY = itemInfo?.let { it.offset + handleTopInsetPx + start.y }
-                                        ?: Float.NaN
-                                },
-                                onDragEnd = {
-                                    draggingSongKey = null
-                                    draggingSongIndex = -1
-                                    draggingOffset = 0f
-                                    draggingPointerY = Float.NaN
-                                },
-                                onDragCancel = {
-                                    draggingSongKey = null
-                                    draggingSongIndex = -1
-                                    draggingOffset = 0f
-                                    draggingPointerY = Float.NaN
-                                },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    draggingOffset += amount.y
-                                    draggingPointerY += amount.y
-                                    moveDraggedRowOneStep()
-                                },
-                            )
+                        Modifier.size(36.dp).onGloballyPositioned { coordinates ->
+                            dragHandleBounds[rowKey] = coordinates.boundsInRoot()
                         },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Image(androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle), "Hold and drag to reorder ${item.title}", Modifier.size(18.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.42f)))
+                        DisposableEffect(rowKey) {
+                            onDispose { dragHandleBounds.remove(rowKey) }
+                        }
+                        Image(
+                            androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle),
+                            "Drag to reorder ${item.title}",
+                            Modifier.size(36.dp),
+                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.42f)),
+                        )
                     }
                 }
             }
@@ -2856,6 +3081,81 @@ private fun QueuePanel(
                 )
             }
         }
+        }
+        val overlayKey = draggingSongKey ?: settlingSongKey
+        val overlayEntry = overlayKey?.let { key -> displayedQueueEntries.firstOrNull { it.key == key } }
+        if (overlayEntry != null) {
+            val overlayTopPx = if (draggingSongKey != null && !draggingPointerY.isNaN()) {
+                draggingPointerY - draggingTouchOffsetY
+            } else {
+                settlingOverlayStartTopPx +
+                    (settlingOverlayTargetTopPx - settlingOverlayStartTopPx) * settleProgress
+            }
+            val overlayAlpha = if (draggingSongKey != null) 1f else 1f - settleProgress
+            val overlayDropBlend = if (draggingSongKey != null) 0f
+                else 1f - kotlin.math.abs(2f * settleProgress - 1f)
+            val overlayScale = 1f + .012f * overlayDropBlend
+            Box(
+                Modifier.align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .offset {
+                        IntOffset(0, (queueListTopInRootPx + overlayTopPx).roundToInt())
+                    }
+                    .zIndex(2f)
+                    .graphicsLayer {
+                        alpha = overlayAlpha
+                        shadowElevation = 8.dp.toPx() * overlayAlpha
+                        scaleX = overlayScale
+                        scaleY = overlayScale
+                    }
+                    .height(62.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(
+                        1.dp,
+                        Color.White.copy(alpha = .07f + .11f * overlayDropBlend),
+                        RoundedCornerShape(16.dp),
+                    ),
+            ) {
+                FrostedBackdrop(
+                    captureState = captureState,
+                    blurRadiusDp = 24f,
+                    tint = Color(0x99151920),
+                    modifier = Modifier.matchParentSize().clip(RoundedCornerShape(16.dp)),
+                    // Sample the current pixels beneath the moving row so the blur follows
+                    // the live queue instead of exposing a stale rectangular capture.
+                    refreshEnabled = true,
+                )
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    AlbumArt(overlayEntry.song, Modifier.size(46.dp), overlayEntry.song.title, 9.dp)
+                    val overlayIsCurrent = overlayEntry.song.id == song.id
+                    TrackText(
+                        overlayEntry.song,
+                        Modifier.weight(1f),
+                        14.sp,
+                        titleColor = if (overlayIsCurrent) WavvPink else Color.White,
+                        subtitleColor = if (overlayIsCurrent) WavvPink.copy(alpha = .68f) else Color.White.copy(.5f),
+                    )
+                    if (overlayIsCurrent) {
+                        Box(Modifier.size(5.dp).clip(CircleShape).background(WavvPink))
+                    }
+                    Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                        FigmaMoreIcon(28.dp)
+                    }
+                    Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                        Image(
+                            androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle),
+                            null,
+                            Modifier.size(36.dp),
+                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.42f)),
+                        )
+                    }
+                }
+            }
         }
     }
     playlistSong?.let { selectedSong ->
