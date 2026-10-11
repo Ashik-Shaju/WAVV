@@ -36,6 +36,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -201,6 +202,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -208,6 +210,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -291,6 +296,49 @@ internal val WavvAccentGradient = Brush.linearGradient(
 internal enum class Tab { Home, Search, Library, You }
 
 private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
+
+private data class PlayerArtworkFrame(
+    val bounds: Rect,
+    val cornerRadiusPx: Float,
+    val alpha: Float = 1f,
+    val regularArtworkAlpha: Float = 1f,
+    val maskedArtworkAlpha: Float = 0f,
+    val shadowElevationPx: Float = 0f,
+)
+
+private data class PlayerArtworkFlight(
+    val id: Long,
+    val song: Song,
+    val from: PlayerArtworkFrame,
+    val to: PlayerArtworkFrame,
+    val progressOrigin: Float = 0f,
+)
+
+private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
+    start + (end - start) * fraction
+
+private fun normalizedArtworkFlightProgress(flight: PlayerArtworkFlight, rawProgress: Float): Float {
+    val remaining = 1f - flight.progressOrigin
+    return if (remaining <= .0001f) 1f else ((rawProgress - flight.progressOrigin) / remaining).coerceIn(0f, 1f)
+}
+
+private fun interpolateArtworkFrame(
+    start: PlayerArtworkFrame,
+    end: PlayerArtworkFrame,
+    progress: Float,
+): PlayerArtworkFrame = PlayerArtworkFrame(
+    bounds = Rect(
+        lerpFloat(start.bounds.left, end.bounds.left, progress),
+        lerpFloat(start.bounds.top, end.bounds.top, progress),
+        lerpFloat(start.bounds.right, end.bounds.right, progress),
+        lerpFloat(start.bounds.bottom, end.bounds.bottom, progress),
+    ),
+    cornerRadiusPx = lerpFloat(start.cornerRadiusPx, end.cornerRadiusPx, progress),
+    alpha = lerpFloat(start.alpha, end.alpha, progress),
+    regularArtworkAlpha = lerpFloat(start.regularArtworkAlpha, end.regularArtworkAlpha, progress),
+    maskedArtworkAlpha = lerpFloat(start.maskedArtworkAlpha, end.maskedArtworkAlpha, progress),
+    shadowElevationPx = lerpFloat(start.shadowElevationPx, end.shadowElevationPx, progress),
+)
 
 internal enum class LibraryPage { Main, Liked, Playlists, Artists, Albums, Songs, Playlist, Artist, Album }
 
@@ -593,7 +641,6 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onClearListeningHistory = actions.onClearListeningHistory
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
-    var sharedArtworkTransitionActive by remember { mutableStateOf(true) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var loopMode by rememberSaveable { mutableStateOf(LoopMode.Off) }
     var playerExpanded by rememberSaveable { mutableStateOf(false) }
@@ -618,6 +665,16 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val playbackHistory = (libraryState as? LibraryUiState.Ready)?.playbackHistory.orEmpty()
     val playlists = (libraryState as? LibraryUiState.Ready)?.playlists.orEmpty()
     val activeSong = playbackState.song
+    var miniPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var fullPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var artworkFlight by remember { mutableStateOf<PlayerArtworkFlight?>(null) }
+    var artworkFlightTracksFinger by remember { mutableStateOf(false) }
+    var artworkFlightSequence by remember { mutableStateOf(0L) }
+    val gestureArtworkProgress = remember { mutableFloatStateOf(0f) }
+    val artworkFlightProgress = remember { Animatable(0f) }
+    val artworkFlightScope = rememberCoroutineScope()
+    val minimumArtworkTravelPx = with(LocalDensity.current) { 280.dp.toPx() }
+    val artworkRetargetThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
     val homePlayerExpanded = activeSong != null && playerExpanded
     val homeStackExpansionProgress = animateFloatAsState(
         targetValue = if (tab == Tab.Home && homeStackListExpanded && songs.isNotEmpty() && !showPlayer) 1f else 0f,
@@ -630,21 +687,80 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             playerPositionInitialized = true
         }
     }
-    LaunchedEffect(showPlayer) {
-        sharedArtworkTransitionActive = true
-        delay(700)
-        sharedArtworkTransitionActive = false
+    val openPlayer: () -> Unit = { showPlayer = true }
+    fun newArtworkFlight(song: Song, from: PlayerArtworkFrame, to: PlayerArtworkFrame): PlayerArtworkFlight {
+        artworkFlightSequence += 1L
+        return PlayerArtworkFlight(artworkFlightSequence, song, from, to)
     }
-    val openPlayer: () -> Unit = {
-        sharedArtworkTransitionActive = true
-        showPlayer = true
+    fun beginArtworkDrag(source: PlayerArtworkFrame) {
+        val song = activeSong ?: return
+        val destination = miniPlayerArtworkFrame ?: return
+        artworkFlight = newArtworkFlight(song, source, destination)
+        gestureArtworkProgress.floatValue = 0f
+        artworkFlightTracksFinger = true
     }
-    val closePlayer: () -> Unit = {
-        sharedArtworkTransitionActive = true
+    fun updateArtworkDrag(dragDistancePx: Float) {
+        if (!artworkFlightTracksFinger) return
+        val flight = artworkFlight ?: return
+        val centerTravel = flight.to.bounds.center.y - flight.from.bounds.center.y
+        val travelDistance = max(kotlin.math.abs(centerTravel), minimumArtworkTravelPx)
+        gestureArtworkProgress.floatValue = (dragDistancePx / travelDistance).coerceIn(0f, 1f)
+    }
+    fun cancelArtworkDrag() {
+        if (artworkFlightTracksFinger) {
+            artworkFlightTracksFinger = false
+            gestureArtworkProgress.floatValue = 0f
+            artworkFlight = null
+        }
+    }
+    fun closePlayer(sourceFrame: PlayerArtworkFrame? = null) {
+        if (showPlayer && activeSong != null) {
+            val destination = miniPlayerArtworkFrame
+            val currentFlight = artworkFlight
+            if (artworkFlightTracksFinger && currentFlight != null) {
+                // Rebase at the visible finger-driven frame, then finish at the live mini-player target.
+                val fingerProgress = normalizedArtworkFlightProgress(currentFlight, gestureArtworkProgress.floatValue)
+                val currentFrame = interpolateArtworkFrame(currentFlight.from, currentFlight.to, fingerProgress)
+                val closingFlight = currentFlight.copy(
+                    from = currentFrame,
+                    to = destination ?: currentFlight.to,
+                    progressOrigin = 0f,
+                )
+                artworkFlight = closingFlight
+                gestureArtworkProgress.floatValue = 0f
+                artworkFlightScope.launch {
+                    artworkFlightProgress.snapTo(0f)
+                    artworkFlightTracksFinger = false
+                    artworkFlightProgress.animateTo(1f, tween(620, easing = WavvMotionEasing))
+                    if (artworkFlight?.id == closingFlight.id) {
+                        artworkFlight = null
+                        gestureArtworkProgress.floatValue = 0f
+                    }
+                }
+            } else {
+                val source = sourceFrame ?: fullPlayerArtworkFrame
+                if (source != null && destination != null &&
+                    source.bounds.width > 0f && source.bounds.height > 0f &&
+                    destination.bounds.width > 0f && destination.bounds.height > 0f
+                ) {
+                    // Measure the live mini-player target at dismissal; never reuse a prior close point.
+                    val closingFlight = newArtworkFlight(activeSong, source, destination)
+                    artworkFlight = closingFlight
+                    gestureArtworkProgress.floatValue = 0f
+                    // Keep the first overlay frame at its source while Animatable is initialized.
+                    artworkFlightTracksFinger = true
+                    artworkFlightScope.launch {
+                        artworkFlightProgress.snapTo(0f)
+                        artworkFlightTracksFinger = false
+                        artworkFlightProgress.animateTo(1f, tween(620, easing = WavvMotionEasing))
+                        if (artworkFlight?.id == closingFlight.id) artworkFlight = null
+                    }
+                }
+            }
+        }
         showPlayer = false
         showQueue = false
     }
-    val beginPlayerClose: () -> Unit = { sharedArtworkTransitionActive = true }
     val startPlayback: (Song) -> Unit = { song ->
         playerExpanded = true
         playerPositionInitialized = true
@@ -821,27 +937,48 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     }
                 },
                 sharedTransitionScope = sharedTransitionScope,
-                playerVisible = showPlayer,
-                sharedArtworkTransitionActive = sharedArtworkTransitionActive,
+                playerVisible = showPlayer || artworkFlight != null,
+                artworkFlightActive = artworkFlight != null,
+                onArtworkFrameChange = { frame ->
+                    miniPlayerArtworkFrame = frame
+                    val flight = artworkFlight
+                    if (flight != null && !artworkFlightTracksFinger && flight.to != frame) {
+                        val rawProgress = artworkFlightProgress.value.coerceIn(0f, 1f)
+                        val currentProgress = normalizedArtworkFlightProgress(flight, rawProgress)
+                        val currentFrame = interpolateArtworkFrame(flight.from, flight.to, currentProgress)
+                        val targetDisplacement = maxOf(
+                            kotlin.math.abs(frame.bounds.left - flight.to.bounds.left),
+                            kotlin.math.abs(frame.bounds.top - flight.to.bounds.top),
+                            kotlin.math.abs(frame.bounds.right - flight.to.bounds.right),
+                            kotlin.math.abs(frame.bounds.bottom - flight.to.bounds.bottom),
+                        )
+                        artworkFlight = if (targetDisplacement > artworkRetargetThresholdPx && rawProgress < .98f) {
+                            // A tab or stack-position jump can move the live target by a screenful.
+                            // Rebase at the rendered frame so the artwork never teleports with it.
+                            flight.copy(from = currentFrame, to = frame, progressOrigin = rawProgress)
+                        } else {
+                            // Follow small layout motion continuously while the mini-player animates.
+                            flight.copy(to = frame)
+                        }
+                    }
+                },
             )
         }
         if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
         AnimatedVisibility(
             visible = showPlayer,
             enter = fadeIn(tween(180)) + slideInVertically(tween(620, easing = WavvMotionEasing)) { it },
-            exit = fadeOut(tween(1)),
+            exit = fadeOut(tween(620, easing = WavvMotionEasing)) +
+                slideOutVertically(tween(620, easing = WavvMotionEasing)) { (it * .38f).roundToInt() },
         ) {
-            val sharedPlayerVisible =
-                transition.currentState == EnterExitState.Visible ||
-                    transition.targetState == EnterExitState.Visible
+            val sharedPlayerVisible = transition.targetState == EnterExitState.Visible
             activeSong?.let {
                 FullPlayer(
                     song = it,
                     state = playbackState,
                     liked = it.id in favoriteIds,
                     showQueue = showQueue,
-                    onClose = closePlayer,
-                    onBeginClose = beginPlayerClose,
+                    onClose = { frame -> closePlayer(frame) },
                     onToggle = onTogglePlayback,
                     onLike = { onToggleFavorite(it.id) },
                     onPrevious = onPrevious,
@@ -860,12 +997,78 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onPlayNext = onPlayNext,
                     playlists = playlists,
                     sharedTransitionScope = sharedTransitionScope,
-                    playerVisible = sharedPlayerVisible,
-                    sharedArtworkTransitionActive = sharedArtworkTransitionActive,
+                    playerVisible = sharedPlayerVisible && artworkFlight == null,
+                    artworkFlightActive = artworkFlight != null,
+                    onArtworkFrameChange = { fullPlayerArtworkFrame = it },
+                    onArtworkDragStart = { frame -> beginArtworkDrag(frame) },
+                    onArtworkDragProgress = { distance -> updateArtworkDrag(distance) },
+                    onArtworkDragCancel = { cancelArtworkDrag() },
                     onAddSongToPlaylist = onAddSongToPlaylist,
                     onCreatePlaylist = { songId -> createPlaylistSongId = songId; createPlaylistName = ""; showCreatePlaylist = true },
                     onNavigateToAlbum = { song -> navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.artist)); tab = Tab.Library; closePlayer() },
                     onNavigateToArtist = { song -> navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist)); tab = Tab.Library; closePlayer() },
+                )
+            }
+        }
+        artworkFlight?.let { flight ->
+            val density = LocalDensity.current
+            val sourceBounds = flight.from.bounds
+            val targetBounds = flight.to.bounds
+            val sourceWidth = sourceBounds.width.coerceAtLeast(1f)
+            val sourceHeight = sourceBounds.height.coerceAtLeast(1f)
+            val tracksFinger = artworkFlightTracksFinger
+            Box(
+                Modifier
+                    .offset { IntOffset(sourceBounds.left.roundToInt(), sourceBounds.top.roundToInt()) }
+                    .size(
+                        width = with(density) { sourceWidth.toDp() },
+                        height = with(density) { sourceHeight.toDp() },
+                    )
+                    .graphicsLayer {
+                        val rawProgress = if (tracksFinger) {
+                            gestureArtworkProgress.floatValue
+                        } else {
+                            artworkFlightProgress.value
+                        }.coerceIn(0f, 1f)
+                        val progress = normalizedArtworkFlightProgress(flight, rawProgress)
+                        val frame = interpolateArtworkFrame(flight.from, flight.to, progress)
+                        val scale = lerpFloat(
+                            1f,
+                            minOf(targetBounds.width / sourceWidth, targetBounds.height / sourceHeight).coerceAtLeast(.01f),
+                            progress,
+                        ).coerceAtLeast(.01f)
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                        translationX = frame.bounds.left - sourceBounds.left
+                        translationY = frame.bounds.top - sourceBounds.top
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = frame.alpha
+                        shape = RoundedCornerShape(with(density) { (frame.cornerRadiusPx / scale).coerceAtLeast(0f).toDp() })
+                        clip = true
+                        shadowElevation = frame.shadowElevationPx
+                    },
+            ) {
+                AlbumArt(
+                    flight.song,
+                    Modifier.fillMaxSize().graphicsLayer {
+                        val rawProgress = if (tracksFinger) gestureArtworkProgress.floatValue else artworkFlightProgress.value
+                        val progress = normalizedArtworkFlightProgress(flight, rawProgress)
+                        alpha = interpolateArtworkFrame(flight.from, flight.to, progress).regularArtworkAlpha
+                    },
+                    flight.song.title,
+                    0.dp,
+                )
+                AlbumArt(
+                    flight.song,
+                    Modifier.fillMaxSize()
+                        .graphicsLayer {
+                            val rawProgress = if (tracksFinger) gestureArtworkProgress.floatValue else artworkFlightProgress.value
+                            val progress = normalizedArtworkFlightProgress(flight, rawProgress)
+                            alpha = interpolateArtworkFrame(flight.from, flight.to, progress).maskedArtworkAlpha
+                        }
+                        .maskedArtworkFade(),
+                    flight.song.title,
+                    0.dp,
                 )
             }
         }
@@ -1278,7 +1481,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, sharedArtworkTransitionActive: Boolean) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val captureState = remember { AtomicBoolean(false) }
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
@@ -1342,7 +1545,8 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
             }
         }
         .shadow(18.dp, shape).clip(shape)
-        .border(.75.dp, HomeFrostedBorder, shape).clickable(onClick = onOpen)) {
+        .border(.75.dp, HomeFrostedBorder, shape)
+        .clickable(onClick = onOpen)) {
         FrostedBackdrop(
             captureState,
             blurRadiusDp = 34f,
@@ -1351,7 +1555,17 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
         )
         Box(
             Modifier.align(Alignment.TopStart).offset(x = artworkX, y = artworkY).size(artworkSize)
-                .sharedPlayerArtwork(sharedTransitionScope, sharedArtworkTransitionActive && !playerVisible),
+                .onGloballyPositioned { coordinates ->
+                    onArtworkFrameChange(
+                        PlayerArtworkFrame(
+                            bounds = coordinates.boundsInRoot(),
+                            cornerRadiusPx = with(density) { artworkCorner.toPx() },
+                            shadowElevationPx = with(density) { 12.dp.toPx() },
+                        ),
+                    )
+                }
+                .sharedPlayerArtwork(sharedTransitionScope, !playerVisible && !artworkFlightActive)
+                .alpha(if (artworkFlightActive) 0f else 1f)
         ) {
             AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(artworkCorner)), song.title, artworkCorner)
         }
@@ -1426,11 +1640,8 @@ private fun Modifier.sharedPlayerArtwork(scope: SharedTransitionScope, visible: 
         sharedElementWithCallerManagedVisibility(
             rememberSharedContentState(key = "player-art"),
             visible = visible,
-            boundsTransform = { initialBounds, targetBounds ->
-                tween(
-                    durationMillis = if (initialBounds.width > targetBounds.width) 460 else 620,
-                    easing = WavvMotionEasing,
-                )
+            boundsTransform = { _, _ ->
+                tween(durationMillis = 620, easing = WavvMotionEasing)
             },
         )
     }
@@ -1543,8 +1754,7 @@ private fun FullPlayer(
     showQueue: Boolean,
     queueMode: QueueMode,
     playlists: List<UserPlaylist>,
-    onClose: () -> Unit,
-    onBeginClose: () -> Unit,
+    onClose: (PlayerArtworkFrame?) -> Unit,
     onToggle: () -> Unit,
     onLike: () -> Unit,
     onPrevious: () -> Unit,
@@ -1566,7 +1776,11 @@ private fun FullPlayer(
     onNavigateToArtist: (Song) -> Unit,
     sharedTransitionScope: SharedTransitionScope,
     playerVisible: Boolean,
-    sharedArtworkTransitionActive: Boolean,
+    artworkFlightActive: Boolean,
+    onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onArtworkDragStart: (PlayerArtworkFrame) -> Unit,
+    onArtworkDragProgress: (Float) -> Unit,
+    onArtworkDragCancel: () -> Unit,
 ) {
     var showLyrics by remember(song.id) { mutableStateOf(false) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
@@ -1576,6 +1790,9 @@ private fun FullPlayer(
     var nudgeNextUp by remember { mutableStateOf(false) }
     var playerDragOffset by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
+    var artworkGestureStarted by remember(song.id) { mutableStateOf(false) }
+    var currentArtworkFrame by remember(song.id) { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var artworkCoordinates by remember(song.id) { mutableStateOf<LayoutCoordinates?>(null) }
     val gestureScope = rememberCoroutineScope()
     BackHandler(enabled = showLyrics) { showLyrics = false }
     val nextTitle = state.queue.firstOrNull { it.id != song.id }?.title ?: "Next Up"
@@ -1595,20 +1812,27 @@ private fun FullPlayer(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val playerMaxWidth = maxWidth
-        val playerHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
-        val dismissalDistancePx = playerHeightPx + with(LocalDensity.current) { 96.dp.toPx() }
+        val density = LocalDensity.current
+        val playerHeightPx = with(density) { maxHeight.toPx() }
+        val targetArtworkSize = if (state.isPlaying) playerMaxWidth else minOf(playerMaxWidth * .76f, 320.dp)
+        val artworkSize by animateDpAsState(targetArtworkSize, tween(620, easing = WavvMotionEasing), label = "player artwork size")
+        val artworkTop by animateDpAsState(if (state.isPlaying) 64.dp else 84.dp, tween(620, easing = WavvMotionEasing), label = "player artwork position")
+        val artworkRadius by animateDpAsState(if (state.isPlaying) 0.dp else 16.dp, tween(620, easing = WavvMotionEasing), label = "player artwork corners")
+        val artworkShadow by animateDpAsState(if (state.isPlaying) 0.dp else 20.dp, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "player artwork shadow")
+        val regularArtAlpha by animateFloatAsState(if (state.isPlaying) 0f else 1f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "regular artwork fade")
+        val maskedArtAlpha by animateFloatAsState(if (state.isPlaying) 1f else 0f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "masked artwork fade")
         val dismissPlayer: () -> Unit = {
             if (!isDismissing) {
+                val measuredFrame = currentArtworkFrame
+                val latestFrame = measuredFrame?.copy(
+                    bounds = artworkCoordinates?.boundsInRoot() ?: measuredFrame.bounds,
+                    alpha = 1f - (playerDragOffset / (playerHeightPx * .62f)).coerceIn(0f, .55f),
+                    regularArtworkAlpha = regularArtAlpha,
+                    maskedArtworkAlpha = maskedArtAlpha,
+                    shadowElevationPx = with(density) { artworkShadow.toPx() },
+                )
+                onClose(latestFrame)
                 isDismissing = true
-                onBeginClose()
-                gestureScope.launch {
-                    animate(
-                        initialValue = playerDragOffset,
-                        targetValue = dismissalDistancePx,
-                        animationSpec = tween(460, easing = WavvMotionEasing),
-                    ) { value, _ -> playerDragOffset = value }
-                    onClose()
-                }
             }
         }
         val settlePlayer: () -> Unit = {
@@ -1622,13 +1846,26 @@ private fun FullPlayer(
                             dampingRatio = Spring.DampingRatioNoBouncy,
                             stiffness = Spring.StiffnessMedium,
                         ),
-                    ) { value, _ -> playerDragOffset = value }
+                    ) { value, _ ->
+                        playerDragOffset = value
+                        if (artworkGestureStarted) onArtworkDragProgress(value)
+                    }
+                    if (artworkGestureStarted) {
+                        onArtworkDragCancel()
+                        artworkGestureStarted = false
+                    }
                 }
+            } else if (artworkGestureStarted) {
+                onArtworkDragCancel()
+                artworkGestureStarted = false
             }
         }
         Box(
             Modifier.fillMaxSize()
-                .graphicsLayer { translationY = playerDragOffset }
+                .graphicsLayer {
+                    translationY = playerDragOffset
+                    alpha = 1f - (playerDragOffset / (playerHeightPx * .62f)).coerceIn(0f, .55f)
+                }
                 .background(Color.Black)
                 .pointerInput(showQueue, isDismissing, playerHeightPx) {
             var total = 0f
@@ -1637,7 +1874,23 @@ private fun FullPlayer(
                 onVerticalDrag = { _, amount ->
                     total += amount
                     if (!showQueue && !isDismissing) {
-                        playerDragOffset = (playerDragOffset + amount).coerceAtLeast(0f)
+                        val nextOffset = (playerDragOffset + amount).coerceAtLeast(0f)
+                        if (nextOffset > 0f && !artworkGestureStarted) {
+                            val measuredFrame = currentArtworkFrame
+                            val frame = measuredFrame?.copy(
+                                bounds = artworkCoordinates?.boundsInRoot() ?: measuredFrame.bounds,
+                                alpha = 1f,
+                                regularArtworkAlpha = regularArtAlpha,
+                                maskedArtworkAlpha = maskedArtAlpha,
+                                shadowElevationPx = with(density) { artworkShadow.toPx() },
+                            )
+                            if (frame != null) {
+                                onArtworkDragStart(frame)
+                                artworkGestureStarted = true
+                            }
+                        }
+                        playerDragOffset = nextOffset
+                        if (artworkGestureStarted) onArtworkDragProgress(nextOffset)
                     }
                 },
                 onDragEnd = {
@@ -1651,24 +1904,30 @@ private fun FullPlayer(
                         settlePlayer()
                     }
                 },
-                onDragCancel = { settlePlayer() },
+                onDragCancel = { if (!isDismissing) settlePlayer() },
             )
         },
         ) {
         NowPlayingAmbientBackdrop(song, state.isPlaying)
-        val targetArtworkSize = if (state.isPlaying) playerMaxWidth else minOf(playerMaxWidth * .76f, 320.dp)
-        val artworkSize by animateDpAsState(targetArtworkSize, tween(620, easing = WavvMotionEasing), label = "player artwork size")
-        val artworkTop by animateDpAsState(if (state.isPlaying) 64.dp else 84.dp, tween(620, easing = WavvMotionEasing), label = "player artwork position")
-        val artworkRadius by animateDpAsState(if (state.isPlaying) 0.dp else 16.dp, tween(620, easing = WavvMotionEasing), label = "player artwork corners")
-        val artworkShadow by animateDpAsState(if (state.isPlaying) 0.dp else 20.dp, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "player artwork shadow")
-        val regularArtAlpha by animateFloatAsState(if (state.isPlaying) 0f else 1f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "regular artwork fade")
-        val maskedArtAlpha by animateFloatAsState(if (state.isPlaying) 1f else 0f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "masked artwork fade")
         Box(
             Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = artworkTop)
                 .size(artworkSize)
                 .shadow(artworkShadow, RoundedCornerShape(artworkRadius))
                 .clip(RoundedCornerShape(artworkRadius))
-                .sharedPlayerArtwork(sharedTransitionScope, playerVisible && sharedArtworkTransitionActive),
+                .onGloballyPositioned { coordinates ->
+                    artworkCoordinates = coordinates
+                    val frame = PlayerArtworkFrame(
+                        bounds = coordinates.boundsInRoot(),
+                        cornerRadiusPx = with(density) { artworkRadius.toPx() },
+                        regularArtworkAlpha = regularArtAlpha,
+                        maskedArtworkAlpha = maskedArtAlpha,
+                        shadowElevationPx = with(density) { artworkShadow.toPx() },
+                    )
+                    currentArtworkFrame = frame
+                    onArtworkFrameChange(frame)
+                }
+                .sharedPlayerArtwork(sharedTransitionScope, playerVisible && !artworkFlightActive)
+                .alpha(if (artworkFlightActive) 0f else 1f),
         ) {
             AlbumArt(song, Modifier.fillMaxSize().alpha(regularArtAlpha), song.title, 0.dp)
             AlbumArt(song, Modifier.fillMaxSize().alpha(maskedArtAlpha).maskedArtworkFade(), song.title, 0.dp)
