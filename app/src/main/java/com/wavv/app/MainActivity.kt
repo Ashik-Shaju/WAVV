@@ -224,6 +224,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.ExperimentalTextApi
@@ -265,7 +266,6 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal val WavvBackground = Color(0xFF0A0A0A)
@@ -279,12 +279,14 @@ internal val WavvScreenEasing = CubicBezierEasing(.22f, 1f, .36f, 1f)
 private val albumArtCache = object : LruCache<String, Bitmap>(12 * 1024) {
     override fun sizeOf(key: String, value: Bitmap) = (value.allocationByteCount / 1024).coerceAtLeast(1)
 }
-private val albumArtDecodeLocks = ConcurrentHashMap<String, Mutex>()
-private fun albumArtDecodeSize(context: Context): IntSize {
-    // Album covers are square and can grow to the full device width during the shared flight.
-    // Decode to physical screen resolution so a mini-player-sized raster is never enlarged.
-    val edge = maxOf(context.resources.displayMetrics.widthPixels, 1_024)
-    return IntSize(edge, edge)
+private class AlbumArtDecodeLock(val mutex: Mutex = Mutex(), var references: Int = 0)
+private val albumArtDecodeLocks = mutableMapOf<String, AlbumArtDecodeLock>()
+private const val MIN_ALBUM_ART_DECODE_EDGE = 128
+private const val MAX_ALBUM_ART_DECODE_EDGE = 1024
+
+internal fun albumArtDecodeBucketEdge(size: IntSize): Int {
+    val edge = maxOf(size.width, size.height).coerceIn(MIN_ALBUM_ART_DECODE_EDGE, MAX_ALBUM_ART_DECODE_EDGE)
+    return Integer.highestOneBit(edge - 1) * 2
 }
 @OptIn(ExperimentalTextApi::class)
 internal val WavvFontFamily = FontFamily(
@@ -358,11 +360,14 @@ private fun PlayerArtworkFlightCanvas(
 ) {
     val context = LocalContext.current
     val sourceKey = "${flight.song.albumArtUri.orEmpty()}|${flight.song.uri.orEmpty()}"
-    var bitmap by remember(sourceKey) { mutableStateOf(albumArtCache.get(sourceKey)) }
-    LaunchedEffect(sourceKey) {
+    val screenWidthPx = context.resources.displayMetrics.widthPixels
+    val targetEdge = albumArtDecodeBucketEdge(IntSize(screenWidthPx, screenWidthPx))
+    val cacheKey = "$sourceKey|$targetEdge"
+    var bitmap by remember(cacheKey) { mutableStateOf(albumArtCache.get(cacheKey)) }
+    LaunchedEffect(cacheKey) {
         if (bitmap == null) {
             bitmap = withContext(Dispatchers.IO) {
-                decodeAlbumArt(context, flight.song.albumArtUri, flight.song.uri, albumArtDecodeSize(context))
+                decodeAlbumArt(context, flight.song.albumArtUri, flight.song.uri, cacheKey, targetEdge)
             }
         }
     }
@@ -1593,7 +1598,12 @@ private fun BottomNav(
                     val iconScale by itemTransition.animateFloat(label = "$label icon scale") { isSelected -> if (isSelected) 1.06f else 1f }
                     val iconOffsetY by itemTransition.animateFloat(label = "$label icon offset") { isSelected -> if (isSelected) -1f else 0f }
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().clip(CircleShape).clickable(role = Role.Tab) {
+                        Modifier.weight(1f).fillMaxHeight().clip(CircleShape)
+                            .semantics(mergeDescendants = true) {
+                                this.selected = selected
+                                contentDescription = label
+                            }
+                            .clickable(role = Role.Tab) {
                             pillTargetTab = tab
                             currentOnChange(tab)
                         },
@@ -1609,7 +1619,7 @@ private fun BottomNav(
                                     Tab.You -> R.drawable.nav_you
                                 },
                             ),
-                            contentDescription = label,
+                            contentDescription = null,
                             colorFilter = if (tab == Tab.Library) null else androidx.compose.ui.graphics.ColorFilter.tint(iconColor),
                             modifier = Modifier.size(if (tab == Tab.Library) 18.dp else 20.dp, 20.dp).graphicsLayer {
                                 scaleX = iconScale
@@ -1726,7 +1736,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
                     Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Spacer(Modifier.width(50.dp))
                         TrackText(song, Modifier.weight(1f), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp)
-                        Box(Modifier.size(38.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) { FigmaFavouriteIcon(liked, 30.dp) }
+                        FavouriteButton(liked, onLike)
                     }
                     Spacer(Modifier.height(12.dp))
                     Column {
@@ -1758,12 +1768,23 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
                     Spacer(Modifier.width(40.dp))
                     TrackText(song, Modifier.weight(1f), 14.sp)
                     Image(
+                        androidx.compose.ui.res.painterResource(R.drawable.skip_prev),
+                        "Previous",
+                        Modifier.size(20.dp).clickable(role = Role.Button, onClick = onPrevious),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+                    )
+                    Image(
                         androidx.compose.ui.res.painterResource(if (state.isPlaying) R.drawable.image_16 else R.drawable.play_button),
                         if (state.isPlaying) "Pause" else "Play",
                         Modifier.size(22.dp).clickable(role = Role.Button, onClick = onToggle),
                         colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
                     )
-                    Image(androidx.compose.ui.res.painterResource(R.drawable.skip_next), "Next", Modifier.size(20.dp).alpha(.6f).clickable(role = Role.Button, onClick = onNext))
+                    Image(
+                        androidx.compose.ui.res.painterResource(R.drawable.skip_next),
+                        "Next",
+                        Modifier.size(20.dp).clickable(role = Role.Button, onClick = onNext),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+                    )
                 }
             }
         }
@@ -1877,6 +1898,21 @@ internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
         val sparkleCenter = Offset(19.1f * unit, 5.5f * unit)
         drawLine(Color.White.copy(alpha = (1f - fillAlpha) * .9f), sparkleCenter.copy(y = sparkleCenter.y - 1.45f * unit), sparkleCenter.copy(y = sparkleCenter.y + 1.45f * unit), .7f * unit)
         drawLine(Color.White.copy(alpha = (1f - fillAlpha) * .9f), sparkleCenter.copy(x = sparkleCenter.x - 1.45f * unit), sparkleCenter.copy(x = sparkleCenter.x + 1.45f * unit), .7f * unit)
+    }
+}
+
+@Composable
+private fun FavouriteButton(liked: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(38.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = if (liked) "Remove from favorites" else "Add to favorites"
+                stateDescription = if (liked) "Liked" else "Not liked"
+            }
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        FigmaFavouriteIcon(liked, 30.dp)
     }
 }
 
@@ -2099,7 +2135,7 @@ private fun FullPlayer(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TrackText(song, Modifier.weight(1f).padding(end = 12.dp), 28.sp, 20.sp, (-.65).sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(38.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) { FigmaFavouriteIcon(liked, 30.dp) }
+                        FavouriteButton(liked, onLike)
                         Box(Modifier.size(38.dp).clickable { showTrackOptions = true }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
                     }
                 }
@@ -2120,12 +2156,8 @@ private fun FullPlayer(
                 ) {
                     Box(Modifier.fillMaxWidth(position.toFloat() / duration).fillMaxHeight().background(Color.White.copy(.8f)))
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatTime(position), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
-                    Row(Modifier.clip(CircleShape).background(Color.White.copy(.15f)).border(1.dp, Color.White.copy(.3f), CircleShape).padding(horizontal = 9.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Image(androidx.compose.ui.res.painterResource(R.drawable.uhq_mark), null, Modifier.size(13.dp))
-                        Text("UHQ", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.1.sp)
-                    }
                     Text("-${formatTime(duration - position)}", color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
                 }
             }
@@ -3292,16 +3324,20 @@ internal fun AlbumArt(
 ) {
     val context = LocalContext.current
     val sourceKey = "${uriString.orEmpty()}|${audioUri.orEmpty()}"
-    val cachedBitmap = remember(sourceKey) { albumArtCache.get(sourceKey) }
+    var measuredSize by remember(sourceKey) { mutableStateOf(IntSize.Zero) }
+    val targetEdge = if (measuredSize.width > 0 && measuredSize.height > 0) albumArtDecodeBucketEdge(measuredSize) else null
+    val cacheKey = targetEdge?.let { "$sourceKey|$it" }
+    val cachedBitmap = remember(cacheKey) { cacheKey?.let(albumArtCache::get) }
     var retainedBitmap by remember { mutableStateOf(cachedBitmap) }
     var displayedSource by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(sourceKey) {
+    LaunchedEffect(sourceKey, cacheKey) {
         if (uriString == null && audioUri == null) {
             retainedBitmap = null
             displayedSource = sourceKey
         } else {
+            if (targetEdge == null || cacheKey == null) return@LaunchedEffect
             val decoded = cachedBitmap ?: withContext(Dispatchers.IO) {
-                decodeAlbumArt(context, uriString, audioUri, albumArtDecodeSize(context))
+                decodeAlbumArt(context, uriString, audioUri, cacheKey, targetEdge)
             }
             if (decoded != null) {
                 retainedBitmap = decoded
@@ -3312,71 +3348,80 @@ internal fun AlbumArt(
             }
         }
     }
+    val measuredModifier = modifier.onSizeChanged { measuredSize = it }
     val bitmap = cachedBitmap ?: retainedBitmap
     if (bitmap != null) {
-        Image(bitmap.asImageBitmap(), contentDescription, modifier.clip(RoundedCornerShape(radius)), contentScale = ContentScale.Crop)
+        Image(bitmap.asImageBitmap(), contentDescription, measuredModifier.clip(RoundedCornerShape(radius)), contentScale = ContentScale.Crop)
     } else {
-        NoArtwork(modifier, contentDescription, radius)
+        NoArtwork(measuredModifier, contentDescription, radius)
     }
 }
 
-private suspend fun decodeAlbumArt(context: Context, uriString: String?, audioUri: String?, targetSize: IntSize): Bitmap? {
-    val cacheKey = "${uriString.orEmpty()}|${audioUri.orEmpty()}"
-    val decodeLock = albumArtDecodeLocks.computeIfAbsent(cacheKey) { Mutex() }
-    return decodeLock.withLock {
-        try {
-        val targetWidth = targetSize.width.coerceAtLeast(1)
-        val targetHeight = targetSize.height.coerceAtLeast(1)
-        albumArtCache.get(cacheKey)?.let { return@withLock it }
-
-        fun sampleSize(width: Int, height: Int): Int {
-            val longestEdge = maxOf(width, height)
-            val targetEdge = maxOf(targetWidth, targetHeight)
-            var sample = 1
-            while (sample <= longestEdge / 2 && longestEdge / (sample * 2) >= targetEdge) {
-                sample *= 2
-            }
-            return sample
-        }
-
-        fun decodeBytes(data: ByteArray): Bitmap? {
-            if (data.isEmpty() || data.size > MAX_ARTWORK_BYTES) return null
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            return BitmapFactory.decodeByteArray(data, 0, data.size, BitmapFactory.Options().apply {
-                inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight)
-            })
-        }
-
-        fun decodeUri(rawUri: String): Bitmap? {
-            val uri = Uri.parse(rawUri)
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            val options = BitmapFactory.Options().apply {
-                inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight)
-            }
-            return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
-        }
-
-        val artworkFromUri = uriString?.let { rawUri ->
-            runCatching { decodeUri(rawUri) }.getOrNull()
-        }
-        val bitmap = artworkFromUri ?: audioUri?.let { rawAudioUri ->
-            val retriever = MediaMetadataRetriever()
+private suspend fun decodeAlbumArt(context: Context, uriString: String?, audioUri: String?, cacheKey: String, targetEdge: Int): Bitmap? {
+    val decodeLock = synchronized(albumArtDecodeLocks) {
+        albumArtDecodeLocks.getOrPut(cacheKey) { AlbumArtDecodeLock() }.also { it.references++ }
+    }
+    return try {
+        decodeLock.mutex.withLock {
             try {
-                retriever.setDataSource(context, Uri.parse(rawAudioUri))
-                retriever.embeddedPicture?.let(::decodeBytes)
+                albumArtCache.get(cacheKey)?.let { return@withLock it }
+
+                fun sampleSize(width: Int, height: Int): Int {
+                    val longestEdge = maxOf(width, height)
+                    var sample = 1
+                    while (sample <= longestEdge / 2 && longestEdge / (sample * 2) >= targetEdge) {
+                        sample *= 2
+                    }
+                    return sample
+                }
+
+                fun decodeBytes(data: ByteArray): Bitmap? {
+                    if (data.isEmpty() || data.size > MAX_ARTWORK_BYTES) return null
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+                    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+                    return BitmapFactory.decodeByteArray(data, 0, data.size, BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight)
+                    })
+                }
+
+                fun decodeUri(rawUri: String): Bitmap? {
+                    val uri = Uri.parse(rawUri)
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+                    val options = BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight)
+                    }
+                    return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                }
+
+                val artworkFromUri = uriString?.let { rawUri ->
+                    runCatching { decodeUri(rawUri) }.getOrNull()
+                }
+                val bitmap = artworkFromUri ?: audioUri?.let { rawAudioUri ->
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, Uri.parse(rawAudioUri))
+                        retriever.embeddedPicture?.let(::decodeBytes)
+                    } catch (_: Exception) {
+                        null
+                    } finally {
+                        retriever.release()
+                    }
+                }
+                bitmap?.also { albumArtCache.put(cacheKey, it) }
+            } catch (error: CancellationException) {
+                throw error
             } catch (_: Exception) {
                 null
-            } finally {
-                retriever.release()
             }
         }
-        bitmap?.also { albumArtCache.put(cacheKey, it) }
-        } catch (_: Exception) {
-            null
+    } finally {
+        synchronized(albumArtDecodeLocks) {
+            if (--decodeLock.references == 0 && albumArtDecodeLocks[cacheKey] === decodeLock) {
+                albumArtDecodeLocks.remove(cacheKey)
+            }
         }
     }
 }

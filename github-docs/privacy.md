@@ -24,4 +24,4 @@ Playback activity is used locally for recent tracks and recommendations. The app
 
 Selecting all device music requires Android's audio-library permission (`READ_MEDIA_AUDIO` on current Android versions and `READ_EXTERNAL_STORAGE` on older versions). Selecting individual files or folders uses Android's system document picker and a persistable read grant instead.
 
-The manifest sets `android:allowBackup="true"`. Android backup and device-transfer behavior is controlled by the platform and device configuration; do not treat app-local storage as a guarantee that data can never leave one device. Review the manifest and actual data flows before adding network, analytics, account, or backup-policy features.
+Android backup rules exclude cloud backup and allow device-to-device transfer of the Room database, app preferences, and cached embedded artwork. Model copies and temporary caches are not included. Device-transfer availability and restore timing still depend on Android and the device manufacturer; the selected audio files themselves remain in their original locations and are not copied by Wavv.

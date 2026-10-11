@@ -29,6 +29,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 internal const val DCLAP_MODEL_ID = "audiomuse-dclap-v1-fp32-audio-int8-text"
@@ -582,6 +584,7 @@ private class DclapTextEncoder(model: File, tokenizerDirectory: File) : Closeabl
 }
 
 class DclapTextSearch(private val context: Context) : Closeable {
+    private val encoderMutex = Mutex()
     private val encoder = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         val model = DclapModelInstaller.installText(context)
         DclapTextEncoder(model.model, model.tokenizer)
@@ -589,7 +592,14 @@ class DclapTextSearch(private val context: Context) : Closeable {
 
     internal suspend fun search(query: String, songs: List<Song>, store: LibraryStore): List<SemanticMatch> {
         if (query.isBlank() || songs.isEmpty()) return emptyList()
-        return store.searchEmbeddings(encoder.value.encode(query), songs, songs.size)
+        val context = currentCoroutineContext()
+        context.ensureActive()
+        val queryEmbedding = encoderMutex.withLock {
+            context.ensureActive()
+            encoder.value.encode(query)
+        }
+        context.ensureActive()
+        return store.searchEmbeddings(queryEmbedding, songs)
     }
 
     override fun close() {

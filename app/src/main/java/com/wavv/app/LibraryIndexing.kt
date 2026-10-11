@@ -178,6 +178,8 @@ class LibraryIndexWorker(
             throw error
         } catch (error: SecurityException) {
             failure(error)
+        } catch (error: FolderScanLimitExceededException) {
+            failure(error)
         } catch (error: IOException) {
             if (runAttemptCount < MAX_RETRY_ATTEMPTS) Result.retry() else failure(error)
         } catch (error: Exception) {

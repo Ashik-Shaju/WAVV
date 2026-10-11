@@ -15,8 +15,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val SEARCH_DEBOUNCE_MS = 250L
 
 sealed interface LibraryUiState {
     data object Loading : LibraryUiState
@@ -254,6 +257,7 @@ class LibraryViewModel(
         }
         searchJob = viewModelScope.launch {
             try {
+                delay(SEARCH_DEBOUNCE_MS)
                 val intent = withContext(Dispatchers.Default) { parseMusicQuery(query, songs) }
                 val searchableSongs = if (intent.languageCode == null) songs else withContext(Dispatchers.IO) {
                     songs.map { song ->

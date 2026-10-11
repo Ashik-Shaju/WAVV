@@ -47,6 +47,51 @@ class MusicUnderstandingPersistenceTest {
     }
 
     @Test
+    fun versionOneMigrationPreservesSongAndFavoriteStateThroughCurrentSchema() {
+        val databaseName = "wavv-migration-${UUID.randomUUID()}"
+        val uri = "content://local/legacy-song"
+        migrationHelper.createDatabase(databaseName, 1).apply {
+            execSQL(
+                """
+                INSERT INTO songs (
+                    id, title, artist, album, durationMs, uri, albumArtUri, fileSizeBytes, modifiedAt,
+                    codec, container, sampleRate, channels, metadataSource, isFavorite, lastPlayedAt
+                ) VALUES (1, 'legacy', 'artist', 'album', 1234, '$uri', NULL, 42, 123, NULL, NULL, NULL, NULL, 'embedded', 1, 456)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            databaseName,
+            8,
+            true,
+            WavvDatabase.MIGRATION_1_2,
+            WavvDatabase.MIGRATION_2_3,
+            WavvDatabase.MIGRATION_3_4,
+            WavvDatabase.MIGRATION_4_5,
+            WavvDatabase.MIGRATION_5_6,
+            WavvDatabase.MIGRATION_6_7,
+            WavvDatabase.MIGRATION_7_8,
+        ).use { database ->
+            database.query(
+                "SELECT isFavorite, lastPlayedAt, languageTagsJson, languageMetadataChecked FROM songs WHERE id = 1",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1, cursor.getInt(0))
+                assertEquals(456L, cursor.getLong(1))
+                assertEquals("[]", cursor.getString(2))
+                assertEquals(0, cursor.getInt(3))
+            }
+            database.query("SELECT isFavorite, lastPlayedAt FROM song_user_state WHERE uri = ?", arrayOf(uri)).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1, cursor.getInt(0))
+                assertEquals(456L, cursor.getLong(1))
+            }
+        }
+    }
+
+    @Test
     fun cancellationStopsBeforeLoadingTheModel() = runBlocking {
         val database = inMemoryDatabase()
         try {

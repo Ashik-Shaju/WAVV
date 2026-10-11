@@ -16,6 +16,8 @@ import androidx.room.PrimaryKey
 import androidx.room.withTransaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -318,7 +320,7 @@ abstract class WavvDatabase : RoomDatabase() {
             ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build().also { instance = it }
         }
 
-        private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+        internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -339,13 +341,13 @@ abstract class WavvDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+        internal val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("DROP TABLE IF EXISTS song_embeddings")
             }
         }
 
-        private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+        internal val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -538,12 +540,16 @@ class LibraryStore(private val database: WavvDatabase) {
         }
     }
 
-    internal suspend fun searchEmbeddings(query: FloatArray, songs: List<Song>, limit: Int): List<SemanticMatch> {
+    internal suspend fun searchEmbeddings(query: FloatArray, songs: List<Song>): List<SemanticMatch> {
+        if (songs.isEmpty()) return emptyList()
+        val coroutineContext = currentCoroutineContext()
+        var scanned = 0
         val byId = songs.associateBy(Song::id)
-        // ponytail: linear scan is enough for the current library; add ANN only after a measured large-library bottleneck.
+        // ponytail: the caller blends every score by song ID, so sorting the full scan only adds O(n log n) work.
         return database.songEmbeddingDao().getAll()
             .asSequence()
             .mapNotNull { embedding ->
+                if (scanned++ % 64 == 0) coroutineContext.ensureActive()
                 val song = byId[embedding.songId] ?: return@mapNotNull null
                 val vector = embedding.vector.toFloatArray()
                 if (
@@ -557,11 +563,8 @@ class LibraryStore(private val database: WavvDatabase) {
                     vector.size != query.size ||
                     !embedding.normalized
                 ) return@mapNotNull null
-                song to query.indices.sumOf { index -> query[index].toDouble() * vector[index] }
+                SemanticMatch(song.id, query.indices.sumOf { index -> query[index].toDouble() * vector[index] }.toFloat())
             }
-            .sortedWith(compareByDescending<Pair<Song, Double>> { it.second }.thenBy { it.first.id })
-            .take(limit)
-            .map { SemanticMatch(it.first.id, it.second.toFloat()) }
             .toList()
     }
 

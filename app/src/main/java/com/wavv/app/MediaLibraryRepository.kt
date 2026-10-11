@@ -14,6 +14,7 @@ import java.io.IOException
 import java.net.URI
 import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.ArrayDeque
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -61,23 +62,29 @@ class MediaLibraryRepository(context: Context) {
     private suspend fun loadFolders(
         rawUris: List<String>,
         onProgress: suspend (completed: Int, total: Int?) -> Unit,
-    ): List<Song> = buildList {
+    ): List<Song> {
+        val budget = FolderScanBudget()
+        val addedSongUris = mutableSetOf<String>()
         var completed = 0
-        rawUris.distinct().forEach { rawUri ->
-            coroutineContext.ensureActive()
-            val treeUri = Uri.parse(rawUri)
-            collectFolder(
-                treeUri = treeUri,
-                documentId = DocumentsContract.getTreeDocumentId(treeUri),
-                songs = this,
-                visited = mutableSetOf(),
-                onAudioProcessed = {
-                    completed += 1
-                    onProgress(completed, null)
-                },
-            )
-        }
-    }.distinctBy(Song::uri).sortedBy(Song::title)
+        return buildList {
+            rawUris.distinct().forEach { rawUri ->
+                coroutineContext.ensureActive()
+                val treeUri = Uri.parse(rawUri)
+                collectFolder(
+                    treeUri = treeUri,
+                    documentId = DocumentsContract.getTreeDocumentId(treeUri),
+                    songs = this,
+                    visited = mutableSetOf(),
+                    addedSongUris = addedSongUris,
+                    budget = budget,
+                    onAudioProcessed = {
+                        completed += 1
+                        onProgress(completed, null)
+                    },
+                )
+            }
+        }.sortedBy(Song::title)
+    }
 
     private suspend fun loadDeviceSongs(
         onProgress: suspend (completed: Int, total: Int?) -> Unit,
@@ -253,36 +260,51 @@ class MediaLibraryRepository(context: Context) {
         documentId: String,
         songs: MutableList<Song>,
         visited: MutableSet<String>,
+        addedSongUris: MutableSet<String>,
+        budget: FolderScanBudget,
         onAudioProcessed: suspend () -> Unit,
     ) {
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
-        val cursor = contentResolver.query(
-            childrenUri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-            ),
-            null,
-            null,
-            null,
-        ) ?: throw IOException("Could not read selected music folder")
-        cursor.use {
-            val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-            while (cursor.moveToNext()) {
-                coroutineContext.ensureActive()
-                val documentId = cursor.getString(idColumn)
-                if (!visited.add(documentId)) continue
-                val name = cursor.getString(nameColumn).orFallback("Audio")
-                val mimeType = cursor.getString(mimeColumn).orEmpty()
-                val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
-                if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    collectFolder(treeUri, documentId, songs, visited, onAudioProcessed)
-                } else if (isAudioDocument(name, mimeType)) {
-                    readDocumentSong(documentUri, name)?.let(songs::add)
-                    onAudioProcessed()
+        val pendingFolders = ArrayDeque<Pair<String, Int>>()
+        pendingFolders.addLast(documentId to 0)
+        while (pendingFolders.isNotEmpty()) {
+            val (folderId, depth) = pendingFolders.removeLast()
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, folderId)
+            val cursor = contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null,
+                null,
+                null,
+            ) ?: throw IOException("Could not read selected music folder")
+            cursor.use {
+                val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                while (cursor.moveToNext()) {
+                    coroutineContext.ensureActive()
+                    val childId = cursor.getString(idColumn)
+                    val childDepth = depth + 1
+                    budget.recordDocument(childDepth)
+                    if (!visited.add(childId)) continue
+                    val name = cursor.getString(nameColumn).orFallback("Audio")
+                    val mimeType = cursor.getString(mimeColumn).orEmpty()
+                    val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
+                    if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        pendingFolders.addLast(childId to childDepth)
+                    } else if (isAudioDocument(name, mimeType)) {
+                        if (documentUri.toString() !in addedSongUris) {
+                            val song = readDocumentSong(documentUri, name)
+                            if (song != null && addedSongUris.add(song.uri)) {
+                                budget.recordSong()
+                                songs.add(song)
+                            }
+                        }
+                        onAudioProcessed()
+                    }
                 }
             }
         }

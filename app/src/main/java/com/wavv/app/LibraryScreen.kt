@@ -225,6 +225,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -918,7 +921,12 @@ private fun LibraryCollectionScreen(
                             IconButton(
                                 onClick = { onSetFavorites(displaySongs.map(Song::id).toSet(), !displaySongs.all { it.id in favoriteIds }) },
                                 enabled = displaySongs.isNotEmpty(),
-                                modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)).border(1.dp, Color.White.copy(.16f), CircleShape),
+                                modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)).border(1.dp, Color.White.copy(.16f), CircleShape)
+                                    .semantics {
+                                        val allFavorites = displaySongs.isNotEmpty() && displaySongs.all { it.id in favoriteIds }
+                                        contentDescription = if (allFavorites) "Remove $title from favorites" else "Add $title to favorites"
+                                        stateDescription = if (allFavorites) "All tracks liked" else "Not all tracks liked"
+                                    },
                             ) {
                             FigmaFavouriteIcon(displaySongs.isNotEmpty() && displaySongs.all { it.id in favoriteIds }, 36.dp)
                             }

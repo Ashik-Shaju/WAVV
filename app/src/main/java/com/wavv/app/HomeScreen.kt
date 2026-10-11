@@ -270,6 +270,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+internal fun primaryHomeShelf(recentlyPlayed: List<Song>, recentlyAdded: List<Song>): Pair<String, List<Song>> =
+    if (recentlyPlayed.isNotEmpty()) "Recently Played" to recentlyPlayed else "Recently Added" to recentlyAdded
+
+internal fun homeSectionOrder(sectionCount: Int, stackIndex: Int): List<Int> {
+    if (sectionCount <= 0) return emptyList()
+    val startIndex = stackIndex.coerceIn(0, sectionCount - 1)
+    return (startIndex until sectionCount).toList() + (0 until startIndex).toList()
+}
+
 @Composable
 internal fun HomeScreen(
     songs: List<Song>,
@@ -307,11 +316,7 @@ internal fun HomeScreen(
     val homeGlowColor = Color.hsv(homeGlowHue, .56f, .58f, .20f)
     val sections = remember(songs, favoriteIds, recentSongs, smartMixes) {
         val recentlyAdded = orderedSongs
-        val (primaryTitle, primarySongs) = if (recentSongs.isNotEmpty()) {
-            "Recently Played" to recentSongs
-        } else {
-            "Recently Added" to recentlyAdded
-        }
+        val (primaryTitle, primarySongs) = primaryHomeShelf(recentSongs, recentlyAdded)
         val likedSongs = songs.filter { it.id in favoriteIds }
         val albums = songs.filter { it.album.isNotBlank() }
             .distinctBy { it.album.trim().lowercase(Locale.ROOT) }
@@ -472,8 +477,7 @@ private fun HomeStackPanel(
         }
     }
     val orderedSections = remember(sections, stackIndex) {
-        if (sections.isEmpty()) emptyList()
-        else sections.drop(stackIndex.coerceIn(0, sections.lastIndex)) + sections.take(stackIndex.coerceIn(0, sections.lastIndex))
+        homeSectionOrder(sections.size, stackIndex).map(sections::get)
     }
     val navigationBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     val topInset = if (hasNowPlaying) 76.dp else 12.dp
