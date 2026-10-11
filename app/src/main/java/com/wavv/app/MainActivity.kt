@@ -22,9 +22,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.SharedTransitionLayout
-import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -297,6 +295,8 @@ internal enum class Tab { Home, Search, Library, You }
 
 private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
 
+private enum class PlayerArtworkFlightDirection { Opening, Closing }
+
 private data class PlayerArtworkFrame(
     val bounds: Rect,
     val cornerRadiusPx: Float,
@@ -309,6 +309,7 @@ private data class PlayerArtworkFrame(
 private data class PlayerArtworkFlight(
     val id: Long,
     val song: Song,
+    val direction: PlayerArtworkFlightDirection,
     val from: PlayerArtworkFrame,
     val to: PlayerArtworkFrame,
     val progressOrigin: Float = 0f,
@@ -425,6 +426,16 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         playbackController.connect()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        FrostedBackdropFrames.refreshAfterHostResume()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) FrostedBackdropFrames.refreshAfterHostResume()
     }
 
     override fun onStop() {
@@ -669,6 +680,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var fullPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var artworkFlight by remember { mutableStateOf<PlayerArtworkFlight?>(null) }
     var artworkFlightTracksFinger by remember { mutableStateOf(false) }
+    var artworkFlightAwaitingTarget by remember { mutableStateOf(false) }
     var artworkFlightSequence by remember { mutableStateOf(0L) }
     val gestureArtworkProgress = remember { mutableFloatStateOf(0f) }
     val artworkFlightProgress = remember { Animatable(0f) }
@@ -687,17 +699,47 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             playerPositionInitialized = true
         }
     }
-    val openPlayer: () -> Unit = { showPlayer = true }
-    fun newArtworkFlight(song: Song, from: PlayerArtworkFrame, to: PlayerArtworkFrame): PlayerArtworkFlight {
+    fun newArtworkFlight(
+        song: Song,
+        direction: PlayerArtworkFlightDirection,
+        from: PlayerArtworkFrame,
+        to: PlayerArtworkFrame,
+    ): PlayerArtworkFlight {
         artworkFlightSequence += 1L
-        return PlayerArtworkFlight(artworkFlightSequence, song, from, to)
+        return PlayerArtworkFlight(artworkFlightSequence, song, direction, from, to)
+    }
+    val openPlayer: () -> Unit = {
+        val song = activeSong
+        val source = miniPlayerArtworkFrame
+        if (song != null && source != null && source.bounds.width > 0f && source.bounds.height > 0f) {
+            // Freeze the artwork at the live mini-player bounds until the full-player target is measured.
+            val openingFlight = newArtworkFlight(song, PlayerArtworkFlightDirection.Opening, source, source)
+            artworkFlight = openingFlight
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = true
+            gestureArtworkProgress.floatValue = 0f
+        } else {
+            artworkFlight = null
+            artworkFlightAwaitingTarget = false
+        }
+        showPlayer = true
     }
     fun beginArtworkDrag(source: PlayerArtworkFrame) {
         val song = activeSong ?: return
         val destination = miniPlayerArtworkFrame ?: return
-        artworkFlight = newArtworkFlight(song, source, destination)
+        val openingFlight = artworkFlight?.takeIf { it.direction == PlayerArtworkFlightDirection.Opening }
+        val visibleSource = openingFlight?.let { flight ->
+            val rawProgress = if (artworkFlightAwaitingTarget) 0f else artworkFlightProgress.value.coerceIn(0f, 1f)
+            interpolateArtworkFrame(
+                flight.from,
+                flight.to,
+                normalizedArtworkFlightProgress(flight, rawProgress),
+            )
+        } ?: source
+        artworkFlight = newArtworkFlight(song, PlayerArtworkFlightDirection.Closing, visibleSource, destination)
         gestureArtworkProgress.floatValue = 0f
         artworkFlightTracksFinger = true
+        artworkFlightAwaitingTarget = false
     }
     fun updateArtworkDrag(dragDistancePx: Float) {
         if (!artworkFlightTracksFinger) return
@@ -709,8 +751,23 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     fun cancelArtworkDrag() {
         if (artworkFlightTracksFinger) {
             artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = false
             gestureArtworkProgress.floatValue = 0f
             artworkFlight = null
+        }
+    }
+    fun animateArtworkFlight(flight: PlayerArtworkFlight) {
+        artworkFlightTracksFinger = true
+        artworkFlightAwaitingTarget = false
+        gestureArtworkProgress.floatValue = 0f
+        artworkFlightScope.launch {
+            artworkFlightProgress.snapTo(0f)
+            artworkFlightTracksFinger = false
+            artworkFlightProgress.animateTo(1f, tween(620, easing = WavvMotionEasing))
+            if (artworkFlight?.id == flight.id) {
+                artworkFlight = null
+                gestureArtworkProgress.floatValue = 0f
+            }
         }
     }
     fun closePlayer(sourceFrame: PlayerArtworkFrame? = null) {
@@ -722,39 +779,37 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 val fingerProgress = normalizedArtworkFlightProgress(currentFlight, gestureArtworkProgress.floatValue)
                 val currentFrame = interpolateArtworkFrame(currentFlight.from, currentFlight.to, fingerProgress)
                 val closingFlight = currentFlight.copy(
+                    direction = PlayerArtworkFlightDirection.Closing,
                     from = currentFrame,
                     to = destination ?: currentFlight.to,
                     progressOrigin = 0f,
                 )
                 artworkFlight = closingFlight
-                gestureArtworkProgress.floatValue = 0f
-                artworkFlightScope.launch {
-                    artworkFlightProgress.snapTo(0f)
-                    artworkFlightTracksFinger = false
-                    artworkFlightProgress.animateTo(1f, tween(620, easing = WavvMotionEasing))
-                    if (artworkFlight?.id == closingFlight.id) {
-                        artworkFlight = null
-                        gestureArtworkProgress.floatValue = 0f
-                    }
-                }
+                animateArtworkFlight(closingFlight)
             } else {
-                val source = sourceFrame ?: fullPlayerArtworkFrame
+                val openingFlightFrame = currentFlight
+                    ?.takeIf { it.direction == PlayerArtworkFlightDirection.Opening }
+                    ?.let { flight ->
+                        val rawProgress = if (artworkFlightAwaitingTarget) 0f else artworkFlightProgress.value.coerceIn(0f, 1f)
+                        interpolateArtworkFrame(
+                            flight.from,
+                            flight.to,
+                            normalizedArtworkFlightProgress(flight, rawProgress),
+                        )
+                    }
+                val source = openingFlightFrame ?: sourceFrame ?: fullPlayerArtworkFrame
                 if (source != null && destination != null &&
                     source.bounds.width > 0f && source.bounds.height > 0f &&
                     destination.bounds.width > 0f && destination.bounds.height > 0f
                 ) {
                     // Measure the live mini-player target at dismissal; never reuse a prior close point.
-                    val closingFlight = newArtworkFlight(activeSong, source, destination)
+                    val closingFlight = newArtworkFlight(activeSong, PlayerArtworkFlightDirection.Closing, source, destination)
                     artworkFlight = closingFlight
-                    gestureArtworkProgress.floatValue = 0f
-                    // Keep the first overlay frame at its source while Animatable is initialized.
-                    artworkFlightTracksFinger = true
-                    artworkFlightScope.launch {
-                        artworkFlightProgress.snapTo(0f)
-                        artworkFlightTracksFinger = false
-                        artworkFlightProgress.animateTo(1f, tween(620, easing = WavvMotionEasing))
-                        if (artworkFlight?.id == closingFlight.id) artworkFlight = null
-                    }
+                    animateArtworkFlight(closingFlight)
+                } else {
+                    artworkFlight = null
+                    artworkFlightTracksFinger = false
+                    artworkFlightAwaitingTarget = false
                 }
             }
         }
@@ -800,7 +855,6 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
 
     SharedTransitionLayout(Modifier.fillMaxSize()) {
-        val sharedTransitionScope = this
         val navBackdrop = rememberLayerBackdrop()
         Box(Modifier.fillMaxSize().background(WavvBackground)) {
         Box(Modifier.fillMaxSize().layerBackdrop(navBackdrop)) {
@@ -936,13 +990,13 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         playerExpanded = true
                     }
                 },
-                sharedTransitionScope = sharedTransitionScope,
-                playerVisible = showPlayer || artworkFlight != null,
                 artworkFlightActive = artworkFlight != null,
                 onArtworkFrameChange = { frame ->
                     miniPlayerArtworkFrame = frame
                     val flight = artworkFlight
-                    if (flight != null && !artworkFlightTracksFinger && flight.to != frame) {
+                    if (flight?.direction == PlayerArtworkFlightDirection.Closing &&
+                        !artworkFlightTracksFinger && !artworkFlightAwaitingTarget && flight.to != frame
+                    ) {
                         val rawProgress = artworkFlightProgress.value.coerceIn(0f, 1f)
                         val currentProgress = normalizedArtworkFlightProgress(flight, rawProgress)
                         val currentFrame = interpolateArtworkFrame(flight.from, flight.to, currentProgress)
@@ -967,11 +1021,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
         AnimatedVisibility(
             visible = showPlayer,
-            enter = fadeIn(tween(180)) + slideInVertically(tween(620, easing = WavvMotionEasing)) { it },
+            enter = fadeIn(tween(620, easing = WavvMotionEasing)),
             exit = fadeOut(tween(620, easing = WavvMotionEasing)) +
                 slideOutVertically(tween(620, easing = WavvMotionEasing)) { (it * .38f).roundToInt() },
         ) {
-            val sharedPlayerVisible = transition.targetState == EnterExitState.Visible
             activeSong?.let {
                 FullPlayer(
                     song = it,
@@ -996,10 +1049,34 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onMoveQueueItem = onMoveQueueItem,
                     onPlayNext = onPlayNext,
                     playlists = playlists,
-                    sharedTransitionScope = sharedTransitionScope,
-                    playerVisible = sharedPlayerVisible && artworkFlight == null,
                     artworkFlightActive = artworkFlight != null,
-                    onArtworkFrameChange = { fullPlayerArtworkFrame = it },
+                    onArtworkFrameChange = { frame ->
+                        fullPlayerArtworkFrame = frame
+                        val flight = artworkFlight
+                        if (flight?.direction == PlayerArtworkFlightDirection.Opening) {
+                            if (artworkFlightAwaitingTarget) {
+                                // Use the measured, settled full-player artwork bounds as the destination.
+                                val openingFlight = flight.copy(to = frame)
+                                artworkFlight = openingFlight
+                                animateArtworkFlight(openingFlight)
+                            } else if (!artworkFlightTracksFinger && flight.to != frame) {
+                                val rawProgress = artworkFlightProgress.value.coerceIn(0f, 1f)
+                                val currentProgress = normalizedArtworkFlightProgress(flight, rawProgress)
+                                val currentFrame = interpolateArtworkFrame(flight.from, flight.to, currentProgress)
+                                val targetDisplacement = maxOf(
+                                    kotlin.math.abs(frame.bounds.left - flight.to.bounds.left),
+                                    kotlin.math.abs(frame.bounds.top - flight.to.bounds.top),
+                                    kotlin.math.abs(frame.bounds.right - flight.to.bounds.right),
+                                    kotlin.math.abs(frame.bounds.bottom - flight.to.bounds.bottom),
+                                )
+                                artworkFlight = if (targetDisplacement > artworkRetargetThresholdPx && rawProgress < .98f) {
+                                    flight.copy(from = currentFrame, to = frame, progressOrigin = rawProgress)
+                                } else {
+                                    flight.copy(to = frame)
+                                }
+                            }
+                        }
+                    },
                     onArtworkDragStart = { frame -> beginArtworkDrag(frame) },
                     onArtworkDragProgress = { distance -> updateArtworkDrag(distance) },
                     onArtworkDragCancel = { cancelArtworkDrag() },
@@ -1013,37 +1090,38 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         artworkFlight?.let { flight ->
             val density = LocalDensity.current
             val sourceBounds = flight.from.bounds
-            val targetBounds = flight.to.bounds
             val sourceWidth = sourceBounds.width.coerceAtLeast(1f)
             val sourceHeight = sourceBounds.height.coerceAtLeast(1f)
+            val sourceLeft = sourceBounds.left.roundToInt().toFloat()
+            val sourceTop = sourceBounds.top.roundToInt().toFloat()
             val tracksFinger = artworkFlightTracksFinger
+            val awaitingTarget = artworkFlightAwaitingTarget
             Box(
                 Modifier
-                    .offset { IntOffset(sourceBounds.left.roundToInt(), sourceBounds.top.roundToInt()) }
+                    .offset { IntOffset(sourceLeft.roundToInt(), sourceTop.roundToInt()) }
                     .size(
                         width = with(density) { sourceWidth.toDp() },
                         height = with(density) { sourceHeight.toDp() },
                     )
                     .graphicsLayer {
-                        val rawProgress = if (tracksFinger) {
+                        val rawProgress = if (awaitingTarget) {
+                            0f
+                        } else if (tracksFinger) {
                             gestureArtworkProgress.floatValue
                         } else {
                             artworkFlightProgress.value
                         }.coerceIn(0f, 1f)
                         val progress = normalizedArtworkFlightProgress(flight, rawProgress)
                         val frame = interpolateArtworkFrame(flight.from, flight.to, progress)
-                        val scale = lerpFloat(
-                            1f,
-                            minOf(targetBounds.width / sourceWidth, targetBounds.height / sourceHeight).coerceAtLeast(.01f),
-                            progress,
-                        ).coerceAtLeast(.01f)
+                        val scaleX = (frame.bounds.width / sourceWidth).coerceAtLeast(.01f)
+                        val scaleY = (frame.bounds.height / sourceHeight).coerceAtLeast(.01f)
                         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
-                        translationX = frame.bounds.left - sourceBounds.left
-                        translationY = frame.bounds.top - sourceBounds.top
-                        scaleX = scale
-                        scaleY = scale
+                        translationX = frame.bounds.left - sourceLeft
+                        translationY = frame.bounds.top - sourceTop
+                        this.scaleX = scaleX
+                        this.scaleY = scaleY
                         alpha = frame.alpha
-                        shape = RoundedCornerShape(with(density) { (frame.cornerRadiusPx / scale).coerceAtLeast(0f).toDp() })
+                        shape = RoundedCornerShape(with(density) { (frame.cornerRadiusPx / scaleX).coerceAtLeast(0f).toDp() })
                         clip = true
                         shadowElevation = frame.shadowElevationPx
                     },
@@ -1051,7 +1129,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 AlbumArt(
                     flight.song,
                     Modifier.fillMaxSize().graphicsLayer {
-                        val rawProgress = if (tracksFinger) gestureArtworkProgress.floatValue else artworkFlightProgress.value
+                        val rawProgress = when {
+                            awaitingTarget -> 0f
+                            tracksFinger -> gestureArtworkProgress.floatValue
+                            else -> artworkFlightProgress.value
+                        }
                         val progress = normalizedArtworkFlightProgress(flight, rawProgress)
                         alpha = interpolateArtworkFrame(flight.from, flight.to, progress).regularArtworkAlpha
                     },
@@ -1062,7 +1144,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     flight.song,
                     Modifier.fillMaxSize()
                         .graphicsLayer {
-                            val rawProgress = if (tracksFinger) gestureArtworkProgress.floatValue else artworkFlightProgress.value
+                            val rawProgress = when {
+                                awaitingTarget -> 0f
+                                tracksFinger -> gestureArtworkProgress.floatValue
+                                else -> artworkFlightProgress.value
+                            }
                             val progress = normalizedArtworkFlightProgress(flight, rawProgress)
                             alpha = interpolateArtworkFrame(flight.from, flight.to, progress).maskedArtworkAlpha
                         }
@@ -1481,7 +1567,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, sharedTransitionScope: SharedTransitionScope, playerVisible: Boolean, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val captureState = remember { AtomicBoolean(false) }
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
@@ -1564,7 +1650,6 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
                         ),
                     )
                 }
-                .sharedPlayerArtwork(sharedTransitionScope, !playerVisible && !artworkFlightActive)
                 .alpha(if (artworkFlightActive) 0f else 1f)
         ) {
             AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(artworkCorner)), song.title, artworkCorner)
@@ -1633,18 +1718,6 @@ private fun TrackText(song: Song, modifier: Modifier = Modifier, titleSize: Text
         Text(song.artist, color = Color.White.copy(.5f), fontSize = subtitleSize, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
     }
 }
-
-@Composable
-private fun Modifier.sharedPlayerArtwork(scope: SharedTransitionScope, visible: Boolean): Modifier =
-    with(scope) {
-        sharedElementWithCallerManagedVisibility(
-            rememberSharedContentState(key = "player-art"),
-            visible = visible,
-            boundsTransform = { _, _ ->
-                tween(durationMillis = 620, easing = WavvMotionEasing)
-            },
-        )
-    }
 
 @Composable
 private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, iconSize: Dp) {
@@ -1774,8 +1847,6 @@ private fun FullPlayer(
     onCreatePlaylist: (Long) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
-    sharedTransitionScope: SharedTransitionScope,
-    playerVisible: Boolean,
     artworkFlightActive: Boolean,
     onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
     onArtworkDragStart: (PlayerArtworkFrame) -> Unit,
@@ -1926,7 +1997,6 @@ private fun FullPlayer(
                     currentArtworkFrame = frame
                     onArtworkFrameChange(frame)
                 }
-                .sharedPlayerArtwork(sharedTransitionScope, playerVisible && !artworkFlightActive)
                 .alpha(if (artworkFlightActive) 0f else 1f),
         ) {
             AlbumArt(song, Modifier.fillMaxSize().alpha(regularArtAlpha), song.title, 0.dp)

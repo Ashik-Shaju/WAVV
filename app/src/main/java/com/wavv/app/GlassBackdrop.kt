@@ -33,6 +33,14 @@ internal object FrostedBackdropFrames {
     private var observedTreeObserver: android.view.ViewTreeObserver? = null
     private var preDrawListener: android.view.ViewTreeObserver.OnPreDrawListener? = null
 
+    /** Rebuild the sampled backdrop and hardware blur after the host window becomes visible again. */
+    fun refreshAfterHostResume() {
+        val registeredSurfaces = surfaces.keys.toList()
+        registeredSurfaces.forEach(FrostedBackdropView::refreshAfterHostResume)
+        val root = frameRoot ?: registeredSurfaces.firstNotNullOfOrNull(FrostedBackdropView::findComposeRoot)
+        root?.postInvalidateOnAnimation()
+    }
+
     fun register(view: FrostedBackdropView, captureState: AtomicBoolean) {
         surfaces[view] = captureState
         view.findComposeRoot()?.let(::observeBeforeDraw)
@@ -192,16 +200,7 @@ internal class FrostedBackdropView(
         tintColor = tint.toArgb()
         this.refreshEnabled = refreshEnabled
         if (!wasRefreshEnabled && refreshEnabled) hasBackdropPixels = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && appliedBlurRadiusPx != blurRadiusPx) {
-            setRenderEffect(
-                AndroidRenderEffect.createBlurEffect(
-                    blurRadiusPx,
-                    blurRadiusPx,
-                    AndroidShader.TileMode.CLAMP,
-                ),
-            )
-            appliedBlurRadiusPx = blurRadiusPx
-        }
+        applyBlurEffect()
         if (styleChanged) invalidate()
         if (isAttachedToWindow && wasRefreshEnabled != refreshEnabled && refreshEnabled) invalidate()
     }
@@ -223,6 +222,35 @@ internal class FrostedBackdropView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         FrostedBackdropFrames.register(this, captureState)
+    }
+
+    fun refreshAfterHostResume() {
+        hasBackdropPixels = false
+        applyBlurEffect(force = true)
+        invalidate()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE) refreshAfterHostResume()
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (hasWindowFocus) refreshAfterHostResume()
+    }
+
+    private fun applyBlurEffect(force: Boolean = false) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (force || appliedBlurRadiusPx != blurRadiusPx)) {
+            setRenderEffect(
+                AndroidRenderEffect.createBlurEffect(
+                    blurRadiusPx,
+                    blurRadiusPx,
+                    AndroidShader.TileMode.CLAMP,
+                ),
+            )
+            appliedBlurRadiusPx = blurRadiusPx
+        }
     }
 
     fun shouldRefreshBackdrop(): Boolean = refreshEnabled

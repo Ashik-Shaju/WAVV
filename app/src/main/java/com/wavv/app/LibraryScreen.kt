@@ -47,13 +47,11 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
-import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.SharedTransitionLayout
-import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -449,7 +447,6 @@ internal fun LibraryScreen(
                         showSort = route.page == LibraryPage.Playlists,
                         onAdd = { onRequestCreatePlaylist(null) },
                         onSort = { sortMenu = true },
-                        historyAction = { LibraryHistoryAction(historyVisible, onToggleHistory) },
                     )
                     val orderedCards = remember(cards, sortMode) {
                         when (sortMode) {
@@ -519,8 +516,6 @@ internal fun LibraryScreen(
                     page = route.page,
                     title = if (route == destination) collectionTitle else route.title,
                     subtitle = if (route == destination) collectionSubtitle else route.subtitle,
-                    historyVisible = historyVisible,
-                    onToggleHistory = onToggleHistory,
                     songs = if (route == destination) collectionSongs else when (route.page) {
                         LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
                         LibraryPage.Songs -> songs
@@ -711,7 +706,6 @@ private fun LibraryBrowseHeader(
     showSort: Boolean,
     onAdd: () -> Unit,
     onSort: () -> Unit,
-    historyAction: @Composable () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().statusBarsPadding().padding(start = 14.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
@@ -726,7 +720,6 @@ private fun LibraryBrowseHeader(
             Icon(if (layout == LibraryLayout.Grid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, contentDescription = if (layout == LibraryLayout.Grid) "Switch to list" else "Switch to grid", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp))
         }
         if (showAdd) IconButton(onClick = onAdd, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Add, contentDescription = "Create playlist", tint = WavvPink) }
-        historyAction()
     }
 }
 
@@ -825,8 +818,6 @@ private fun LibraryCollectionScreen(
     page: LibraryPage,
     title: String,
     subtitle: String,
-    historyVisible: Boolean,
-    onToggleHistory: () -> Unit,
     songs: List<Song>,
     playlists: List<UserPlaylist>,
     favoriteIds: Set<Long>,
@@ -874,11 +865,6 @@ private fun LibraryCollectionScreen(
         val height = minOf(620.dp, maxWidth + 170.dp)
         val artworkHeight = minOf(maxWidth, 480.dp)
         SongListArtworkBackdrop(featured, Modifier.matchParentSize())
-        Box(
-            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 20.dp),
-        ) {
-            LibraryHistoryAction(historyVisible, onToggleHistory)
-        }
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = if (hasNowPlaying) 260.dp else 176.dp),
