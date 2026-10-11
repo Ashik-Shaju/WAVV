@@ -2778,6 +2778,7 @@ private fun QueueSongRow(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val revealWidthPx = with(density) { 76.dp.toPx() }
+    val latestSwipeEnabled = rememberUpdatedState(enabled && canRemove)
     val dragState = rememberDraggableState { delta ->
         swipeAnimationJob?.cancel()
         swipeOffsetPx = (swipeOffsetPx + delta).coerceIn(-rowWidthPx, rowWidthPx)
@@ -2793,8 +2794,8 @@ private fun QueueSongRow(
         }
     }
 
-    LaunchedEffect(canRemove) {
-        if (!canRemove) settleSwipe(0f)
+    LaunchedEffect(canRemove, enabled) {
+        if (!canRemove || !enabled) settleSwipe(0f)
     }
 
     Box(
@@ -2804,9 +2805,9 @@ private fun QueueSongRow(
     ) {
         if (canRemove && kotlin.math.abs(swipeOffsetPx) > 0.5f) {
             if (swipeOffsetPx > 0f) {
-                QueueSwipeDeleteAction(Modifier.align(Alignment.CenterStart).padding(start = 10.dp), onRemove)
+                QueueSwipeDeleteAction(Modifier.align(Alignment.CenterStart).padding(start = 10.dp), enabled, onRemove)
             } else {
-                QueueSwipeDeleteAction(Modifier.align(Alignment.CenterEnd).padding(end = 10.dp), onRemove)
+                QueueSwipeDeleteAction(Modifier.align(Alignment.CenterEnd).padding(end = 10.dp), enabled, onRemove)
             }
         }
         Row(
@@ -2816,16 +2817,14 @@ private fun QueueSongRow(
                     state = dragState,
                     orientation = Orientation.Horizontal,
                     enabled = enabled && canRemove,
-                    onDragStopped = { velocity ->
+                    onDragStopped = { _ ->
                         val removeThreshold = max(revealWidthPx * 2f, rowWidthPx * .38f)
                         val draggedFarEnough = kotlin.math.abs(swipeOffsetPx) >= removeThreshold
-                        val decisiveFling = kotlin.math.abs(velocity) >= 1_500f &&
-                            kotlin.math.abs(swipeOffsetPx) >= revealWidthPx * .55f
-                        if (!canRemove) {
+                        if (!latestSwipeEnabled.value) {
                             settleSwipe(0f)
-                        } else if (draggedFarEnough || decisiveFling) {
+                        } else if (draggedFarEnough) {
                             onRemove()
-                        } else if (kotlin.math.abs(swipeOffsetPx) >= revealWidthPx * .38f) {
+                        } else if (kotlin.math.abs(swipeOffsetPx) >= revealWidthPx * .72f) {
                             settleSwipe(if (swipeOffsetPx > 0f) revealWidthPx else -revealWidthPx)
                         } else {
                             settleSwipe(0f)
@@ -2889,12 +2888,12 @@ private fun QueueSongRow(
 }
 
 @Composable
-private fun QueueSwipeDeleteAction(modifier: Modifier, onRemove: () -> Unit) {
+private fun QueueSwipeDeleteAction(modifier: Modifier, enabled: Boolean, onRemove: () -> Unit) {
     Box(
         modifier.size(48.dp)
             .clip(CircleShape)
             .background(WavvPink)
-            .clickable(onClick = onRemove),
+            .clickable(enabled = enabled, onClick = onRemove),
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.Default.Close, contentDescription = "Delete song", tint = Color.White, modifier = Modifier.size(23.dp))
@@ -2977,7 +2976,9 @@ private fun QueuePanel(
     }
     val displayedQueueEntries = localQueueOrder ?: externalQueueEntries
     val displayedAutoplayEntries = localAutoplayOrder ?: externalAutoplayEntries
-    val queueControlsEnabled = draggingSongKey == null && pendingQueueIds == null && pendingAutoplayIds == null
+    val queueControlsEnabled = draggingSongKey == null && settlingSongKey == null &&
+        pendingQueueIds == null && pendingAutoplayIds == null
+    val rowActionsEnabled = queueControlsEnabled && !queueListState.isScrollInProgress
     val settleProgress by animateFloatAsState(
         targetValue = if (settlingSongKey != null && settlingTargetReady) 1f else 0f,
         animationSpec = tween(230, easing = WavvScreenEasing),
@@ -3087,7 +3088,9 @@ private fun QueuePanel(
             if ("$prefix${queuedSong.id}:$occurrence" == rowKey) sourceIndex = queueIndex
         }
         val itemInfo = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
-        if (sourceIndex >= 0 && itemInfo != null && pendingQueueIds == null && draggingSongKey == null) {
+        if (sourceIndex >= 0 && itemInfo != null && !queueListState.isScrollInProgress &&
+            pendingQueueIds == null && pendingAutoplayIds == null && draggingSongKey == null && settlingSongKey == null
+        ) {
             settlingSongKey = null
             settlingTargetReady = false
             menuKey = null
@@ -3319,11 +3322,11 @@ private fun QueuePanel(
                     rowKey = rowKey,
                     isCurrent = isCurrent,
                     isAutoplay = false,
-                    enabled = queueControlsEnabled,
+                    enabled = rowActionsEnabled,
                     canRemove = !isCurrent,
                     menuExpanded = menuKey == rowKey,
-                    onClick = { onPlaySong(item) },
-                    onLongPress = { if (queueControlsEnabled) menuKey = rowKey },
+                    onClick = { if (rowActionsEnabled) onPlaySong(item) },
+                    onLongPress = { if (rowActionsEnabled) menuKey = rowKey },
                     onDismissMenu = { menuKey = null },
                     onRemove = { onRemoveQueueItem(index) },
                     onPlayNext = { onPlayNext(item) },
@@ -3414,11 +3417,11 @@ private fun QueuePanel(
                         rowKey = rowKey,
                         isCurrent = false,
                         isAutoplay = true,
-                        enabled = autoplayEnabled && queueControlsEnabled,
+                        enabled = autoplayEnabled && rowActionsEnabled,
                         canRemove = true,
                         menuExpanded = menuKey == rowKey,
-                        onClick = { onPlayAutoplaySong(item) },
-                        onLongPress = { if (autoplayEnabled && queueControlsEnabled) menuKey = rowKey },
+                        onClick = { if (autoplayEnabled && rowActionsEnabled) onPlayAutoplaySong(item) },
+                        onLongPress = { if (autoplayEnabled && rowActionsEnabled) menuKey = rowKey },
                         onDismissMenu = { menuKey = null },
                         onRemove = { onRemoveAutoplaySong(item) },
                         onPlayNext = { onPlayNextFromAutoplay(item) },
