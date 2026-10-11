@@ -270,6 +270,73 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+private fun Modifier.homeAcrylicBackground() = drawWithCache {
+    val base = Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to Color(0xFF060A18),
+            .16f to Color(0xFF040713),
+            .34f to Color(0xFF010208),
+            .72f to Color(0xFF000104),
+            .88f to Color(0xFF02040B),
+            1f to Color(0xFF050716),
+        ),
+        endY = size.height,
+    )
+    val topBlueHaze = Brush.radialGradient(
+        0f to Color(0xFF36548D).copy(alpha = .17f),
+        .50f to Color(0xFF203665).copy(alpha = .08f),
+        1f to Color.Transparent,
+        center = Offset(size.width * .12f, size.height * .04f),
+        radius = size.height * .38f,
+    )
+    val topVioletHaze = Brush.radialGradient(
+        0f to Color(0xFF574273).copy(alpha = .12f),
+        .55f to Color(0xFF302446).copy(alpha = .06f),
+        1f to Color.Transparent,
+        center = Offset(size.width * .94f, size.height * .13f),
+        radius = size.height * .34f,
+    )
+    val lowerBlueHaze = Brush.radialGradient(
+        0f to Color(0xFF1B315F).copy(alpha = .10f),
+        .52f to Color(0xFF101D3D).copy(alpha = .05f),
+        1f to Color.Transparent,
+        center = Offset(size.width * .10f, size.height * .98f),
+        radius = size.height * .34f,
+    )
+    val lowerVioletHaze = Brush.radialGradient(
+        0f to Color(0xFF463467).copy(alpha = .11f),
+        .55f to Color(0xFF2B2146).copy(alpha = .05f),
+        1f to Color.Transparent,
+        center = Offset(size.width * .96f, size.height * .92f),
+        radius = size.height * .36f,
+    )
+    val acrylicSheen = Brush.linearGradient(
+        colorStops = arrayOf(
+            0f to Color(0xFFD8E4FF).copy(alpha = .018f),
+            .24f to Color(0xFFAABEFF).copy(alpha = .008f),
+            .52f to Color.Transparent,
+            1f to Color(0xFFC8B7F4).copy(alpha = .008f),
+        ),
+        start = Offset(0f, 0f),
+        end = Offset(size.width, size.height),
+    )
+    val lowerShade = Brush.verticalGradient(
+        0f to Color.Transparent,
+        .72f to Color.Transparent,
+        1f to Color.Black.copy(alpha = .28f),
+        endY = size.height,
+    )
+    onDrawBehind {
+        drawRect(base)
+        drawRect(topBlueHaze)
+        drawRect(topVioletHaze)
+        drawRect(lowerBlueHaze)
+        drawRect(lowerVioletHaze)
+        drawRect(acrylicSheen)
+        drawRect(lowerShade)
+    }
+}
+
 internal fun primaryHomeShelf(recentlyPlayed: List<Song>, recentlyAdded: List<Song>): Pair<String, List<Song>> =
     if (recentlyPlayed.isNotEmpty()) "Recently Played" to recentlyPlayed else "Recently Added" to recentlyAdded
 
@@ -313,8 +380,8 @@ internal fun HomeScreen(
         animationSpec = infiniteRepeatable(tween(6200, easing = LinearEasing), RepeatMode.Reverse),
         label = "home accent phase",
     )
-    val homeGlowHue = (318f + homeGlowPhase * 60f) % 360f
-    val homeGlowColor = Color.hsv(homeGlowHue, .56f, .58f, .20f)
+    val homeGlowHue = 220f + homeGlowPhase * 62f
+    val homeGlowColor = Color.hsv(homeGlowHue, .48f, .42f, .10f)
     val sections = remember(songs, favoriteIds, recentSongs, smartMixes) {
         val recentlyAdded = orderedSongs
         val (primaryTitle, primarySongs) = primaryHomeShelf(recentSongs, recentlyAdded)
@@ -352,14 +419,20 @@ internal fun HomeScreen(
     }
     var selectedCategory by remember { mutableStateOf<HomeStackEntry?>(null) }
 
-    Column(Modifier.fillMaxSize()) {
-        ScreenHeader("Wavv", waveform = true, isPlaying = isPlaying, showAmbient = false)
+    Column(Modifier.fillMaxSize().homeAcrylicBackground()) {
+        ScreenHeader(
+            "Wavv",
+            waveform = true,
+            isPlaying = isPlaying,
+            showAmbient = false,
+            backgroundColor = Color.Transparent,
+        )
         if (songs.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 EmptyLibraryCard(onChooseSource)
             }
         } else {
-            Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black)) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
                 Box(
                     Modifier.align(Alignment.BottomCenter).offset(y = (-190).dp).size(170.dp)
                         .background(

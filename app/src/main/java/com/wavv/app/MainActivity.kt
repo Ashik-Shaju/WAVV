@@ -1323,12 +1323,13 @@ internal fun ScreenHeader(
     waveform: Boolean = false,
     isPlaying: Boolean = false,
     showAmbient: Boolean = true,
+    backgroundColor: Color? = null,
     trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
     val brandHome = title == "Wavv" && !showAmbient
     Box(
         Modifier.fillMaxWidth().background(
-            if (waveform && !showAmbient) Color.Black else if (waveform) WavvBackground else Color(0xB20A0A0A),
+            backgroundColor ?: if (waveform && !showAmbient) Color.Black else if (waveform) WavvBackground else Color(0xB20A0A0A),
         ),
     ) {
         if (waveform && showAmbient) {
