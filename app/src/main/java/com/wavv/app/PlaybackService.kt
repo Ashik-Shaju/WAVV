@@ -2,6 +2,10 @@ package com.wavv.app
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
+import android.media.audiofx.Equalizer
+import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -16,12 +20,22 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 object PlaybackPlayerFactory {
     @OptIn(markerClass = [UnstableApi::class])
@@ -41,6 +55,9 @@ object PlaybackPlayerFactory {
         .build()
 }
 
+private const val MEDIA_EXTRA_UHQ_SOURCE_URI = "com.wavv.app.UHQ_SOURCE_URI"
+private const val MEDIA_EXTRA_UHQ_INTERNAL_SWITCH = "com.wavv.app.UHQ_INTERNAL_SWITCH"
+
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
@@ -50,6 +67,27 @@ class PlaybackService : MediaSessionService() {
     private val feedbackHandler = Handler(Looper.getMainLooper())
     private var previousSongId: Long? = null
     private var previousItemIndex: Int = C.INDEX_UNSET
+    private var uhqSongId: String? = null
+    @Volatile private var uhqWorkName: String? = null
+    private var uhqJob: Job? = null
+    private var equalizerSessionId = C.AUDIO_SESSION_ID_UNSET
+    private var audioEqualizer: Equalizer? = null
+    private var unavailableEqualizerSessionId = C.AUDIO_SESSION_ID_UNSET
+    private val applyEqualizer = Runnable { syncEqualizer() }
+    private var uhqPreferences: SharedPreferences? = null
+    private val uhqPreferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == UHQPlaybackPreference.preferenceKey()) {
+            feedbackHandler.post {
+                player?.currentMediaItem?.let { item ->
+                    if (UHQPlaybackPreference.isEnabled(this)) updateUHQ(item, force = true)
+                    else disableUHQ(item)
+                }
+            }
+        } else if (key?.startsWith(AUDIO_EQUALIZER_PREFERENCE_PREFIX) == true) {
+            feedbackHandler.removeCallbacks(applyEqualizer)
+            feedbackHandler.postDelayed(applyEqualizer, EQUALIZER_UPDATE_DELAY_MS)
+        }
+    }
     private val feedbackSampler = object : Runnable {
         override fun run() {
             player?.let { current ->
@@ -72,6 +110,7 @@ class PlaybackService : MediaSessionService() {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val current = player ?: return
             val item = mediaItem ?: return
+            if (item.mediaMetadata.extras?.getBoolean(MEDIA_EXTRA_UHQ_INTERNAL_SWITCH) == true) return
             val nextIndex = current.currentMediaItemIndex
             val transition = when {
                 previousSongId == null -> TrackTransition.INITIAL
@@ -89,11 +128,24 @@ class PlaybackService : MediaSessionService() {
                 record(feedback.onEnded(SystemClock.elapsedRealtime(), System.currentTimeMillis()))
             }
         }
+
+        @OptIn(markerClass = [UnstableApi::class])
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            if (equalizerSessionId == audioSessionId) return
+            runCatching { audioEqualizer?.release() }
+            audioEqualizer = null
+            equalizerSessionId = audioSessionId
+            unavailableEqualizerSessionId = C.AUDIO_SESSION_ID_UNSET
+            syncEqualizer()
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
         libraryStore = LibraryStore(WavvDatabase.get(this))
+        uhqPreferences = UHQPlaybackPreference.preferences(this).also {
+            it.registerOnSharedPreferenceChangeListener(uhqPreferenceListener)
+        }
         player = PlaybackPlayerFactory.create(this)
         player?.addListener(feedbackListener)
         mediaSession = MediaSession.Builder(this, player!!).build()
@@ -108,7 +160,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        uhqPreferences?.unregisterOnSharedPreferenceChangeListener(uhqPreferenceListener)
+        uhqPreferences = null
+        uhqJob?.cancel()
         feedbackHandler.removeCallbacks(feedbackSampler)
+        feedbackHandler.removeCallbacks(applyEqualizer)
+        runCatching { audioEqualizer?.release() }
+        audioEqualizer = null
         player?.removeListener(feedbackListener)
         mediaSession?.release()
         mediaSession = null
@@ -116,6 +174,31 @@ class PlaybackService : MediaSessionService() {
         player = null
         eventScope.cancel()
         super.onDestroy()
+    }
+
+    private fun syncEqualizer() {
+        val sessionId = equalizerSessionId
+        if (sessionId <= 0 || unavailableEqualizerSessionId == sessionId) return
+        try {
+            val effect = audioEqualizer ?: Equalizer(0, sessionId).also { audioEqualizer = it }
+            val bandCount = effect.numberOfBands.toInt()
+            val levels = effect.bandLevelRange
+            if (bandCount <= 0 || levels.size < 2) error("Android returned invalid equalizer capabilities")
+            val gains = AudioEqualizerSettings.activeProfile(this).gainsDb
+            for (band in 0 until bandCount) {
+                val frequencyHz = effect.getCenterFreq(band.toShort()) / 1_000
+                val levelMb = (EqualizerProfiles.gainAtFrequency(gains, frequencyHz) * 100)
+                    .roundToInt()
+                    .coerceIn(levels[0].toInt(), levels[1].toInt())
+                effect.setBandLevel(band.toShort(), levelMb.toShort())
+            }
+            effect.enabled = AudioEqualizerSettings.isEnabled(this)
+        } catch (error: Exception) {
+            runCatching { audioEqualizer?.release() }
+            audioEqualizer = null
+            unavailableEqualizerSessionId = sessionId
+            Log.w(TAG, "Android equalizer is unavailable for the active playback session", error)
+        }
     }
 
     private fun onTrackTransition(item: MediaItem, transition: TrackTransition, index: Int) {
@@ -138,6 +221,111 @@ class PlaybackService : MediaSessionService() {
         )
         previousSongId = id
         previousItemIndex = index
+        if (UHQPlaybackPreference.isEnabled(this)) updateUHQ(item)
+        else disableUHQ(item)
+    }
+
+    private fun updateUHQ(item: MediaItem, force: Boolean = false) {
+        val songId = item.mediaId
+        if (uhqSongId != songId) {
+            uhqJob?.cancel()
+            uhqWorkName?.let { WorkManager.getInstance(this).cancelUniqueWork(it) }
+            uhqWorkName = null
+            uhqSongId = songId
+        } else if (!force && uhqJob?.isActive == true) {
+            return
+        }
+        if (item.mediaMetadata.extras?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true) return
+        val source = item.localConfiguration?.uri ?: return
+        uhqJob?.cancel()
+        uhqJob = eventScope.launch {
+            val key = UHQAacCache.key(this@PlaybackService, source) ?: return@launch
+            if (!UHQPlaybackPreference.isEnabled(this@PlaybackService)) return@launch
+            val destination = UHQAacCache.file(this@PlaybackService, key)
+            if (destination.isFile && destination.length() > 44L) {
+                destination.setLastModified(System.currentTimeMillis())
+                withContext(Dispatchers.Main.immediate) {
+                    val current = player?.currentMediaItem
+                    if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
+                        routeToEnhanced(current, source, destination)
+                    }
+                }
+                return@launch
+            }
+
+            val workManager = WorkManager.getInstance(this@PlaybackService)
+            val workName = UHQAacCache.workName(key)
+            uhqWorkName = workName
+            val request = OneTimeWorkRequestBuilder<UHQEnhancementWorker>()
+                .setInputData(
+                    Data.Builder()
+                        .putString(UHQEnhancementWorker.INPUT_URI, source.toString())
+                        .putString(UHQEnhancementWorker.INPUT_KEY, key)
+                        .build(),
+                )
+                .build()
+            try {
+                workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, request).result.get()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Couldn't queue UHQ enhancement", error)
+                return@launch
+            }
+            while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val infos = workManager.getWorkInfosForUniqueWork(workName).get()
+                val info = infos.firstOrNull { it.id == request.id }
+                    ?: infos.lastOrNull { !it.state.isFinished }
+                    ?: infos.lastOrNull()
+                if (info?.state?.isFinished == true) {
+                    if (info.state == WorkInfo.State.SUCCEEDED && destination.isFile) {
+                        withContext(Dispatchers.Main.immediate) {
+                            val current = player?.currentMediaItem
+                            if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
+                                routeToEnhanced(current, source, destination)
+                            }
+                        }
+                    }
+                    return@launch
+                }
+                delay(750L)
+            }
+        }
+    }
+
+    private fun disableUHQ(item: MediaItem) {
+        if (uhqSongId != item.mediaId) uhqSongId = item.mediaId
+        uhqJob?.cancel()
+        uhqWorkName?.let { WorkManager.getInstance(this).cancelUniqueWork(it) }
+        uhqWorkName = null
+        val source = item.mediaMetadata.extras?.getString(MEDIA_EXTRA_UHQ_SOURCE_URI)?.let(Uri::parse) ?: return
+        routeToOriginal(item, source)
+    }
+
+    private fun routeToEnhanced(item: MediaItem, source: Uri, enhanced: java.io.File) {
+        if (item.localConfiguration?.uri == Uri.fromFile(enhanced)) return
+        val extras = item.mediaMetadata.extras?.let(::Bundle) ?: Bundle()
+        extras.putString(MEDIA_EXTRA_UHQ_SOURCE_URI, source.toString())
+        extras.putBoolean(MEDIA_EXTRA_UHQ_INTERNAL_SWITCH, true)
+        replaceCurrentMediaItem(item, Uri.fromFile(enhanced), extras)
+    }
+
+    private fun routeToOriginal(item: MediaItem, source: Uri) {
+        val extras = item.mediaMetadata.extras?.let(::Bundle) ?: Bundle()
+        extras.remove(MEDIA_EXTRA_UHQ_SOURCE_URI)
+        extras.putBoolean(MEDIA_EXTRA_UHQ_INTERNAL_SWITCH, true)
+        replaceCurrentMediaItem(item, source, extras)
+    }
+
+    private fun replaceCurrentMediaItem(item: MediaItem, uri: Uri, extras: Bundle) {
+        val current = player ?: return
+        val index = current.currentMediaItemIndex
+        if (index == C.INDEX_UNSET || current.currentMediaItem?.mediaId != item.mediaId) return
+        val position = current.currentPosition
+        val metadata = item.mediaMetadata.buildUpon().setExtras(extras).build()
+        current.replaceMediaItem(index, item.buildUpon().setUri(uri).setMediaMetadata(metadata).build())
+        current.seekTo(index, position)
     }
 
     private fun record(events: List<LocalListeningEvent>) {
@@ -158,5 +346,6 @@ class PlaybackService : MediaSessionService() {
     private companion object {
         const val TAG = "WavvPlayback"
         const val FEEDBACK_SAMPLE_INTERVAL_MS = 1_000L
+        const val EQUALIZER_UPDATE_DELAY_MS = 40L
     }
 }

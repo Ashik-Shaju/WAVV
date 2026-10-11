@@ -9,6 +9,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -43,7 +46,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,7 +74,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.max
 import java.util.Locale
 
-internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History }
+internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Equalizer }
 
 internal data class ProfileSetting(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -127,11 +133,17 @@ internal fun YouScreen(
         storageBytes.takeIf { it > 0L }?.let { android.text.format.Formatter.formatShortFileSize(context, it) } ?: "—"
     }
     val notificationsEnabled = context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
+    var uhqEnabled by remember(context) { mutableStateOf(UHQPlaybackPreference.isEnabled(context)) }
+    var equalizerEnabled by remember(context) { mutableStateOf(AudioEqualizerSettings.isEnabled(context)) }
+    var equalizerProfile by remember(context) { mutableStateOf(AudioEqualizerSettings.activeProfile(context)) }
+    var savedEqualizerProfiles by remember(context) { mutableStateOf(AudioEqualizerSettings.savedProfiles(context)) }
     val settings = listOf(
         ProfileSetting(Icons.Outlined.Palette, "Theme", "Dark", "Dark appearance is currently the only theme available.", ProfileSettingContent.Theme),
         ProfileSetting(Icons.Outlined.Notifications, "Notifications", if (notificationsEnabled) "Allowed" else "Blocked", "Notification access is controlled by Android for this app.", ProfileSettingContent.Notifications),
         ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library.", ProfileSettingContent.Folders),
         ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
+        ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", if (uhqEnabled) "On" else "Off", "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
+        ProfileSetting(Icons.Default.Equalizer, "Equalizer", if (equalizerEnabled) equalizerProfile.name else "Off", "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
         ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. For app permissions, open Android app settings."),
@@ -187,17 +199,28 @@ internal fun YouScreen(
             }
         }
         activeSetting?.let { setting ->
-            WavvBottomSheet(onDismissRequest = { activeSetting = null }, maxHeight = 460.dp) { _ ->
+            val displayedSettingValue = when (setting.content) {
+                ProfileSettingContent.UHQ -> if (uhqEnabled) "On" else "Off"
+                ProfileSettingContent.Equalizer -> if (equalizerEnabled) equalizerProfile.name else "Off"
+                else -> setting.value
+            }
+            val sheetHeight = if (setting.content == ProfileSettingContent.Equalizer) 760.dp else 460.dp
+            WavvBottomSheet(onDismissRequest = { activeSetting = null }, maxHeight = sheetHeight) { _ ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
                     Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(.09f)), contentAlignment = Alignment.Center) {
                         Icon(setting.icon, contentDescription = null, tint = Color.White.copy(.85f), modifier = Modifier.size(21.dp))
                     }
                     Column(Modifier.weight(1f)) {
                         Text(setting.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
-                        Text(setting.value, color = Color.White.copy(.52f), fontSize = 12.sp)
+                        Text(displayedSettingValue, color = Color.White.copy(.52f), fontSize = 12.sp)
                     }
                 }
-                Text(setting.detail, Modifier.padding(top = 16.dp, bottom = 12.dp), color = Color.White.copy(.62f), fontSize = 14.sp, lineHeight = 20.sp)
+                val detail = if (setting.content == ProfileSettingContent.Equalizer) {
+                    "Ten octave-spaced bands, mapped onto bands supported by the active Android playback session. Device support can vary."
+                } else {
+                    setting.detail
+                }
+                Text(detail, Modifier.padding(top = 16.dp, bottom = 12.dp), color = Color.White.copy(.62f), fontSize = 14.sp, lineHeight = 20.sp)
                 when (setting.content) {
                     ProfileSettingContent.Theme -> SettingInfoRow(setting.value, "Current app appearance", "Selected")
                     ProfileSettingContent.Folders -> {
@@ -256,6 +279,58 @@ internal fun YouScreen(
                             Text("Clear listening history", color = WavvPink)
                         }
                     }
+                    ProfileSettingContent.UHQ -> {
+                        Text(
+                            "Experimental AAC-only enhancement. Other formats and AAC files this device cannot decode continue playing the original.",
+                            color = Color.White.copy(.62f),
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Use UHQ for AAC playback", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                Text("Playback starts from the original and may switch to the cached version when ready.", color = Color.White.copy(.48f), fontSize = 12.sp, lineHeight = 17.sp)
+                            }
+                            Switch(
+                                checked = uhqEnabled,
+                                onCheckedChange = { enabled ->
+                                    uhqEnabled = enabled
+                                    UHQPlaybackPreference.setEnabled(context, enabled)
+                                },
+                            )
+                        }
+                    }
+                    ProfileSettingContent.Equalizer -> EqualizerSettingsContent(
+                        modifier = Modifier.weight(1f),
+                        enabled = equalizerEnabled,
+                        profile = equalizerProfile,
+                        savedProfiles = savedEqualizerProfiles,
+                        onEnabledChange = { enabled ->
+                            equalizerEnabled = enabled
+                            AudioEqualizerSettings.setEnabled(context, enabled)
+                        },
+                        onProfileSelected = { profile ->
+                            equalizerProfile = profile
+                            equalizerEnabled = true
+                            AudioEqualizerSettings.setActiveProfile(context, profile)
+                            AudioEqualizerSettings.setEnabled(context, true)
+                        },
+                        onBandChange = { index, gainDb ->
+                            val gains = equalizerProfile.gainsDb.toMutableList().apply { this[index] = gainDb }
+                            equalizerProfile = EqualizerProfile("Custom", gains)
+                            AudioEqualizerSettings.setActiveProfile(context, equalizerProfile)
+                        },
+                        onSaveProfile = { name ->
+                            val profile = equalizerProfile.copy(name = name)
+                            equalizerProfile = profile
+                            AudioEqualizerSettings.setActiveProfile(context, profile)
+                            savedEqualizerProfiles = AudioEqualizerSettings.saveProfile(context, profile)
+                        },
+                    )
                     ProfileSettingContent.Info -> SettingInfoRow(setting.title, setting.value, null)
                 }
             }
@@ -280,6 +355,108 @@ internal fun YouScreen(
                 textContentColor = Color.White.copy(.72f),
             )
         }
+    }
+}
+
+@Composable
+private fun EqualizerSettingsContent(
+    modifier: Modifier = Modifier,
+    enabled: Boolean,
+    profile: EqualizerProfile,
+    savedProfiles: List<SavedEqualizerProfile>,
+    onEnabledChange: (Boolean) -> Unit,
+    onProfileSelected: (EqualizerProfile) -> Unit,
+    onBandChange: (Int, Float) -> Unit,
+    onSaveProfile: (String) -> Unit,
+) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var profileName by remember(profile.name) {
+        mutableStateOf(profile.name.takeUnless { it == "Custom" }.orEmpty())
+    }
+
+    Column(modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Equalizer", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("${profile.name} · 10 bands", color = Color.White.copy(.5f), fontSize = 12.sp)
+            }
+            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+        }
+        Text("Presets", color = Color.White.copy(.56f), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            EqualizerProfiles.presets.forEach { preset ->
+                TextButton(onClick = { onProfileSelected(preset) }) { Text(preset.name) }
+            }
+        }
+        if (savedProfiles.isNotEmpty()) {
+            Text("Saved profiles", color = Color.White.copy(.56f), fontSize = 12.sp)
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                savedProfiles.forEach { saved ->
+                    TextButton(onClick = { onProfileSelected(saved.profile) }) { Text(saved.profile.name) }
+                }
+            }
+        }
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            items(EqualizerProfiles.frequenciesHz.size) { index ->
+                val frequencyHz = EqualizerProfiles.frequenciesHz[index]
+                Row(
+                    Modifier.fillMaxWidth().height(48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(EqualizerProfiles.formatFrequency(frequencyHz), Modifier.width(42.dp), color = Color.White.copy(.72f), fontSize = 11.sp)
+                    Slider(
+                        value = profile.gainsDb[index],
+                        onValueChange = { onBandChange(index, it) },
+                        valueRange = EqualizerProfiles.MIN_GAIN_DB..EqualizerProfiles.MAX_GAIN_DB,
+                        steps = 23,
+                        modifier = Modifier.weight(1f),
+                        enabled = enabled,
+                    )
+                    Text(EqualizerProfiles.formatGain(profile.gainsDb[index]), Modifier.width(54.dp), color = Color.White.copy(.62f), fontSize = 10.sp)
+                }
+            }
+        }
+        TextButton(onClick = { showSaveDialog = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Save profile")
+        }
+    }
+
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("Save equalizer profile") },
+            text = {
+                OutlinedTextField(
+                    value = profileName,
+                    onValueChange = { profileName = it.take(32) },
+                    label = { Text("Profile name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = profileName.isNotBlank(),
+                    onClick = {
+                        onSaveProfile(profileName.trim())
+                        showSaveDialog = false
+                    },
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } },
+            containerColor = WavvSurface,
+            titleContentColor = Color.White,
+            textContentColor = Color.White.copy(.72f),
+        )
     }
 }
 
