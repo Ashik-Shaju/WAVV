@@ -1,8 +1,11 @@
 package com.wavv.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,12 +13,15 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.provider.Settings
 import android.util.LruCache
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
@@ -701,6 +707,19 @@ private fun audioPermission(): String = if (Build.VERSION.SDK_INT >= Build.VERSI
     Manifest.permission.READ_EXTERNAL_STORAGE
 }
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private fun Activity.setStandbySystemBarsHidden(hidden: Boolean) {
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    if (hidden) controller.hide(WindowInsetsCompat.Type.systemBars())
+    else controller.show(WindowInsetsCompat.Type.systemBars())
+}
+
 internal data class WavvContentState(
     val libraryState: LibraryUiState,
     val playbackState: PlaybackState,
@@ -790,8 +809,15 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onAddSongToPlaylist = actions.onAddSongToPlaylist
     val onRemoveSongFromPlaylist = actions.onRemoveSongFromPlaylist
     val onClearListeningHistory = actions.onClearListeningHistory
+    val context = LocalContext.current
+    val hostActivity = remember(context) { context.findActivity() }
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
+    var showStandby by rememberSaveable { mutableStateOf(false) }
+    var standbyKeepScreenOn by rememberSaveable { mutableStateOf(false) }
+    var standbyPlayerWasExpanded by rememberSaveable { mutableStateOf(true) }
+    var standbyPriorOrientation by rememberSaveable { mutableIntStateOf(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) }
+    var standbyOrientationActive by rememberSaveable { mutableStateOf(false) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var loopMode by rememberSaveable { mutableStateOf(LoopMode.Off) }
     var playerExpanded by rememberSaveable { mutableStateOf(false) }
@@ -828,6 +854,55 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val minimumArtworkTravelPx = with(LocalDensity.current) { 280.dp.toPx() }
     val artworkRetargetThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
     val homePlayerExpanded = activeSong != null && playerExpanded
+    val enterStandby: () -> Unit = {
+        if (!showStandby && StandbyPreference.isEnabled(context) && tab == Tab.Home && homePlayerExpanded) {
+            standbyPriorOrientation = hostActivity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            standbyPlayerWasExpanded = playerExpanded
+            homeStackListExpanded = false
+            homeStackIndex = 0
+            showQueue = false
+            playerExpanded = false
+            standbyKeepScreenOn = true
+            showStandby = true
+            standbyOrientationActive = true
+        }
+    }
+    val exitStandby: () -> Unit = {
+        if (showStandby) {
+            showStandby = false
+            standbyKeepScreenOn = false
+            tab = Tab.Home
+            playerExpanded = standbyPlayerWasExpanded && activeSong != null
+            playerPositionInitialized = activeSong != null
+        }
+    }
+    SideEffect {
+        hostActivity?.window?.let { window ->
+            if (showStandby && standbyKeepScreenOn) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+    DisposableEffect(hostActivity) {
+        onDispose { hostActivity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+    LaunchedEffect(showStandby, standbyOrientationActive, hostActivity) {
+        if (showStandby) {
+            hostActivity?.setStandbySystemBarsHidden(true)
+            // Let Standby's opaque layer cover Home before the activity is allowed to rotate.
+            delay(460)
+            if (showStandby) hostActivity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        } else if (standbyOrientationActive) {
+            delay(420)
+            if (!showStandby) {
+                hostActivity?.requestedOrientation = standbyPriorOrientation
+                hostActivity?.setStandbySystemBarsHidden(false)
+                standbyOrientationActive = false
+            }
+        }
+    }
     val homeStackExpansionProgress = animateFloatAsState(
         // Keep the mini-player docked at its current stack/list position behind the full player.
         // Resetting this while opening moves the thumbnail target toward the screen middle.
@@ -984,8 +1059,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
     val backLibrary = { libraryNavigation = libraryNavigation.back() }
 
-    BackHandler(enabled = showPlayer || (tab == Tab.Home && homeStackListExpanded) || (showLibrary && tab != Tab.Home)) {
+    BackHandler(enabled = showStandby || showPlayer || (tab == Tab.Home && homeStackListExpanded) || (showLibrary && tab != Tab.Home)) {
         when {
+            showStandby -> Unit
             showPlayer -> closePlayer()
             tab == Tab.Home && homeStackListExpanded -> {
                 homeStackListExpanded = false
@@ -1105,6 +1181,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         onRemoveMusicFolder = onRemoveMusicFolder,
                         onChooseAllDevice = onChooseAllDevice,
                         onClearListeningHistory = onClearListeningHistory,
+                        standbyEnabled = StandbyPreference.isEnabled(context),
                     )
                 }
             }
@@ -1144,6 +1221,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         playerExpanded = true
                     }
                 },
+                onEnterStandby = enterStandby,
                 artworkFlightActive = artworkFlight != null,
                 onArtworkFrameChange = { frame ->
                     miniPlayerArtworkFrame = frame
@@ -1172,12 +1250,19 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 },
             )
         }
-        if (showLibrary) BottomNav(tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+        AnimatedVisibility(
+            visible = showLibrary && !showStandby,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(tween(300, easing = WavvScreenEasing)),
+            exit = fadeOut(tween(220, easing = WavvScreenEasing)),
+        ) {
+            BottomNav(tab, { tab = it }, Modifier)
+        }
         AnimatedVisibility(
             visible = showPlayer,
             enter = fadeIn(tween(480, easing = WavvMotionEasing)),
-            exit = fadeOut(tween(390, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) +
-                slideOutVertically(tween(390, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) { (it * .38f).roundToInt() },
+            exit = fadeOut(tween(160, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) +
+                slideOutVertically(tween(160, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) { (it * .38f).roundToInt() },
         ) {
             activeSong?.let {
                 FullPlayer(
@@ -1312,6 +1397,25 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 confirmButton = { TextButton(onClick = { onDeletePlaylist(playlist.id); deletePlaylist = null }) { Text("Delete") } },
                 dismissButton = { TextButton(onClick = { deletePlaylist = null }) { Text("Cancel") } },
             )
+        }
+        AnimatedVisibility(
+            visible = showStandby && activeSong != null,
+            modifier = Modifier.fillMaxSize(),
+            enter = fadeIn(tween(0)),
+            exit = fadeOut(tween(420, easing = WavvScreenEasing)),
+        ) {
+            activeSong?.let { song ->
+                StandbyScreen(
+                    song = song,
+                    isPlaying = playbackState.isPlaying,
+                    isActive = showStandby,
+                    onTogglePlayback = onTogglePlayback,
+                    onPrevious = onPrevious,
+                    onNext = onNext,
+                    onExit = exitStandby,
+                    onKeepScreenOnChange = { standbyKeepScreenOn = it },
+                )
+            }
         }
         }
     }
@@ -1674,7 +1778,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val captureState = remember { AtomicBoolean(false) }
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
@@ -1711,7 +1815,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
     val topPosition = statusBarTop + 70.dp
     val barPosition = bottomPosition * (1f - dockProgress) + topPosition * dockProgress
     Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).offset(y = barPosition).height(height)
-        .pointerInput(expanded, stacked, onCollapse, onExpand) {
+        .pointerInput(expanded, stacked, onCollapse, onExpand, onEnterStandby) {
             if (!expanded && !stacked) return@pointerInput
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -1726,6 +1830,10 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
                             swiped = true
                             change.consume()
                             onCollapse()
+                        } else if (expanded && delta.y > 0f) {
+                            swiped = true
+                            change.consume()
+                            onEnterStandby()
                         } else if (stacked && delta.y > 0f) {
                             swiped = true
                             change.consume()
@@ -2090,7 +2198,9 @@ private fun FullPlayer(
             Modifier.fillMaxSize()
                 .graphicsLayer {
                     translationY = playerDragOffset
-                    alpha = 1f - (playerDragOffset / (playerHeightPx * .62f)).coerceIn(0f, .55f)
+                    // Fade the player chrome quickly with the finger; the shared artwork flight
+                    // is rendered in a sibling layer and keeps its own path and timing.
+                    alpha = 1f - (playerDragOffset / (playerHeightPx * .18f)).coerceIn(0f, 1f)
                 }
                 .background(Color.Black)
                 .pointerInput(showQueue, isDismissing, playerHeightPx) {

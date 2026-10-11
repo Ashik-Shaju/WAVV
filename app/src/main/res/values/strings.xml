@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Wavv</string>
+    <string name="standby_device_admin_description">Allows Wavv to lock the phone when Standby detects motion or reaches its unplugged idle limit.</string>
 </resources>

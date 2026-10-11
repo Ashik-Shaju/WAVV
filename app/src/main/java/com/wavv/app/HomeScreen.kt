@@ -270,7 +270,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-private fun Modifier.homeAcrylicBackground(hasArtwork: Boolean) = drawWithCache {
+internal fun Modifier.homeAcrylicBackground(hasArtwork: Boolean) = drawWithCache {
     val base = Brush.verticalGradient(
         colorStops = arrayOf(
             0f to Color(0xFF060A18),

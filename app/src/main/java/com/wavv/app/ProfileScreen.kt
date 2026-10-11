@@ -6,11 +6,13 @@ import android.provider.Settings
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,6 +56,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,7 +67,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -71,10 +77,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlin.math.max
 import java.util.Locale
 
-internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Equalizer }
+internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Equalizer, Standby }
 
 internal data class ProfileSetting(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -115,6 +124,7 @@ internal fun YouScreen(
     onRemoveMusicFolder: (String) -> Unit,
     onChooseAllDevice: () -> Unit,
     onClearListeningHistory: () -> Unit,
+    standbyEnabled: Boolean,
 ) {
     val context = LocalContext.current
     val trackCount = songs.size
@@ -137,6 +147,21 @@ internal fun YouScreen(
     var equalizerEnabled by remember(context) { mutableStateOf(AudioEqualizerSettings.isEnabled(context)) }
     var equalizerProfile by remember(context) { mutableStateOf(AudioEqualizerSettings.activeProfile(context)) }
     var savedEqualizerProfiles by remember(context) { mutableStateOf(AudioEqualizerSettings.savedProfiles(context)) }
+    var standbyEnabledState by remember(context) { mutableStateOf(standbyEnabled) }
+    var deviceAdminEnabled by remember(context) { mutableStateOf(StandbyDeviceLock.isEnabled(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val deviceAdminLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) {
+        deviceAdminEnabled = StandbyDeviceLock.isEnabled(context)
+    }
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) deviceAdminEnabled = StandbyDeviceLock.isEnabled(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val settings = listOf(
         ProfileSetting(Icons.Outlined.Palette, "Theme", "Dark", "Dark appearance is currently the only theme available.", ProfileSettingContent.Theme),
         ProfileSetting(Icons.Outlined.Notifications, "Notifications", if (notificationsEnabled) "Allowed" else "Blocked", "Notification access is controlled by Android for this app.", ProfileSettingContent.Notifications),
@@ -144,6 +169,7 @@ internal fun YouScreen(
         ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
         ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", if (uhqEnabled) "On" else "Off", "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
         ProfileSetting(Icons.Default.Equalizer, "Equalizer", if (equalizerEnabled) equalizerProfile.name else "Off", "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
+        ProfileSetting(Icons.Default.LibraryMusic, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
         ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. For app permissions, open Android app settings."),
@@ -202,9 +228,14 @@ internal fun YouScreen(
             val displayedSettingValue = when (setting.content) {
                 ProfileSettingContent.UHQ -> if (uhqEnabled) "On" else "Off"
                 ProfileSettingContent.Equalizer -> if (equalizerEnabled) equalizerProfile.name else "Off"
+                ProfileSettingContent.Standby -> if (standbyEnabledState) "On" else "Off"
                 else -> setting.value
             }
-            val sheetHeight = if (setting.content == ProfileSettingContent.Equalizer) 760.dp else 460.dp
+            val sheetHeight = when (setting.content) {
+                ProfileSettingContent.Equalizer -> 760.dp
+                ProfileSettingContent.Standby -> 740.dp
+                else -> 460.dp
+            }
             WavvBottomSheet(onDismissRequest = { activeSetting = null }, maxHeight = sheetHeight) { _ ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
                     Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(.09f)), contentAlignment = Alignment.Center) {
@@ -331,6 +362,62 @@ internal fun YouScreen(
                             savedEqualizerProfiles = AudioEqualizerSettings.saveProfile(context, profile)
                         },
                     )
+                    ProfileSettingContent.Standby -> {
+                        Column(
+                            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Image(
+                                painter = painterResource(R.drawable.standby_demo),
+                                contentDescription = "Standby clock, album artwork and now playing pill preview",
+                                modifier = Modifier.fillMaxWidth().aspectRatio(2400f / 1080f)
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .border(1.dp, Color.White.copy(.12f), RoundedCornerShape(20.dp)),
+                                contentScale = ContentScale.Fit,
+                            )
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("Enable Standby", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("Swipe down on the expanded Now Playing card to enter.", color = Color.White.copy(.52f), fontSize = 12.sp, lineHeight = 17.sp)
+                                }
+                                Switch(
+                                    checked = standbyEnabledState,
+                                    onCheckedChange = { enabled ->
+                                        standbyEnabledState = enabled
+                                        StandbyPreference.setEnabled(context, enabled)
+                                    },
+                                )
+                            }
+                            SettingInfoRow(
+                                "Device lock permission",
+                                if (deviceAdminEnabled) "Enabled. Android will keep its lock screen and require your usual unlock." else "Required for Wavv to immediately lock the phone on detected motion.",
+                                null,
+                            )
+                            if (!deviceAdminEnabled) {
+                                TextButton(
+                                    onClick = { deviceAdminLauncher.launch(StandbyDeviceLock.activationIntent(context)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text("Allow Wavv to lock this phone") }
+                            } else {
+                                TextButton(
+                                    onClick = { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text("Manage this permission in Android settings") }
+                            }
+                            SettingInfoRow("Controls", "Tap artwork to play or pause; swipe left for previous and right for next. Tap the pill in portrait to return Home.", null)
+                            Text(
+                                "After 5 seconds without touch or detected motion, the acrylic background fades to black. After 5 continuous minutes without touch or detected motion, Standby enters secure mode. Motion then locks the phone when Device lock permission is enabled; otherwise Wavv stops keeping the screen awake so Android can apply its timeout. While unplugged, Standby also locks after 20 minutes without activity. While charging, it keeps running until motion triggers the secure action. In black mode, the clock, artwork and pill shift by a few pixels every minute to reduce OLED image retention. Every 10 minutes without activity, the whole display fades to black for 3 seconds, then fades back in. Standby may use extra battery.",
+                                color = Color.White.copy(.62f),
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                                modifier = Modifier.padding(horizontal = 2.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
                     ProfileSettingContent.Info -> SettingInfoRow(setting.title, setting.value, null)
                 }
             }
