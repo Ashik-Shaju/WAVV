@@ -270,7 +270,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-private fun Modifier.homeAcrylicBackground() = drawWithCache {
+private fun Modifier.homeAcrylicBackground(hasArtwork: Boolean) = drawWithCache {
     val base = Brush.verticalGradient(
         colorStops = arrayOf(
             0f to Color(0xFF060A18),
@@ -279,6 +279,17 @@ private fun Modifier.homeAcrylicBackground() = drawWithCache {
             .72f to Color(0xFF000104),
             .88f to Color(0xFF02040B),
             1f to Color(0xFF050716),
+        ),
+        endY = size.height,
+    )
+    val artworkTint = Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to Color(0xB8060A18),
+            .16f to Color(0xD9040712),
+            .34f to Color(0xF2010207),
+            .72f to Color(0xF5000103),
+            .88f to Color(0xD902040B),
+            1f to Color(0xBD050716),
         ),
         endY = size.height,
     )
@@ -327,7 +338,7 @@ private fun Modifier.homeAcrylicBackground() = drawWithCache {
         endY = size.height,
     )
     onDrawBehind {
-        drawRect(base)
+        drawRect(if (hasArtwork) artworkTint else base)
         drawRect(topBlueHaze)
         drawRect(topVioletHaze)
         drawRect(lowerBlueHaze)
@@ -418,8 +429,26 @@ internal fun HomeScreen(
         }
     }
     var selectedCategory by remember { mutableStateOf<HomeStackEntry?>(null) }
+    var backdropSong by remember(songs) { mutableStateOf(songs.firstOrNull()) }
 
-    Column(Modifier.fillMaxSize().homeAcrylicBackground()) {
+    Box(Modifier.fillMaxSize()) {
+        AnimatedContent(
+            targetState = backdropSong,
+            transitionSpec = { fadeIn(tween(240)) togetherWith fadeOut(tween(240)) },
+            modifier = Modifier.matchParentSize(),
+            label = "home artwork acrylic backdrop",
+        ) { imageSong ->
+            if (imageSong != null) {
+                AlbumArt(
+                    imageSong,
+                    Modifier.fillMaxSize().graphicsLayer { scaleX = 1.18f; scaleY = 1.18f }.blur(54.dp),
+                    contentDescription = null,
+                    radius = 0.dp,
+                )
+            }
+        }
+        Box(Modifier.matchParentSize().homeAcrylicBackground(hasArtwork = backdropSong != null))
+        Column(Modifier.fillMaxSize()) {
         ScreenHeader(
             "Wavv",
             waveform = true,
@@ -455,6 +484,7 @@ internal fun HomeScreen(
                     Spacer(Modifier.height(10.dp))
                     HeroCarousel(
                         songs = songs,
+                        onCurrentSongChanged = { backdropSong = it },
                         onPlay = onPlay,
                         onPlayNext = onPlayNext,
                         favoriteIds = favoriteIds,
@@ -501,6 +531,7 @@ internal fun HomeScreen(
                 )
             }
         }
+    }
     }
 }
 
@@ -891,6 +922,7 @@ private fun EmptyLibraryCard(onChooseSource: () -> Unit) {
 @Composable
 private fun HeroCarousel(
     songs: List<Song>,
+    onCurrentSongChanged: (Song) -> Unit,
     onPlay: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
     favoriteIds: Set<Long>,
@@ -902,6 +934,11 @@ private fun HeroCarousel(
 ) {
     val pageCount = minOf(8, songs.size).coerceAtLeast(1)
     val pagerState = rememberPagerState { pageCount }
+    LaunchedEffect(pagerState.currentPage, songs) {
+        if (songs.isNotEmpty()) {
+            songs.getOrNull(pagerState.currentPage % songs.size)?.let(onCurrentSongChanged)
+        }
+    }
     LaunchedEffect(pageCount) {
         if (pageCount > 1) while (isActive) {
             delay(10_000)
