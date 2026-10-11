@@ -293,8 +293,8 @@ internal fun LibraryScreen(
     onNavigate: (LibraryDestination) -> Unit,
     onBack: () -> Unit,
     onToggleLayout: () -> Unit,
-    onPlay: (Song, List<Song>) -> Unit,
-    onShuffle: (List<Song>) -> Unit,
+    onPlay: (Song, List<Song>, String?) -> Unit,
+    onShuffle: (List<Song>, String?) -> Unit,
     onSetFavorites: (Set<Long>, Boolean) -> Unit,
     onTogglePin: (Long) -> Unit,
     onRequestCreatePlaylist: (Long?) -> Unit,
@@ -348,7 +348,7 @@ internal fun LibraryScreen(
                 allSongs = songs,
                 hasNowPlaying = hasNowPlaying,
                 onToggleHistory = onToggleHistory,
-                onPlay = onPlay,
+                onPlay = { song, _ -> onPlay(song, listOf(song), null) },
             )
         } else AnimatedContent(
         targetState = destination,
@@ -373,7 +373,7 @@ internal fun LibraryScreen(
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     row.forEach { song ->
                                         Column(
-                                            Modifier.weight(1f).clickable { onPlay(song, songs) },
+                                            Modifier.weight(1f).clickable { onPlay(song, listOf(song), null) },
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                         ) {
                                             AlbumArt(song, Modifier.fillMaxWidth().aspectRatio(1f).shadow(14.dp, RoundedCornerShape(10.dp)), song.title, 10.dp)
@@ -412,7 +412,7 @@ internal fun LibraryScreen(
                         }
                     }
                     item { Hairline(); Text("Recently Added", Modifier.padding(start = 20.dp, top = 18.dp, bottom = 4.dp), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
-                    items(recent, key = Song::id) { item -> SearchResultRow(item) { onPlay(it, songs) } }
+                    items(recent, key = Song::id) { item -> SearchResultRow(item) { onPlay(it, listOf(it), null) } }
                     if (songs.isEmpty()) item { LibraryEmpty("No music in your library", "Choose a music source to add tracks.") }
                 }
             }
@@ -830,8 +830,8 @@ private fun LibraryCollectionScreen(
     isPlaylist: Boolean,
     isDetail: Boolean,
     onBack: () -> Unit,
-    onPlay: (Song, List<Song>) -> Unit,
-    onShuffle: (List<Song>) -> Unit,
+    onPlay: (Song, List<Song>, String?) -> Unit,
+    onShuffle: (List<Song>, String?) -> Unit,
     onSetFavorites: (Set<Long>, Boolean) -> Unit,
     onRequestRenamePlaylist: () -> Unit,
     onRequestDeletePlaylist: () -> Unit,
@@ -906,11 +906,11 @@ private fun LibraryCollectionScreen(
                         Text(subtitle, Modifier.padding(top = 3.dp), color = Color.White.copy(.58f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         featured?.let { Text("${it.title} · ${it.artist}", Modifier.padding(top = 4.dp), color = Color.White.copy(.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            IconButton(onClick = { onShuffle(displaySongs); featureOffset = displaySongs.indices.filterNot { it == featureOffset }.randomOrNull() ?: 0 }, enabled = displaySongs.isNotEmpty(), modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)).border(1.dp, Color.White.copy(.16f), CircleShape)) {
+                            IconButton(onClick = { onShuffle(displaySongs, title); featureOffset = displaySongs.indices.filterNot { it == featureOffset }.randomOrNull() ?: 0 }, enabled = displaySongs.isNotEmpty(), modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)).border(1.dp, Color.White.copy(.16f), CircleShape)) {
                                 Image(androidx.compose.ui.res.painterResource(R.drawable.queue_mode_shuffle), "Shuffle $title", Modifier.size(23.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White))
                             }
                             Button(
-                                onClick = { displaySongs.firstOrNull()?.let { onPlay(it, displaySongs) } },
+                                onClick = { displaySongs.firstOrNull()?.let { onPlay(it, displaySongs, title) } },
                                 enabled = displaySongs.isNotEmpty(),
                                 shape = CircleShape,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF111111)),
@@ -939,7 +939,7 @@ private fun LibraryCollectionScreen(
             }
             items(displaySongs, key = Song::id) { item ->
                 Row(
-                    Modifier.fillMaxWidth().combinedClickable(role = Role.Button, onClick = { onPlay(item, displaySongs) }, onLongClick = { menuSong = item })
+                    Modifier.fillMaxWidth().combinedClickable(role = Role.Button, onClick = { onPlay(item, displaySongs, title) }, onLongClick = { menuSong = item })
                         .padding(horizontal = 20.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp),

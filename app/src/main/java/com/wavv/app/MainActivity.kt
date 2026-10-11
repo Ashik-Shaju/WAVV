@@ -161,6 +161,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -656,7 +658,6 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onRemoveMusicFolder = libraryViewModel::removeFolder,
                     onRetry = libraryViewModel::loadSongs,
                     onChooseSource = libraryViewModel::clearSource,
-                    onPlay = { song, queue -> playbackController.play(song, queue) },
                     onPlayWithRecommendations = playbackController::play,
                     onTogglePlayback = playbackController::toggle,
                     onNext = playbackController::next,
@@ -667,10 +668,17 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onUnavailable = showUnavailable,
                     onRepeatMode = playbackController::setRepeatMode,
                     onQueueMode = playbackController::setQueueMode,
-                    onPlayNext = playbackController::playNext,
-                    onAddToQueue = playbackController::addToQueue,
+                    onPlayNext = { playbackController.playNext(it) },
+                    onAddToQueue = { playbackController.addToQueue(it) },
                     onRemoveQueueItem = playbackController::removeFromQueue,
                     onMoveQueueItem = playbackController::moveQueueItem,
+                    onPlayQueuedSong = playbackController::playQueueSong,
+                    onPlayAutoplaySong = playbackController::playAutoplaySong,
+                    onPlayNextFromAutoplay = { playbackController.playNext(it, fromAutoplay = true) },
+                    onAddAutoplayToQueue = { playbackController.addToQueue(it, fromAutoplay = true) },
+                    onRemoveAutoplaySong = playbackController::removeAutoplaySong,
+                    onMoveAutoplayItem = playbackController::moveAutoplayItem,
+                    onSetAutoplayEnabled = playbackController::setAutoplayEnabled,
                     onCreatePlaylist = { name, songId ->
                         libraryViewModel.createPlaylist(name) { playlistId ->
                             songId?.let { libraryViewModel.addSongToPlaylist(playlistId, it) }
@@ -708,8 +716,7 @@ internal data class WavvContentActions(
     val onRemoveMusicFolder: (String) -> Unit,
     val onRetry: () -> Unit,
     val onChooseSource: () -> Unit,
-    val onPlay: (Song, List<Song>) -> Unit,
-    val onPlayWithRecommendations: (Song, List<Song>, Set<Long>, String, String?) -> Unit,
+    val onPlayWithRecommendations: (Song, List<Song>, List<Song>, String, String?, String?) -> Unit,
     val onTogglePlayback: () -> Unit,
     val onNext: () -> Unit,
     val onPrevious: () -> Unit,
@@ -723,6 +730,13 @@ internal data class WavvContentActions(
     val onAddToQueue: (Song) -> Unit,
     val onRemoveQueueItem: (Int) -> Unit,
     val onMoveQueueItem: (Int, Int) -> Unit,
+    val onPlayQueuedSong: (Song) -> Unit,
+    val onPlayAutoplaySong: (Song) -> Unit,
+    val onPlayNextFromAutoplay: (Song) -> Unit,
+    val onAddAutoplayToQueue: (Song) -> Unit,
+    val onRemoveAutoplaySong: (Song) -> Unit,
+    val onMoveAutoplayItem: (Int, Int) -> Unit,
+    val onSetAutoplayEnabled: (Boolean) -> Unit,
     val onCreatePlaylist: (String, Long?) -> Unit,
     val onRenamePlaylist: (Long, String) -> Unit,
     val onDeletePlaylist: (Long) -> Unit,
@@ -749,7 +763,6 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onRemoveMusicFolder = actions.onRemoveMusicFolder
     val onRetry = actions.onRetry
     val onChooseSource = actions.onChooseSource
-    val onPlay = actions.onPlay
     val onPlayWithRecommendations = actions.onPlayWithRecommendations
     val onTogglePlayback = actions.onTogglePlayback
     val onNext = actions.onNext
@@ -764,6 +777,13 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onAddToQueue = actions.onAddToQueue
     val onRemoveQueueItem = actions.onRemoveQueueItem
     val onMoveQueueItem = actions.onMoveQueueItem
+    val onPlayQueuedSong = actions.onPlayQueuedSong
+    val onPlayAutoplaySong = actions.onPlayAutoplaySong
+    val onPlayNextFromAutoplay = actions.onPlayNextFromAutoplay
+    val onAddAutoplayToQueue = actions.onAddAutoplayToQueue
+    val onRemoveAutoplaySong = actions.onRemoveAutoplaySong
+    val onMoveAutoplayItem = actions.onMoveAutoplayItem
+    val onSetAutoplayEnabled = actions.onSetAutoplayEnabled
     val onCreatePlaylist = actions.onCreatePlaylist
     val onRenamePlaylist = actions.onRenamePlaylist
     val onDeletePlaylist = actions.onDeletePlaylist
@@ -944,20 +964,18 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val startPlayback: (Song) -> Unit = { song ->
         playerExpanded = true
         playerPositionInitialized = true
-        val recommendations = personalizedRecommendations.filterNot { it.id == song.id }
-        val queue = personalizedQueue(song, songs.ifEmpty { listOf(song) }, recommendations)
-        val recommendedIds = recommendations.mapTo(mutableSetOf(), Song::id)
         onPlayWithRecommendations(
             song,
-            queue,
-            recommendedIds,
+            listOf(song),
+            personalizedRecommendations,
             "manual",
+            null,
             null,
         )
     }
     val startMix: (SmartMix) -> Unit = { mix ->
         mix.songs.firstOrNull()?.let { first ->
-            onPlayWithRecommendations(first, mix.songs, mix.songs.mapTo(mutableSetOf(), Song::id), "smart_mix", mix.id)
+            onPlayWithRecommendations(first, mix.songs, personalizedRecommendations, "smart_mix", mix.id, mix.title)
         }
     }
     val showLibrary = libraryState is LibraryUiState.Ready
@@ -1001,6 +1019,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         isPlaying = playbackState.isPlaying,
                         onChooseSource = onChooseSource,
                         onPlay = startPlayback,
+                        onPlayFromContext = { song, contextQueue, sourceLabel ->
+                            playerExpanded = true
+                            playerPositionInitialized = true
+                            onPlayWithRecommendations(song, contextQueue, personalizedRecommendations, "genre", null, sourceLabel)
+                        },
                         onPlayNext = onPlayNext,
                         onAddToQueue = onAddToQueue,
                         onToggleFavorite = { song -> onToggleFavorite(song.id) },
@@ -1055,8 +1078,14 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         onNavigate = navigateLibrary,
                         onBack = backLibrary,
                         onToggleLayout = { libraryLayout = if (libraryLayout == LibraryLayout.Grid) LibraryLayout.List else LibraryLayout.Grid },
-                        onPlay = onPlay,
-                        onShuffle = { queue -> queue.shuffled().takeIf { it.isNotEmpty() }?.let { onPlay(it.first(), it) } },
+                        onPlay = { song, queue, playingFrom ->
+                            onPlayWithRecommendations(song, queue, personalizedRecommendations, "collection", null, playingFrom)
+                        },
+                        onShuffle = { queue, playingFrom ->
+                            queue.shuffled().takeIf { it.isNotEmpty() }?.let {
+                                onPlayWithRecommendations(it.first(), it, personalizedRecommendations, "collection_shuffle", null, playingFrom)
+                            }
+                        },
                         onSetFavorites = onSetFavorites,
                         onTogglePin = { id -> pinnedPlaylistIds = if (id in pinnedPlaylistIds) pinnedPlaylistIds - id else pinnedPlaylistIds + id },
                         onRequestCreatePlaylist = { songId -> createPlaylistSongId = songId; createPlaylistName = ""; showCreatePlaylist = true },
@@ -1166,13 +1195,20 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onCycleLoop = { loopMode = loopMode.next(); onRepeatMode(loopMode.toPlayerRepeatMode()) },
                     onShowQueue = { showQueue = true },
                     onHideQueue = { showQueue = false },
-                    onPlaySong = startPlayback,
+                    onPlaySong = onPlayQueuedSong,
                     onAddToQueue = onAddToQueue,
                     queueMode = playbackState.queueMode,
                     onQueueMode = onQueueMode,
                     onRemoveQueueItem = onRemoveQueueItem,
                     onMoveQueueItem = onMoveQueueItem,
+                    currentQueueIndex = playbackState.currentQueueIndex,
                     onPlayNext = onPlayNext,
+                    onPlayAutoplaySong = onPlayAutoplaySong,
+                    onPlayNextFromAutoplay = onPlayNextFromAutoplay,
+                    onAddAutoplayToQueue = onAddAutoplayToQueue,
+                    onRemoveAutoplaySong = onRemoveAutoplaySong,
+                    onMoveAutoplayItem = onMoveAutoplayItem,
+                    onSetAutoplayEnabled = onSetAutoplayEnabled,
                     playlists = playlists,
                     artworkFlightActive = artworkFlight != null,
                     onArtworkFrameChange = { frame ->
@@ -1932,6 +1968,7 @@ private fun FullPlayer(
     liked: Boolean,
     showQueue: Boolean,
     queueMode: QueueMode,
+    currentQueueIndex: Int,
     playlists: List<UserPlaylist>,
     onClose: (PlayerArtworkFrame?) -> Unit,
     onToggle: () -> Unit,
@@ -1947,6 +1984,12 @@ private fun FullPlayer(
     onPlaySong: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
+    onPlayAutoplaySong: (Song) -> Unit,
+    onPlayNextFromAutoplay: (Song) -> Unit,
+    onAddAutoplayToQueue: (Song) -> Unit,
+    onRemoveAutoplaySong: (Song) -> Unit,
+    onMoveAutoplayItem: (Int, Int) -> Unit,
+    onSetAutoplayEnabled: (Boolean) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
     onMoveQueueItem: (Int, Int) -> Unit,
     onAddSongToPlaylist: (Long, Long) -> Unit,
@@ -1977,7 +2020,7 @@ private fun FullPlayer(
     var artworkCoordinates by remember(song.id) { mutableStateOf<LayoutCoordinates?>(null) }
     val gestureScope = rememberCoroutineScope()
     BackHandler(enabled = showLyrics) { showLyrics = false }
-    val nextTitle = state.queue.firstOrNull { it.id != song.id }?.title ?: "Next Up"
+    val nextTitle = state.queue.getOrNull(currentQueueIndex + 1)?.title ?: "Next Up"
     LaunchedEffect(showQueue, nextTitle) {
         while (isActive && !showQueue) {
             delay(4_000)
@@ -2192,6 +2235,9 @@ private fun FullPlayer(
             QueuePanel(
                 song = song,
                 queue = state.queue,
+                autoplaySongs = state.autoplaySongs,
+                autoplayEnabled = state.autoplayEnabled,
+                playingFrom = state.playingFrom,
                 liked = liked,
                 queueMode = queueMode,
                 loopMode = loopMode,
@@ -2201,6 +2247,12 @@ private fun FullPlayer(
                 onCycleLoop = onCycleLoop,
                 onQueueMode = onQueueMode,
                 onPlayNext = onPlayNext,
+                onPlayAutoplaySong = onPlayAutoplaySong,
+                onPlayNextFromAutoplay = onPlayNextFromAutoplay,
+                onAddAutoplayToQueue = onAddAutoplayToQueue,
+                onRemoveAutoplaySong = onRemoveAutoplaySong,
+                onMoveAutoplayItem = onMoveAutoplayItem,
+                onSetAutoplayEnabled = onSetAutoplayEnabled,
                 onRemoveQueueItem = onRemoveQueueItem,
                 onMoveQueueItem = onMoveQueueItem,
                 onAddSongToPlaylist = onAddSongToPlaylist,
@@ -2692,13 +2744,171 @@ private fun OutputGlyph(kind: String, color: Color, modifier: Modifier = Modifie
 private data class QueueDragEntry(
     val key: String,
     val song: Song,
+    val section: QueueListSection,
 )
+
+private enum class QueueListSection { Queue, AutoPlay }
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QueueSongRow(
+    modifier: Modifier,
+    song: Song,
+    rowKey: String,
+    isCurrent: Boolean,
+    isAutoplay: Boolean,
+    enabled: Boolean,
+    canRemove: Boolean,
+    menuExpanded: Boolean,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onRemove: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onNavigateToAlbum: () -> Unit,
+    onNavigateToArtist: () -> Unit,
+    onDragHandlePositioned: (Rect) -> Unit,
+    onDragHandleDisposed: () -> Unit,
+) {
+    var rowWidthPx by remember(rowKey) { mutableFloatStateOf(0f) }
+    var swipeOffsetPx by remember(rowKey) { mutableFloatStateOf(0f) }
+    var swipeAnimationJob by remember(rowKey) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val revealWidthPx = with(density) { 76.dp.toPx() }
+    val dragState = rememberDraggableState { delta ->
+        swipeAnimationJob?.cancel()
+        swipeOffsetPx = (swipeOffsetPx + delta).coerceIn(-rowWidthPx, rowWidthPx)
+    }
+
+    fun settleSwipe(target: Float) {
+        swipeAnimationJob?.cancel()
+        val start = swipeOffsetPx
+        swipeAnimationJob = scope.launch {
+            animate(start, target, animationSpec = tween(170, easing = WavvEaseInOut)) { value, _ ->
+                swipeOffsetPx = value
+            }
+        }
+    }
+
+    LaunchedEffect(canRemove) {
+        if (!canRemove) settleSwipe(0f)
+    }
+
+    Box(
+        modifier
+            .onSizeChanged { rowWidthPx = it.width.toFloat() }
+            .clip(RoundedCornerShape(14.dp)),
+    ) {
+        if (canRemove && kotlin.math.abs(swipeOffsetPx) > 0.5f) {
+            if (swipeOffsetPx > 0f) {
+                QueueSwipeDeleteAction(Modifier.align(Alignment.CenterStart).padding(start = 10.dp), onRemove)
+            } else {
+                QueueSwipeDeleteAction(Modifier.align(Alignment.CenterEnd).padding(end = 10.dp), onRemove)
+            }
+        }
+        Row(
+            Modifier.fillMaxSize()
+                .graphicsLayer { translationX = swipeOffsetPx }
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    enabled = enabled && canRemove,
+                    onDragStopped = { velocity ->
+                        val removeThreshold = max(revealWidthPx * 2f, rowWidthPx * .38f)
+                        val draggedFarEnough = kotlin.math.abs(swipeOffsetPx) >= removeThreshold
+                        val decisiveFling = kotlin.math.abs(velocity) >= 1_500f &&
+                            kotlin.math.abs(swipeOffsetPx) >= revealWidthPx * .55f
+                        if (!canRemove) {
+                            settleSwipe(0f)
+                        } else if (draggedFarEnough || decisiveFling) {
+                            onRemove()
+                        } else if (kotlin.math.abs(swipeOffsetPx) >= revealWidthPx * .38f) {
+                            settleSwipe(if (swipeOffsetPx > 0f) revealWidthPx else -revealWidthPx)
+                        } else {
+                            settleSwipe(0f)
+                        }
+                    },
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .combinedClickable(
+                        enabled = enabled,
+                        role = Role.Button,
+                        onClick = onClick,
+                        onLongClick = onLongPress,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AlbumArt(song, Modifier.size(56.dp), song.title, 10.dp)
+                TrackText(
+                    song,
+                    Modifier.weight(1f),
+                    titleSize = 16.sp,
+                    subtitleSize = 13.sp,
+                    titleColor = if (isCurrent) WavvPink else Color.White,
+                    subtitleColor = if (isCurrent) WavvPink.copy(alpha = .72f) else Color.White.copy(.58f),
+                )
+            }
+            if (isCurrent) Box(Modifier.size(6.dp).clip(CircleShape).background(WavvPink))
+            Box(
+                Modifier.size(40.dp).onGloballyPositioned { onDragHandlePositioned(it.boundsInRoot()) },
+                contentAlignment = Alignment.Center,
+            ) {
+                DisposableEffect(rowKey) { onDispose(onDragHandleDisposed) }
+                Image(
+                    androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle),
+                    if (isAutoplay) "Drag to reorder ${song.title} in AutoPlay" else "Drag to reorder ${song.title}",
+                    Modifier.size(36.dp),
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.48f)),
+                )
+            }
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = onDismissMenu) {
+            if (isAutoplay) {
+                DropdownMenuItem(text = { Text("Play next") }, onClick = { onDismissMenu(); onPlayNext() })
+                DropdownMenuItem(text = { Text("Add to queue") }, onClick = { onDismissMenu(); onAddToQueue() })
+            } else {
+                DropdownMenuItem(text = { Text("Play next") }, onClick = { onDismissMenu(); onPlayNext() })
+                if (canRemove) {
+                    DropdownMenuItem(text = { Text("Remove from queue") }, onClick = { onDismissMenu(); onRemove() })
+                }
+            }
+            DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { onDismissMenu(); onAddToPlaylist() })
+            DropdownMenuItem(text = { Text("Go to album") }, onClick = { onDismissMenu(); onNavigateToAlbum() })
+            DropdownMenuItem(text = { Text("Go to artist") }, onClick = { onDismissMenu(); onNavigateToArtist() })
+        }
+    }
+}
+
+@Composable
+private fun QueueSwipeDeleteAction(modifier: Modifier, onRemove: () -> Unit) {
+    Box(
+        modifier.size(48.dp)
+            .clip(CircleShape)
+            .background(WavvPink)
+            .clickable(onClick = onRemove),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Default.Close, contentDescription = "Delete song", tint = Color.White, modifier = Modifier.size(23.dp))
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QueuePanel(
     song: Song,
     queue: List<Song>,
+    autoplaySongs: List<Song>,
+    autoplayEnabled: Boolean,
+    playingFrom: String?,
     liked: Boolean,
     queueMode: QueueMode,
     loopMode: LoopMode,
@@ -2710,45 +2920,64 @@ private fun QueuePanel(
     onPlayNext: (Song) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
     onMoveQueueItem: (Int, Int) -> Unit,
+    onMoveAutoplayItem: (Int, Int) -> Unit,
+    onSetAutoplayEnabled: (Boolean) -> Unit,
+    onPlayAutoplaySong: (Song) -> Unit,
+    onPlayNextFromAutoplay: (Song) -> Unit,
+    onAddAutoplayToQueue: (Song) -> Unit,
+    onRemoveAutoplaySong: (Song) -> Unit,
     onAddSongToPlaylist: (Long, Long) -> Unit,
     onCreatePlaylist: (Long) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
     onPlaySong: (Song) -> Unit,
 ) {
-    var menuIndex by remember { mutableStateOf<Int?>(null) }
+    var menuKey by remember { mutableStateOf<String?>(null) }
     var playlistSong by remember { mutableStateOf<Song?>(null) }
     var currentSongMenuExpanded by remember { mutableStateOf(false) }
     var draggingSongKey by remember { mutableStateOf<String?>(null) }
     var draggingSongIndex by remember { mutableIntStateOf(-1) }
+    var draggingSection by remember { mutableStateOf(QueueListSection.Queue) }
     var draggingPointerY by remember { mutableFloatStateOf(Float.NaN) }
     var draggingTouchOffsetY by remember { mutableFloatStateOf(0f) }
     var queueListTopInRootPx by remember { mutableFloatStateOf(0f) }
     var localQueueOrder by remember { mutableStateOf<List<QueueDragEntry>?>(null) }
+    var localAutoplayOrder by remember { mutableStateOf<List<QueueDragEntry>?>(null) }
     var pendingQueueIds by remember { mutableStateOf<List<Long>?>(null) }
+    var pendingAutoplayIds by remember { mutableStateOf<List<Long>?>(null) }
     var settlingSongKey by remember { mutableStateOf<String?>(null) }
     var settlingOverlayStartTopPx by remember { mutableFloatStateOf(0f) }
     var settlingOverlayTargetTopPx by remember { mutableFloatStateOf(0f) }
     var settlingTargetReady by remember { mutableStateOf(false) }
     val queueListState = rememberLazyListState()
     val density = LocalDensity.current
-    val rowStepPx = with(density) { 62.dp.toPx() }
+    val rowStepPx = with(density) { 84.dp.toPx() }
     val edgeZonePx = with(density) { 84.dp.toPx() }
     val maxAutoScrollPxPerSecond = with(density) { 1_100.dp.toPx() }
     val dragHandleBounds = remember { mutableMapOf<String, Rect>() }
     val queueRootCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
     val latestQueue = rememberUpdatedState(queue)
+    val latestAutoplaySongs = rememberUpdatedState(autoplaySongs)
     val latestMoveQueueItem = rememberUpdatedState(onMoveQueueItem)
     val externalQueueEntries = remember(queue) {
         val occurrences = mutableMapOf<Long, Int>()
         queue.map { queuedSong ->
             val occurrence = occurrences.getOrDefault(queuedSong.id, 0)
             occurrences[queuedSong.id] = occurrence + 1
-            QueueDragEntry("${queuedSong.id}:$occurrence", queuedSong)
+            QueueDragEntry("queue:${queuedSong.id}:$occurrence", queuedSong, QueueListSection.Queue)
+        }
+    }
+    val externalAutoplayEntries = remember(autoplaySongs) {
+        val occurrences = mutableMapOf<Long, Int>()
+        autoplaySongs.map { suggestedSong ->
+            val occurrence = occurrences.getOrDefault(suggestedSong.id, 0)
+            occurrences[suggestedSong.id] = occurrence + 1
+            QueueDragEntry("autoplay:${suggestedSong.id}:$occurrence", suggestedSong, QueueListSection.AutoPlay)
         }
     }
     val displayedQueueEntries = localQueueOrder ?: externalQueueEntries
-    val queueControlsEnabled = draggingSongKey == null && pendingQueueIds == null
+    val displayedAutoplayEntries = localAutoplayOrder ?: externalAutoplayEntries
+    val queueControlsEnabled = draggingSongKey == null && pendingQueueIds == null && pendingAutoplayIds == null
     val settleProgress by animateFloatAsState(
         targetValue = if (settlingSongKey != null && settlingTargetReady) 1f else 0f,
         animationSpec = tween(230, easing = WavvScreenEasing),
@@ -2765,9 +2994,21 @@ private fun QueuePanel(
             localQueueOrder = null
         }
     }
+    LaunchedEffect(autoplaySongs, pendingAutoplayIds, draggingSongKey) {
+        val expectedIds = pendingAutoplayIds
+        if (expectedIds != null && autoplaySongs.map { it.id } == expectedIds) {
+            localAutoplayOrder = null
+            pendingAutoplayIds = null
+        } else if (expectedIds == null && draggingSongKey == null) {
+            localAutoplayOrder = null
+        }
+    }
     fun moveDraggedRowLocally() {
         val key = draggingSongKey ?: return
-        val currentRows = localQueueOrder ?: displayedQueueEntries
+        val currentRows = when (draggingSection) {
+            QueueListSection.Queue -> localQueueOrder ?: displayedQueueEntries
+            QueueListSection.AutoPlay -> localAutoplayOrder ?: displayedAutoplayEntries
+        }
         val currentIndex = currentRows.indexOfFirst { it.key == key }
         if (currentIndex !in currentRows.indices) return
         val pointerY = draggingPointerY
@@ -2791,12 +3032,18 @@ private fun QueuePanel(
             val reorderedRows = currentRows.toMutableList()
             val draggedRow = reorderedRows.removeAt(currentIndex)
             reorderedRows.add(targetIndex, draggedRow)
-            localQueueOrder = reorderedRows
+            when (draggingSection) {
+                QueueListSection.Queue -> localQueueOrder = reorderedRows
+                QueueListSection.AutoPlay -> localAutoplayOrder = reorderedRows
+            }
         }
     }
     fun finishQueueDrag() {
         val key = draggingSongKey ?: return
-        val finalRows = localQueueOrder ?: displayedQueueEntries
+        val finalRows = when (draggingSection) {
+            QueueListSection.Queue -> localQueueOrder ?: displayedQueueEntries
+            QueueListSection.AutoPlay -> localAutoplayOrder ?: displayedAutoplayEntries
+        }
         val destinationIndex = finalRows.indexOfFirst { it.key == key }
         val sourceIndex = draggingSongIndex
         settlingOverlayStartTopPx = draggingPointerY - draggingTouchOffsetY
@@ -2807,28 +3054,49 @@ private fun QueuePanel(
         draggingSongIndex = -1
         draggingPointerY = Float.NaN
         if (sourceIndex >= 0 && destinationIndex >= 0 && sourceIndex != destinationIndex) {
-            // One Media3 queue update at drop; frame-by-frame reorder stays Compose-local.
-            pendingQueueIds = finalRows.map { it.song.id }
-            latestMoveQueueItem.value(sourceIndex, destinationIndex)
+            when (draggingSection) {
+                QueueListSection.Queue -> {
+                    // One Media3 queue update at drop; frame-by-frame reorder stays Compose-local.
+                    pendingQueueIds = finalRows.map { it.song.id }
+                    latestMoveQueueItem.value(sourceIndex, destinationIndex)
+                }
+                QueueListSection.AutoPlay -> {
+                    pendingAutoplayIds = finalRows.map { it.song.id }
+                    onMoveAutoplayItem(sourceIndex, destinationIndex)
+                }
+            }
         } else {
-            localQueueOrder = null
+            when (draggingSection) {
+                QueueListSection.Queue -> localQueueOrder = null
+                QueueListSection.AutoPlay -> localAutoplayOrder = null
+            }
         }
     }
     val latestBeginQueueDrag = rememberUpdatedState<(String, Float) -> Boolean> { rowKey, pointerRootY ->
-        val currentQueue = latestQueue.value
+        val section = if (rowKey.startsWith("autoplay:")) QueueListSection.AutoPlay else QueueListSection.Queue
+        val currentRows = when (section) {
+            QueueListSection.Queue -> latestQueue.value
+            QueueListSection.AutoPlay -> latestAutoplaySongs.value
+        }
         var sourceIndex = -1
         val occurrences = mutableMapOf<Long, Int>()
-        currentQueue.forEachIndexed { queueIndex, queuedSong ->
+        currentRows.forEachIndexed { queueIndex, queuedSong ->
             val occurrence = occurrences.getOrDefault(queuedSong.id, 0)
             occurrences[queuedSong.id] = occurrence + 1
-            if ("${queuedSong.id}:$occurrence" == rowKey) sourceIndex = queueIndex
+            val prefix = if (section == QueueListSection.AutoPlay) "autoplay:" else "queue:"
+            if ("$prefix${queuedSong.id}:$occurrence" == rowKey) sourceIndex = queueIndex
         }
         val itemInfo = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
         if (sourceIndex >= 0 && itemInfo != null && pendingQueueIds == null && draggingSongKey == null) {
             settlingSongKey = null
             settlingTargetReady = false
-            menuIndex = null
-            localQueueOrder = displayedQueueEntries
+            menuKey = null
+            pendingAutoplayIds = null
+            draggingSection = section
+            when (section) {
+                QueueListSection.Queue -> localQueueOrder = displayedQueueEntries
+                QueueListSection.AutoPlay -> localAutoplayOrder = displayedAutoplayEntries
+            }
             draggingSongKey = rowKey
             draggingSongIndex = sourceIndex
             draggingTouchOffsetY = (pointerRootY - queueListTopInRootPx - itemInfo.offset)
@@ -2972,7 +3240,7 @@ private fun QueuePanel(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             AlbumArt(song, Modifier.size(52.dp), song.title, 10.dp)
-            TrackText(song, Modifier.weight(1f), 15.sp)
+            TrackText(song, Modifier.weight(1f), 15.sp, titleColor = WavvPink, subtitleColor = WavvPink.copy(alpha = .68f))
             Box(Modifier.size(36.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) {
                 FigmaFavouriteIcon(liked, 29.dp)
             }
@@ -2988,7 +3256,22 @@ private fun QueuePanel(
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 6.dp, bottom = 6.dp)) { ShelfLabel("Up Next") }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Queue", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+            if (!playingFrom.isNullOrBlank()) {
+                Text(
+                    "Playing From $playingFrom",
+                    Modifier.padding(start = 10.dp).weight(1f),
+                    color = Color.White.copy(.42f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else Spacer(Modifier.weight(1f))
+        }
         LazyColumn(
             Modifier.weight(1f)
                 .fillMaxWidth()
@@ -3011,7 +3294,7 @@ private fun QueuePanel(
                     else -> 1f
                 }
                 val rowScale = if (isSettling) .97f + .03f * settleProgress else 1f
-                Row(
+                QueueSongRow(
                     Modifier.animateItem(
                         placementSpec = if (isBeingDragged) androidx.compose.animation.core.snap()
                             else androidx.compose.animation.core.spring(
@@ -3020,6 +3303,8 @@ private fun QueuePanel(
                             ),
                     )
                         .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 8.dp)
+                        .height(68.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(
                             if (isSettling) WavvPink.copy(alpha = .08f * (1f - settleProgress))
@@ -3029,63 +3314,121 @@ private fun QueuePanel(
                             alpha = rowAlpha
                             scaleX = rowScale
                             scaleY = rowScale
-                        }
-                        .padding(horizontal = 6.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Row(
-                        Modifier.weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable(
-                                enabled = queueControlsEnabled,
-                                role = Role.Button,
-                                onClick = { onPlaySong(item) },
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        AlbumArt(item, Modifier.size(46.dp), item.title, 9.dp)
-                        TrackText(
-                            item,
-                            Modifier.weight(1f),
-                            14.sp,
-                            titleColor = if (isCurrent) WavvPink else Color.White,
-                            subtitleColor = if (isCurrent) WavvPink.copy(alpha = .68f) else Color.White.copy(.5f),
-                        )
-                    }
-                    if (isCurrent) Box(Modifier.size(5.dp).clip(CircleShape).background(WavvPink))
-                    Box {
-                        Box(
-                            Modifier.size(34.dp).clickable(enabled = queueControlsEnabled) {
-                                menuIndex = index
-                            },
-                            contentAlignment = Alignment.Center,
-                        ) { FigmaMoreIcon(28.dp) }
-                        DropdownMenu(expanded = menuIndex == index, onDismissRequest = { menuIndex = null }) {
-                            DropdownMenuItem(text = { Text("Play next") }, onClick = { menuIndex = null; onPlayNext(item) })
-                            DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { menuIndex = null; playlistSong = item })
-                            DropdownMenuItem(text = { Text("Go to album") }, onClick = { menuIndex = null; onNavigateToAlbum(item) })
-                            DropdownMenuItem(text = { Text("Go to artist") }, onClick = { menuIndex = null; onNavigateToArtist(item) })
-                            if (!isCurrent) DropdownMenuItem(text = { Text("Remove from queue") }, onClick = { menuIndex = null; onRemoveQueueItem(index) })
-                        }
-                    }
-                    Box(
-                        Modifier.size(36.dp).onGloballyPositioned { coordinates ->
-                            dragHandleBounds[rowKey] = coordinates.boundsInRoot()
                         },
-                        contentAlignment = Alignment.Center,
+                    song = item,
+                    rowKey = rowKey,
+                    isCurrent = isCurrent,
+                    isAutoplay = false,
+                    enabled = queueControlsEnabled,
+                    canRemove = !isCurrent,
+                    menuExpanded = menuKey == rowKey,
+                    onClick = { onPlaySong(item) },
+                    onLongPress = { if (queueControlsEnabled) menuKey = rowKey },
+                    onDismissMenu = { menuKey = null },
+                    onRemove = { onRemoveQueueItem(index) },
+                    onPlayNext = { onPlayNext(item) },
+                    onAddToQueue = {},
+                    onAddToPlaylist = { playlistSong = item },
+                    onNavigateToAlbum = { onNavigateToAlbum(item) },
+                    onNavigateToArtist = { onNavigateToArtist(item) },
+                    onDragHandlePositioned = { dragHandleBounds[rowKey] = it },
+                    onDragHandleDisposed = { dragHandleBounds.remove(rowKey) },
+                )
+            }
+            item(key = "autoplay-section-header") {
+                Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp)) {
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(.13f)))
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        DisposableEffect(rowKey) {
-                            onDispose { dragHandleBounds.remove(rowKey) }
+                        Column(Modifier.weight(1f)) {
+                            Text("AutoPlay", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+                            Text(
+                                "Wavv recommends music based on your listening",
+                                Modifier.padding(top = 2.dp),
+                                color = Color.White.copy(.46f),
+                                fontSize = 11.sp,
+                            )
                         }
-                        Image(
-                            androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle),
-                            "Drag to reorder ${item.title}",
-                            Modifier.size(36.dp),
-                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.42f)),
+                        Switch(
+                            checked = autoplayEnabled,
+                            onCheckedChange = onSetAutoplayEnabled,
+                            enabled = queueControlsEnabled,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = WavvPink.copy(alpha = .78f),
+                                uncheckedThumbColor = Color.White.copy(.72f),
+                                uncheckedTrackColor = Color.White.copy(.15f),
+                                uncheckedBorderColor = Color.White.copy(.16f),
+                            ),
                         )
                     }
+                }
+            }
+            if (!autoplayEnabled) {
+                item(key = "autoplay-off") {
+                    Text(
+                        "AutoPlay is off",
+                        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        color = Color.White.copy(.42f),
+                        fontSize = 12.sp,
+                    )
+                }
+            } else if (displayedAutoplayEntries.isEmpty()) {
+                item(key = "autoplay-empty") {
+                    Text(
+                        "No recommendations available yet",
+                        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        color = Color.White.copy(.42f),
+                        fontSize = 12.sp,
+                    )
+                }
+            } else {
+                itemsIndexed(displayedAutoplayEntries, key = { _, entry -> entry.key }) { index, entry ->
+                    val item = entry.song
+                    val rowKey = entry.key
+                    val isBeingDragged = rowKey == draggingSongKey
+                    val isSettling = rowKey == settlingSongKey
+                    val rowAlpha = when {
+                        isBeingDragged -> 0f
+                        isSettling -> settleProgress
+                        else -> 1f
+                    }
+                    val rowScale = if (isSettling) .97f + .03f * settleProgress else 1f
+                    QueueSongRow(
+                        Modifier.animateItem(
+                            placementSpec = if (isBeingDragged) androidx.compose.animation.core.snap()
+                            else androidx.compose.animation.core.spring(
+                                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessHigh,
+                            ),
+                        )
+                            .fillMaxWidth()
+                            .padding(horizontal = 6.dp, vertical = 8.dp)
+                            .height(68.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (isSettling) WavvPink.copy(alpha = .08f * (1f - settleProgress)) else Color.Transparent)
+                            .graphicsLayer { alpha = rowAlpha; scaleX = rowScale; scaleY = rowScale },
+                        song = item,
+                        rowKey = rowKey,
+                        isCurrent = false,
+                        isAutoplay = true,
+                        enabled = autoplayEnabled && queueControlsEnabled,
+                        canRemove = true,
+                        menuExpanded = menuKey == rowKey,
+                        onClick = { onPlayAutoplaySong(item) },
+                        onLongPress = { if (autoplayEnabled && queueControlsEnabled) menuKey = rowKey },
+                        onDismissMenu = { menuKey = null },
+                        onRemove = { onRemoveAutoplaySong(item) },
+                        onPlayNext = { onPlayNextFromAutoplay(item) },
+                        onAddToQueue = { onAddAutoplayToQueue(item) },
+                        onAddToPlaylist = { playlistSong = item },
+                        onNavigateToAlbum = { onNavigateToAlbum(item) },
+                        onNavigateToArtist = { onNavigateToArtist(item) },
+                        onDragHandlePositioned = { dragHandleBounds[rowKey] = it },
+                        onDragHandleDisposed = { dragHandleBounds.remove(rowKey) },
+                    )
                 }
             }
         }
@@ -3115,7 +3458,8 @@ private fun QueuePanel(
         }
         }
         val overlayKey = draggingSongKey ?: settlingSongKey
-        val overlayEntry = overlayKey?.let { key -> displayedQueueEntries.firstOrNull { it.key == key } }
+        val overlayRows = if (draggingSection == QueueListSection.AutoPlay) displayedAutoplayEntries else displayedQueueEntries
+        val overlayEntry = overlayKey?.let { key -> overlayRows.firstOrNull { it.key == key } }
         if (overlayEntry != null) {
             val overlayTopPx = if (draggingSongKey != null && !draggingPointerY.isNaN()) {
                 draggingPointerY - draggingTouchOffsetY
@@ -3141,7 +3485,7 @@ private fun QueuePanel(
                         scaleX = overlayScale
                         scaleY = overlayScale
                     }
-                    .height(62.dp)
+                    .height(84.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .border(
                         1.dp,
@@ -3163,20 +3507,18 @@ private fun QueuePanel(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    AlbumArt(overlayEntry.song, Modifier.size(46.dp), overlayEntry.song.title, 9.dp)
+                    AlbumArt(overlayEntry.song, Modifier.size(56.dp), overlayEntry.song.title, 10.dp)
                     val overlayIsCurrent = overlayEntry.song.id == song.id
                     TrackText(
                         overlayEntry.song,
                         Modifier.weight(1f),
-                        14.sp,
+                        titleSize = 16.sp,
+                        subtitleSize = 13.sp,
                         titleColor = if (overlayIsCurrent) WavvPink else Color.White,
-                        subtitleColor = if (overlayIsCurrent) WavvPink.copy(alpha = .68f) else Color.White.copy(.5f),
+                        subtitleColor = if (overlayIsCurrent) WavvPink.copy(alpha = .72f) else Color.White.copy(.58f),
                     )
                     if (overlayIsCurrent) {
-                        Box(Modifier.size(5.dp).clip(CircleShape).background(WavvPink))
-                    }
-                    Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
-                        FigmaMoreIcon(28.dp)
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(WavvPink))
                     }
                     Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
                         Image(

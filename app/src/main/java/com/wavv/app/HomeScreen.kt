@@ -286,6 +286,7 @@ internal fun HomeScreen(
     isPlaying: Boolean,
     onChooseSource: () -> Unit,
     onPlay: (Song) -> Unit,
+    onPlayFromContext: (Song, List<Song>, String) -> Unit,
     onPlayNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onToggleFavorite: (Song) -> Unit,
@@ -423,7 +424,7 @@ internal fun HomeScreen(
                     artworkSong = category.song,
                     songs = categorySongs,
                     onClose = { selectedCategory = null },
-                    onPlay = { song -> selectedCategory = null; onPlay(song) },
+                    onPlay = { song -> selectedCategory = null; onPlayFromContext(song, categorySongs, category.title) },
                 )
             }
         }

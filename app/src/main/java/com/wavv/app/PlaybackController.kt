@@ -27,7 +27,11 @@ data class PlaybackState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val queue: List<Song> = emptyList(),
+    val currentQueueIndex: Int = 0,
     val queueMode: QueueMode = QueueMode.Off,
+    val autoplaySongs: List<Song> = emptyList(),
+    val autoplayEnabled: Boolean = true,
+    val playingFrom: String? = null,
     val errorMessage: String? = null,
 )
 
@@ -35,12 +39,18 @@ class PlaybackController(context: Context) {
     private data class PendingPlay(
         val song: Song,
         val queue: List<Song>,
-        val recommendedSongIds: Set<Long>,
+        val autoplayRecommendations: List<Song>,
         val selectionSource: String,
         val recommendationId: String?,
+        val playingFrom: String?,
     )
 
     private val appContext = context.applicationContext
+    private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private var autoplayCandidates: List<Song> = emptyList()
+    private var playingFrom: String? = null
+    private var lastShuffleOrder: List<Long>? = null
+    private var advancingAutoplay = false
     private var controller: MediaController? = null
     private var pendingPlay: PendingPlay? = null
     private val playbackStartConfirmation = PlaybackStartConfirmation()
@@ -52,7 +62,9 @@ class PlaybackController(context: Context) {
     private val retryPolicy = ControllerReconnectPolicy()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val reconnect = Runnable(::connectAttempt)
-    private val _state = MutableStateFlow(PlaybackState())
+    private val _state = MutableStateFlow(
+        PlaybackState(autoplayEnabled = preferences.getBoolean(PREF_AUTOPLAY_ENABLED, true)),
+    )
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
     private val listener = object : Player.Listener {
@@ -64,15 +76,27 @@ class PlaybackController(context: Context) {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val song = mediaItem?.let(::songFor)
             if (song != null) {
+                advancingAutoplay = false
+                if (mediaItem.mediaMetadata.extras?.getString(MEDIA_EXTRA_SELECTION_SOURCE) == "autoplay_recommendation") {
+                    this@PlaybackController.playingFrom = "AutoPlay"
+                }
                 _state.value = _state.value.copy(
                     song = song,
                     isPlaying = controller?.isPlaying == true,
                     positionMs = 0L,
                     durationMs = controller?.duration.takeIf { it != null && it > 0L } ?: song.durationMs,
+                    queue = controller?.let(::readQueue).orEmpty(),
+                    currentQueueIndex = controller?.currentMediaItemIndex?.coerceAtLeast(0) ?: 0,
+                    autoplaySongs = autoplayCandidates.take(AUTOPLAY_VISIBLE_LIMIT),
+                    playingFrom = playingFrom,
                     errorMessage = null,
                 )
                 confirmRequestedPlaybackStart()
             }
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) advanceToAutoplayIfNeeded()
         }
 
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -123,9 +147,10 @@ class PlaybackController(context: Context) {
                 play(
                     pending.song,
                     pending.queue,
-                    pending.recommendedSongIds,
+                    pending.autoplayRecommendations,
                     pending.selectionSource,
                     pending.recommendationId,
+                    pending.playingFrom,
                 )
             }
         }, ContextCompat.getMainExecutor(appContext))
@@ -160,33 +185,54 @@ class PlaybackController(context: Context) {
     fun play(
         song: Song,
         queue: List<Song>,
-        recommendedSongIds: Set<Long> = emptySet(),
+        autoplayRecommendations: List<Song> = emptyList(),
         selectionSource: String = "manual",
         recommendationId: String? = null,
+        playingFrom: String? = null,
     ) {
         if (queue.isEmpty()) return
         val currentController = controller ?: run {
-            pendingPlay = PendingPlay(song, queue, recommendedSongIds, selectionSource, recommendationId)
+            pendingPlay = PendingPlay(song, queue, autoplayRecommendations, selectionSource, recommendationId, playingFrom)
             connect()
             return
         }
         playbackStartConfirmation.request(song.id)
-        managedQueue = queue
-        val startIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+        val sourceQueue = queue.distinctBy(Song::id)
+        val selectedIndex = sourceQueue.indexOfFirst { it.id == song.id }
+        // A direct selection starts a fresh session at the selected song. Keep its
+        // remaining source order after it, but do not put earlier tracks ahead of it.
+        val sessionQueue = if (selectedIndex >= 0) {
+            sourceQueue.drop(selectedIndex)
+        } else {
+            listOf(song) + sourceQueue
+        }
+        managedQueue = sessionQueue
+        lastShuffleOrder = null
+        autoplayCandidates = autoplayRecommendations.asSequence()
+            .filterNot { candidate -> candidate.id == song.id || sessionQueue.any { it.id == candidate.id } }
+            .distinctBy(Song::id)
+            .toList()
+        this.playingFrom = playingFrom
+        advancingAutoplay = false
+        val startIndex = 0
         _state.value = PlaybackState(
             song = song,
             isPlaying = false,
             durationMs = song.durationMs,
-            queue = queue,
+            queue = sessionQueue,
+            currentQueueIndex = startIndex,
+            queueMode = QueueMode.Off,
+            autoplaySongs = autoplayCandidates.take(AUTOPLAY_VISIBLE_LIMIT),
+            autoplayEnabled = _state.value.autoplayEnabled,
+            playingFrom = playingFrom,
         )
         currentController.setMediaItems(
-            queue.map { queuedSong ->
+            sessionQueue.map { queuedSong ->
                 val source = when {
                     queuedSong.id == song.id -> selectionSource
-                    queuedSong.id in recommendedSongIds -> "autoplay_recommendation"
                     else -> "queue"
                 }
-                mediaItem(queuedSong, source, recommendationId.takeIf { queuedSong.id in recommendedSongIds || queuedSong.id == song.id })
+                mediaItem(queuedSong, source, recommendationId.takeIf { queuedSong.id == song.id })
             },
             startIndex,
             0L,
@@ -215,54 +261,142 @@ class PlaybackController(context: Context) {
         }
     }
 
-    fun playNext(song: Song) {
+    fun playNext(song: Song, fromAutoplay: Boolean = false) {
         val player = controller ?: return
         val currentId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return
         if (song.id == currentId) return
+        val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
+        if (cameFromAutoplay) removeAutoplayCandidate(song.id)
         val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
         if (existing != null) player.removeMediaItem(existing)
-        val insertionIndex = (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
-        player.addMediaItem(insertionIndex, mediaItem(song, "queue"))
+        val currentIndex = (0 until player.mediaItemCount).firstOrNull {
+            player.getMediaItemAt(it).mediaId.toLongOrNull() == currentId
+        } ?: return
+        val insertionIndex = (currentIndex + 1).coerceAtMost(player.mediaItemCount)
+        player.addMediaItem(insertionIndex, mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
         val managed = managedQueue.filterNot { it.id == song.id }.toMutableList()
         val managedCurrentIndex = managed.indexOfFirst { it.id == currentId }
         managed.add(if (managedCurrentIndex < 0) managed.size else managedCurrentIndex + 1, song)
         managedQueue = managed
-        val currentQueue = readQueue(player)
-        _state.value = _state.value.copy(queue = currentQueue)
+        lastShuffleOrder = null
+        syncQueue(player)
     }
 
-    fun addToQueue(song: Song) {
+    fun addToQueue(song: Song, fromAutoplay: Boolean = false) {
         val player = controller ?: return
         if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) return
-        player.addMediaItem(mediaItem(song, "queue"))
+        val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
+        if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+        player.addMediaItem(mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
         managedQueue = managedQueue + song
-        _state.value = _state.value.copy(queue = readQueue(player))
+        lastShuffleOrder = null
+        syncQueue(player)
+    }
+
+    fun playQueueSong(song: Song) {
+        val player = controller ?: return
+        val index = (0 until player.mediaItemCount).firstOrNull {
+            player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id
+        } ?: return
+        player.seekTo(index, 0L)
+        player.play()
+    }
+
+    fun playAutoplaySong(song: Song) {
+        val player = controller ?: return
+        if (autoplayCandidates.none { it.id == song.id }) return
+        removeAutoplayCandidate(song.id)
+        val existing = (0 until player.mediaItemCount).firstOrNull {
+            player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id
+        }
+        playingFrom = "AutoPlay"
+        _state.value = _state.value.copy(playingFrom = playingFrom)
+        if (existing != null) {
+            // Keep an already queued or played copy in place; selecting an AutoPlay row
+            // must never rebuild or reorder the existing session queue.
+            player.seekTo(existing, 0L)
+            player.play()
+            return
+        }
+        // Append to the current session, preserving its played history and queue order.
+        val targetIndex = player.mediaItemCount
+        player.addMediaItem(targetIndex, mediaItem(song, "autoplay_recommendation"))
+        managedQueue = managedQueue + song
+        lastShuffleOrder = null
+        player.seekTo(targetIndex, 0L)
+        player.play()
     }
 
     fun removeFromQueue(index: Int) {
         val player = controller ?: return
-        if (index !in 0 until player.mediaItemCount || index == player.currentMediaItemIndex) return
-        val removedId = player.getMediaItemAt(index).mediaId.toLongOrNull() ?: return
-        player.removeMediaItem(index)
+        val absoluteIndex = index
+        if (absoluteIndex !in 0 until player.mediaItemCount || absoluteIndex == player.currentMediaItemIndex) return
+        val removedId = player.getMediaItemAt(absoluteIndex).mediaId.toLongOrNull() ?: return
+        player.removeMediaItem(absoluteIndex)
         managedQueue = managedQueue.filterNot { it.id == removedId }
-        _state.value = _state.value.copy(queue = readQueue(player))
+        lastShuffleOrder = lastShuffleOrder?.filterNot { it == removedId }
+        syncQueue(player)
     }
 
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {
         val player = controller ?: return
-        if (fromIndex !in 0 until player.mediaItemCount || toIndex !in 0 until player.mediaItemCount) return
+        val currentOrder = readQueue(player)
+        if (fromIndex !in currentOrder.indices || toIndex !in currentOrder.indices) return
         player.moveMediaItem(fromIndex, toIndex)
-        managedQueue = readQueue(player)
-        _state.value = _state.value.copy(queue = managedQueue)
+        val reorderedQueue = currentOrder.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        managedQueue = reorderedQueue
+        lastShuffleOrder = readUpcomingQueue(player).map(Song::id)
+        syncQueue(player)
     }
 
     fun setQueueMode(mode: QueueMode) {
         val player = controller ?: return
-        when (mode) {
-            QueueMode.Shuffle -> applyQueueOrder(shuffleUpcoming(readQueue(player), player.currentMediaItemIndex, System.nanoTime()))
-            QueueMode.Off -> applyQueueOrder(managedQueue)
+        val currentOrder = readQueue(player)
+        val currentIndex = player.currentMediaItemIndex.coerceIn(0, currentOrder.lastIndex.coerceAtLeast(0))
+        val stablePrefix = currentOrder.take(currentIndex + 1)
+        val upcoming = currentOrder.drop(currentIndex + 1)
+        if (mode == QueueMode.Shuffle) {
+            val cachedOrder = lastShuffleOrder.orEmpty().filter { id -> upcoming.any { it.id == id } }
+            val cachedIsComplete = cachedOrder.size == upcoming.size && cachedOrder.toSet() == upcoming.mapTo(mutableSetOf(), Song::id)
+            val shuffled = if (cachedIsComplete) {
+                cachedOrder.mapNotNull { id -> upcoming.firstOrNull { it.id == id } }
+            } else {
+                upcoming.shuffled(Random(System.nanoTime())).also { lastShuffleOrder = it.map(Song::id) }
+            }
+            if (managedQueue.isEmpty()) managedQueue = currentOrder
+            applyQueueOrder(stablePrefix + shuffled)
+        } else {
+            val currentId = player.currentMediaItem?.mediaId?.toLongOrNull()
+            val managedCurrentIndex = managedQueue.indexOfFirst { it.id == currentId }
+            val preferred = if (managedCurrentIndex >= 0) managedQueue.drop(managedCurrentIndex + 1) else emptyList()
+            val upcomingIds = upcoming.mapTo(mutableSetOf(), Song::id)
+            val restored = preferred.filter { it.id in upcomingIds } +
+                upcoming.filter { candidate -> preferred.none { it.id == candidate.id } }
+            applyQueueOrder(stablePrefix + restored)
         }
-        _state.value = _state.value.copy(queue = readQueue(player), queueMode = mode)
+        _state.value = _state.value.copy(
+            queue = readQueue(player),
+            currentQueueIndex = player.currentMediaItemIndex.coerceAtLeast(0),
+            queueMode = mode,
+        )
+    }
+
+    fun moveAutoplayItem(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in autoplayCandidates.indices || toIndex !in autoplayCandidates.indices) return
+        autoplayCandidates = autoplayCandidates.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        updateAutoplayState()
+    }
+
+    fun removeAutoplaySong(song: Song) {
+        if (autoplayCandidates.none { it.id == song.id }) return
+        autoplayCandidates = autoplayCandidates.filterNot { it.id == song.id }
+        updateAutoplayState()
+    }
+
+    fun setAutoplayEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(PREF_AUTOPLAY_ENABLED, enabled).apply()
+        _state.value = _state.value.copy(autoplayEnabled = enabled)
+        if (enabled && controller?.playbackState == Player.STATE_ENDED) advanceToAutoplayIfNeeded()
     }
 
     fun setRepeatMode(mode: Int) {
@@ -302,20 +436,57 @@ class PlaybackController(context: Context) {
 
     private fun syncControllerState(currentController: MediaController) {
         if (currentController.mediaItemCount == 0) return
-        val queue = readQueue(currentController)
+        val currentQueue = readQueue(currentController)
+        if (managedQueue.isEmpty()) managedQueue = currentQueue
         val song = currentController.currentMediaItem?.let(::songFor) ?: return
-        managedQueue = queue
         _state.value = PlaybackState(
             song = song,
             isPlaying = currentController.isPlaying,
             positionMs = currentController.currentPosition.coerceAtLeast(0L),
             durationMs = currentController.duration.takeIf { it > 0L } ?: song.durationMs,
-            queue = queue,
+            queue = currentQueue,
+            currentQueueIndex = currentController.currentMediaItemIndex.coerceAtLeast(0),
+            queueMode = _state.value.queueMode,
+            autoplaySongs = autoplayCandidates.take(AUTOPLAY_VISIBLE_LIMIT),
+            autoplayEnabled = _state.value.autoplayEnabled,
+            playingFrom = playingFrom,
         )
     }
 
     private fun syncQueue(player: MediaController) {
-        _state.value = _state.value.copy(queue = readQueue(player))
+        _state.value = _state.value.copy(
+            queue = readQueue(player),
+            currentQueueIndex = player.currentMediaItemIndex.coerceAtLeast(0),
+        )
+    }
+
+    private fun readUpcomingQueue(player: MediaController): List<Song> = readQueue(player)
+        .drop((player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount))
+
+    private fun updateAutoplayState() {
+        _state.value = _state.value.copy(autoplaySongs = autoplayCandidates.take(AUTOPLAY_VISIBLE_LIMIT))
+    }
+
+    private fun removeAutoplayCandidate(songId: Long) {
+        autoplayCandidates = autoplayCandidates.filterNot { it.id == songId }
+        updateAutoplayState()
+    }
+
+    private fun advanceToAutoplayIfNeeded() {
+        val player = controller ?: return
+        if (advancingAutoplay || !_state.value.autoplayEnabled || player.hasNextMediaItem()) return
+        val nextSong = autoplayCandidates.firstOrNull() ?: return
+        advancingAutoplay = true
+        autoplayCandidates = autoplayCandidates.drop(1)
+        updateAutoplayState()
+        val index = player.mediaItemCount
+        player.addMediaItem(mediaItem(nextSong, "autoplay_recommendation"))
+        managedQueue = managedQueue + nextSong
+        playingFrom = "AutoPlay"
+        _state.value = _state.value.copy(playingFrom = playingFrom)
+        player.seekTo(index, 0L)
+        player.prepare()
+        player.play()
     }
 
     private fun confirmRequestedPlaybackStart() {
@@ -370,6 +541,9 @@ class PlaybackController(context: Context) {
 
     private companion object {
         const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
+        const val AUTOPLAY_VISIBLE_LIMIT = 10
+        const val PREFERENCES_NAME = "playback_preferences"
+        const val PREF_AUTOPLAY_ENABLED = "autoplay_enabled"
     }
 }
 
