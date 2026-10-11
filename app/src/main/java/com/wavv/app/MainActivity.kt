@@ -201,7 +201,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.focus.onFocusChanged
@@ -275,7 +279,12 @@ private val albumArtCache = object : LruCache<String, Bitmap>(12 * 1024) {
     override fun sizeOf(key: String, value: Bitmap) = (value.allocationByteCount / 1024).coerceAtLeast(1)
 }
 private val albumArtDecodeLocks = ConcurrentHashMap<String, Mutex>()
-private val albumArtDecodeSize = IntSize(768, 768)
+private fun albumArtDecodeSize(context: Context): IntSize {
+    // Album covers are square and can grow to the full device width during the shared flight.
+    // Decode to physical screen resolution so a mini-player-sized raster is never enlarged.
+    val edge = maxOf(context.resources.displayMetrics.widthPixels, 1_024)
+    return IntSize(edge, edge)
+}
 @OptIn(ExperimentalTextApi::class)
 internal val WavvFontFamily = FontFamily(
     Font(R.font.nunito_variable, FontWeight.W400, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
@@ -340,6 +349,111 @@ private fun interpolateArtworkFrame(
     maskedArtworkAlpha = lerpFloat(start.maskedArtworkAlpha, end.maskedArtworkAlpha, progress),
     shadowElevationPx = lerpFloat(start.shadowElevationPx, end.shadowElevationPx, progress),
 )
+
+@Composable
+private fun PlayerArtworkFlightCanvas(
+    flight: PlayerArtworkFlight,
+    progress: Float,
+) {
+    val context = LocalContext.current
+    val sourceKey = "${flight.song.albumArtUri.orEmpty()}|${flight.song.uri.orEmpty()}"
+    var bitmap by remember(sourceKey) { mutableStateOf(albumArtCache.get(sourceKey)) }
+    LaunchedEffect(sourceKey) {
+        if (bitmap == null) {
+            bitmap = withContext(Dispatchers.IO) {
+                decodeAlbumArt(context, flight.song.albumArtUri, flight.song.uri, albumArtDecodeSize(context))
+            }
+        }
+    }
+    val image = bitmap?.asImageBitmap()
+    val frame = interpolateArtworkFrame(flight.from, flight.to, progress)
+    Canvas(Modifier.fillMaxSize()) {
+        val left = frame.bounds.left
+        val top = frame.bounds.top
+        val width = frame.bounds.width.coerceAtLeast(1f)
+        val height = frame.bounds.height.coerceAtLeast(1f)
+        val radius = frame.cornerRadiusPx.coerceIn(0f, minOf(width, height) / 2f)
+        val clip = Path().apply {
+            addRoundRect(RoundRect(frame.bounds, androidx.compose.ui.geometry.CornerRadius(radius)))
+        }
+
+        // Draw directly into the moving destination rectangle. The previous implementation
+        // scaled a mini-player-sized graphics layer, which softened the cover during the flight.
+        drawContext.canvas.save()
+        drawContext.canvas.clipPath(clip)
+        image?.let { artwork ->
+            val sourceWidth = artwork.width
+            val sourceHeight = artwork.height
+            val targetAspect = width / height
+            val sourceAspect = sourceWidth.toFloat() / sourceHeight
+            val sourceX: Int
+            val sourceY: Int
+            val sourceCropWidth: Int
+            val sourceCropHeight: Int
+            if (sourceAspect > targetAspect) {
+                val cropWidth = (sourceHeight * targetAspect).roundToInt().coerceIn(1, sourceWidth)
+                sourceX = (sourceWidth - cropWidth) / 2
+                sourceY = 0
+                sourceCropWidth = cropWidth
+                sourceCropHeight = sourceHeight
+            } else {
+                val cropHeight = (sourceWidth / targetAspect).roundToInt().coerceIn(1, sourceHeight)
+                sourceX = 0
+                sourceY = (sourceHeight - cropHeight) / 2
+                sourceCropWidth = sourceWidth
+                sourceCropHeight = cropHeight
+            }
+            val sourceOffset = IntOffset(sourceX, sourceY)
+            val sourceSize = IntSize(sourceCropWidth, sourceCropHeight)
+            val destinationOffset = IntOffset(left.roundToInt(), top.roundToInt())
+            val destinationSize = IntSize(width.roundToInt().coerceAtLeast(1), height.roundToInt().coerceAtLeast(1))
+
+            if (frame.regularArtworkAlpha > 0f) {
+                drawImage(
+                    image = artwork,
+                    srcOffset = sourceOffset,
+                    srcSize = sourceSize,
+                    dstOffset = destinationOffset,
+                    dstSize = destinationSize,
+                    alpha = frame.regularArtworkAlpha * frame.alpha,
+                    filterQuality = FilterQuality.High,
+                )
+            }
+            if (frame.maskedArtworkAlpha > 0f) {
+                drawContext.canvas.saveLayer(frame.bounds, Paint())
+                drawImage(
+                    image = artwork,
+                    srcOffset = sourceOffset,
+                    srcSize = sourceSize,
+                    dstOffset = destinationOffset,
+                    dstSize = destinationSize,
+                    alpha = frame.maskedArtworkAlpha * frame.alpha,
+                    filterQuality = FilterQuality.High,
+                )
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        .35f to Color.Black,
+                        .60f to Color.Black,
+                        1f to Color.Transparent,
+                        startY = top,
+                        endY = top + height,
+                    ),
+                    topLeft = Offset(left, top),
+                    size = Size(width, height),
+                    blendMode = BlendMode.DstIn,
+                )
+                drawContext.canvas.restore()
+            }
+        } ?: drawRoundRect(
+            color = WavvSurface.copy(alpha = frame.alpha),
+            topLeft = Offset(left, top),
+            size = Size(width, height),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius),
+        )
+        drawContext.canvas.restore()
+    }
+}
 
 internal enum class LibraryPage { Main, Liked, Playlists, Artists, Albums, Songs, Playlist, Artist, Album }
 
@@ -1088,75 +1202,15 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             }
         }
         artworkFlight?.let { flight ->
-            val density = LocalDensity.current
-            val sourceBounds = flight.from.bounds
-            val sourceWidth = sourceBounds.width.coerceAtLeast(1f)
-            val sourceHeight = sourceBounds.height.coerceAtLeast(1f)
-            val sourceLeft = sourceBounds.left.roundToInt().toFloat()
-            val sourceTop = sourceBounds.top.roundToInt().toFloat()
-            val tracksFinger = artworkFlightTracksFinger
-            val awaitingTarget = artworkFlightAwaitingTarget
-            Box(
-                Modifier
-                    .offset { IntOffset(sourceLeft.roundToInt(), sourceTop.roundToInt()) }
-                    .size(
-                        width = with(density) { sourceWidth.toDp() },
-                        height = with(density) { sourceHeight.toDp() },
-                    )
-                    .graphicsLayer {
-                        val rawProgress = if (awaitingTarget) {
-                            0f
-                        } else if (tracksFinger) {
-                            gestureArtworkProgress.floatValue
-                        } else {
-                            artworkFlightProgress.value
-                        }.coerceIn(0f, 1f)
-                        val progress = normalizedArtworkFlightProgress(flight, rawProgress)
-                        val frame = interpolateArtworkFrame(flight.from, flight.to, progress)
-                        val scaleX = (frame.bounds.width / sourceWidth).coerceAtLeast(.01f)
-                        val scaleY = (frame.bounds.height / sourceHeight).coerceAtLeast(.01f)
-                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
-                        translationX = frame.bounds.left - sourceLeft
-                        translationY = frame.bounds.top - sourceTop
-                        this.scaleX = scaleX
-                        this.scaleY = scaleY
-                        alpha = frame.alpha
-                        shape = RoundedCornerShape(with(density) { (frame.cornerRadiusPx / scaleX).coerceAtLeast(0f).toDp() })
-                        clip = true
-                        shadowElevation = frame.shadowElevationPx
-                    },
-            ) {
-                AlbumArt(
-                    flight.song,
-                    Modifier.fillMaxSize().graphicsLayer {
-                        val rawProgress = when {
-                            awaitingTarget -> 0f
-                            tracksFinger -> gestureArtworkProgress.floatValue
-                            else -> artworkFlightProgress.value
-                        }
-                        val progress = normalizedArtworkFlightProgress(flight, rawProgress)
-                        alpha = interpolateArtworkFrame(flight.from, flight.to, progress).regularArtworkAlpha
-                    },
-                    flight.song.title,
-                    0.dp,
-                )
-                AlbumArt(
-                    flight.song,
-                    Modifier.fillMaxSize()
-                        .graphicsLayer {
-                            val rawProgress = when {
-                                awaitingTarget -> 0f
-                                tracksFinger -> gestureArtworkProgress.floatValue
-                                else -> artworkFlightProgress.value
-                            }
-                            val progress = normalizedArtworkFlightProgress(flight, rawProgress)
-                            alpha = interpolateArtworkFrame(flight.from, flight.to, progress).maskedArtworkAlpha
-                        }
-                        .maskedArtworkFade(),
-                    flight.song.title,
-                    0.dp,
-                )
-            }
+            val rawProgress = when {
+                artworkFlightAwaitingTarget -> 0f
+                artworkFlightTracksFinger -> gestureArtworkProgress.floatValue
+                else -> artworkFlightProgress.value
+            }.coerceIn(0f, 1f)
+            PlayerArtworkFlightCanvas(
+                flight = flight,
+                progress = normalizedArtworkFlightProgress(flight, rawProgress),
+            )
         }
         if (showCreatePlaylist) {
             AlertDialog(
@@ -2810,7 +2864,7 @@ internal fun AlbumArt(
             displayedSource = sourceKey
         } else {
             val decoded = cachedBitmap ?: withContext(Dispatchers.IO) {
-                decodeAlbumArt(context, uriString, audioUri, albumArtDecodeSize)
+                decodeAlbumArt(context, uriString, audioUri, albumArtDecodeSize(context))
             }
             if (decoded != null) {
                 retainedBitmap = decoded
