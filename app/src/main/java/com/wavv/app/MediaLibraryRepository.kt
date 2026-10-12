@@ -269,21 +269,27 @@ class MediaLibraryRepository(context: Context) {
         while (pendingFolders.isNotEmpty()) {
             val (folderId, depth) = pendingFolders.removeLast()
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, folderId)
-            val cursor = contentResolver.query(
-                childrenUri,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE,
-                ),
-                null,
-                null,
-                null,
-            ) ?: throw IOException("Could not read selected music folder")
+            val baseProjection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            val projectionWithStats = baseProjection + arrayOf(
+                OpenableColumns.SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            )
+            val cursor = try {
+                contentResolver.query(childrenUri, projectionWithStats, null, null, null)
+            } catch (_: IllegalArgumentException) {
+                null
+            } ?: contentResolver.query(childrenUri, baseProjection, null, null, null)
+                ?: throw IOException("Could not read selected music folder")
             cursor.use {
                 val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                 val nameColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                 val mimeColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                val modifiedColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
                 while (cursor.moveToNext()) {
                     coroutineContext.ensureActive()
                     val childId = cursor.getString(idColumn)
@@ -297,7 +303,8 @@ class MediaLibraryRepository(context: Context) {
                         pendingFolders.addLast(childId to childDepth)
                     } else if (isAudioDocument(name, mimeType)) {
                         if (documentUri.toString() !in addedSongUris) {
-                            val song = readDocumentSong(documentUri, name)
+                            val stats = cursor.documentStatsOrNull(sizeColumn, modifiedColumn)
+                            val song = readDocumentSong(documentUri, name, stats)
                             if (song != null && addedSongUris.add(song.uri)) {
                                 budget.recordSong()
                                 songs.add(song)
@@ -310,7 +317,11 @@ class MediaLibraryRepository(context: Context) {
         }
     }
 
-    private suspend fun readDocumentSong(uri: Uri, displayName: String): Song? {
+    private suspend fun readDocumentSong(
+        uri: Uri,
+        displayName: String,
+        indexedStats: DocumentStats? = null,
+    ): Song? {
         val fallbackTitle = displayName.substringBeforeLast('.').ifBlank { "Unknown title" }
         var title = fallbackTitle
         var artist = "Unknown artist"
@@ -327,7 +338,7 @@ class MediaLibraryRepository(context: Context) {
         var year: Int? = null
         var trackNumber: Int? = null
         var discNumber: Int? = null
-        val documentStats = try {
+        val documentStats = indexedStats ?: try {
             documentStats(uri)
         } catch (error: CancellationException) {
             throw error
@@ -466,6 +477,12 @@ class MediaLibraryRepository(context: Context) {
     } ?: DocumentStats()
 
     private data class DocumentStats(val size: Long = 0L, val modifiedAt: Long = 0L)
+
+    private fun android.database.Cursor.documentStatsOrNull(sizeColumn: Int, modifiedColumn: Int): DocumentStats? {
+        if (sizeColumn < 0 || modifiedColumn < 0 || isNull(sizeColumn) || isNull(modifiedColumn)) return null
+        val stats = DocumentStats(getLong(sizeColumn), getLong(modifiedColumn))
+        return stats.takeIf { it.size > 0L && it.modifiedAt > 0L }
+    }
 
     private fun android.database.Cursor.getLongOrZero(column: Int): Long = if (column >= 0 && !isNull(column)) getLong(column) else 0L
 

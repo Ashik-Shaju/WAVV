@@ -169,11 +169,11 @@ class LibraryIndexWorker(
                 }
             }
             if (sourceStore.read()?.fingerprint() != source.fingerprint()) return Result.success()
-            LibraryStore(WavvDatabase.get(applicationContext)).replaceSongs(songs)
+            val catalogChanged = LibraryStore(WavvDatabase.get(applicationContext)).replaceSongs(songs)
             repository.pruneEmbeddedArtworkCache(songs)
             sourceStore.markIndexed(source)
             setProgress(workDataOf(KEY_COMPLETED to songs.size, KEY_TOTAL to songs.size))
-            Result.success()
+            Result.success(workDataOf(KEY_CATALOG_CHANGED to catalogChanged))
         } catch (error: CancellationException) {
             throw error
         } catch (error: SecurityException) {
@@ -195,6 +195,7 @@ class LibraryIndexWorker(
         const val UNIQUE_WORK_NAME = "wavv-library-index"
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
+        const val KEY_CATALOG_CHANGED = "catalog_changed"
         const val KEY_ERROR = "error"
         private const val MAX_ERROR_LENGTH = 512
         private const val MAX_RETRY_ATTEMPTS = 3

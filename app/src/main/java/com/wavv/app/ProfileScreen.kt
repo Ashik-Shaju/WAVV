@@ -6,13 +6,11 @@ import android.provider.Settings
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -67,9 +65,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -80,6 +76,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.max
 import java.util.Locale
 
@@ -125,6 +122,7 @@ internal fun YouScreen(
     onChooseAllDevice: () -> Unit,
     onClearListeningHistory: () -> Unit,
     standbyEnabled: Boolean,
+    activeTrackId: Long?,
 ) {
     val context = LocalContext.current
     val trackCount = songs.size
@@ -147,6 +145,9 @@ internal fun YouScreen(
     var equalizerEnabled by remember(context) { mutableStateOf(AudioEqualizerSettings.isEnabled(context)) }
     var equalizerProfile by remember(context) { mutableStateOf(AudioEqualizerSettings.activeProfile(context)) }
     var savedEqualizerProfiles by remember(context) { mutableStateOf(AudioEqualizerSettings.savedProfiles(context)) }
+    val playbackEffects by PlaybackEffectStatus.state.collectAsStateWithLifecycle()
+    val uhqPlaybackLabel = uhqSettingLabel(uhqEnabled, activeTrackId, playbackEffects)
+    val equalizerPlaybackLabel = equalizerSettingLabel(equalizerEnabled, equalizerProfile.name, playbackEffects.equalizer)
     var standbyEnabledState by remember(context) { mutableStateOf(standbyEnabled) }
     var deviceAdminEnabled by remember(context) { mutableStateOf(StandbyDeviceLock.isEnabled(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -167,12 +168,12 @@ internal fun YouScreen(
         ProfileSetting(Icons.Outlined.Notifications, "Notifications", if (notificationsEnabled) "Allowed" else "Blocked", "Notification access is controlled by Android for this app.", ProfileSettingContent.Notifications),
         ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library.", ProfileSettingContent.Folders),
         ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
-        ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", if (uhqEnabled) "On" else "Off", "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
-        ProfileSetting(Icons.Default.Equalizer, "Equalizer", if (equalizerEnabled) equalizerProfile.name else "Off", "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
+        ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", uhqPlaybackLabel, "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
+        ProfileSetting(Icons.Default.Equalizer, "Equalizer", equalizerPlaybackLabel, "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
         ProfileSetting(Icons.Default.LibraryMusic, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
-        ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. For app permissions, open Android app settings."),
+        ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. Open Android app settings to manage permissions. No in-app support contact is configured."),
     )
     var activeSetting by remember { mutableStateOf<ProfileSetting?>(null) }
     var confirmClearHistory by remember { mutableStateOf(false) }
@@ -226,8 +227,8 @@ internal fun YouScreen(
         }
         activeSetting?.let { setting ->
             val displayedSettingValue = when (setting.content) {
-                ProfileSettingContent.UHQ -> if (uhqEnabled) "On" else "Off"
-                ProfileSettingContent.Equalizer -> if (equalizerEnabled) equalizerProfile.name else "Off"
+                ProfileSettingContent.UHQ -> uhqPlaybackLabel
+                ProfileSettingContent.Equalizer -> equalizerPlaybackLabel
                 ProfileSettingContent.Standby -> if (standbyEnabledState) "On" else "Off"
                 else -> setting.value
             }
@@ -311,6 +312,8 @@ internal fun YouScreen(
                         }
                     }
                     ProfileSettingContent.UHQ -> {
+                        SettingInfoRow("Current playback", if (activeTrackId == null) "No track playing" else uhqPlaybackLabel, null)
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             "Experimental AAC-only enhancement. Other formats and AAC files this device cannot decode continue playing the original.",
                             color = Color.White.copy(.62f),
@@ -340,6 +343,7 @@ internal fun YouScreen(
                         enabled = equalizerEnabled,
                         profile = equalizerProfile,
                         savedProfiles = savedEqualizerProfiles,
+                        playbackStatus = equalizerPlaybackLabel,
                         onEnabledChange = { enabled ->
                             equalizerEnabled = enabled
                             AudioEqualizerSettings.setEnabled(context, enabled)
@@ -367,14 +371,6 @@ internal fun YouScreen(
                             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Image(
-                                painter = painterResource(R.drawable.standby_demo),
-                                contentDescription = "Standby clock, album artwork and now playing pill preview",
-                                modifier = Modifier.fillMaxWidth().aspectRatio(2400f / 1080f)
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .border(1.dp, Color.White.copy(.12f), RoundedCornerShape(20.dp)),
-                                contentScale = ContentScale.Fit,
-                            )
                             Row(
                                 Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -418,7 +414,21 @@ internal fun YouScreen(
                             )
                         }
                     }
-                    ProfileSettingContent.Info -> SettingInfoRow(setting.title, setting.value, null)
+                    ProfileSettingContent.Info -> {
+                        SettingInfoRow(setting.title, setting.value, null)
+                        if (setting.title == "Help & Support") {
+                            Spacer(Modifier.height(10.dp))
+                            TextButton(
+                                onClick = {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                            .setData(Uri.fromParts("package", context.packageName, null)),
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Open app settings") }
+                        }
+                    }
                 }
             }
         }
@@ -451,12 +461,14 @@ private fun EqualizerSettingsContent(
     enabled: Boolean,
     profile: EqualizerProfile,
     savedProfiles: List<SavedEqualizerProfile>,
+    playbackStatus: String,
     onEnabledChange: (Boolean) -> Unit,
     onProfileSelected: (EqualizerProfile) -> Unit,
     onBandChange: (Int, Float) -> Unit,
     onSaveProfile: (String) -> Unit,
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
+    var overwriteProfileName by remember { mutableStateOf<String?>(null) }
     var profileName by remember(profile.name) {
         mutableStateOf(profile.name.takeUnless { it == "Custom" }.orEmpty())
     }
@@ -466,6 +478,7 @@ private fun EqualizerSettingsContent(
             Column(Modifier.weight(1f)) {
                 Text("Equalizer", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Text("${profile.name} · 10 bands", color = Color.White.copy(.5f), fontSize = 12.sp)
+                Text("Playback: $playbackStatus", color = Color.White.copy(.42f), fontSize = 11.sp)
             }
             Switch(checked = enabled, onCheckedChange = onEnabledChange)
         }
@@ -534,12 +547,43 @@ private fun EqualizerSettingsContent(
                 TextButton(
                     enabled = profileName.isNotBlank(),
                     onClick = {
-                        onSaveProfile(profileName.trim())
+                        val normalizedName = profileName.trim()
+                        if (hasEqualizerProfileName(savedProfiles, normalizedName)) {
+                            overwriteProfileName = normalizedName
+                        } else {
+                            onSaveProfile(normalizedName)
+                        }
                         showSaveDialog = false
                     },
                 ) { Text("Save") }
             },
             dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } },
+            containerColor = WavvSurface,
+            titleContentColor = Color.White,
+            textContentColor = Color.White.copy(.72f),
+        )
+    }
+
+    overwriteProfileName?.let { name ->
+        AlertDialog(
+            onDismissRequest = {
+                overwriteProfileName = null
+                showSaveDialog = true
+            },
+            title = { Text("Replace saved profile?") },
+            text = { Text("A profile named \"$name\" already exists. Replace its saved equalizer curve?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSaveProfile(name)
+                    overwriteProfileName = null
+                }) { Text("Replace", color = WavvPink) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    overwriteProfileName = null
+                    showSaveDialog = true
+                }) { Text("Cancel") }
+            },
             containerColor = WavvSurface,
             titleContentColor = Color.White,
             textContentColor = Color.White.copy(.72f),

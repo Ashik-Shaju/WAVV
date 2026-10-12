@@ -26,6 +26,23 @@ class PlaybackQueueTest {
         assertEquals(listOf(song(4L), song(5L)), nextQueuedSongs(queue, currentSongId = 3L, limit = 2))
     }
 
+    @Test
+    fun nextUsesQueueBeforeAutoplayAndAutoplayOnlyWhenQueueIsExhausted() {
+        assertEquals(NextPlaybackAction.Queue, nextPlaybackAction(true, true, true))
+        assertEquals(NextPlaybackAction.Autoplay, nextPlaybackAction(false, true, true))
+        assertEquals(NextPlaybackAction.None, nextPlaybackAction(false, false, true))
+        assertEquals(NextPlaybackAction.None, nextPlaybackAction(false, true, false))
+    }
+
+    @Test
+    fun rejectedQueueActionsHaveSpecificUserFeedback() {
+        assertEquals("This track is already playing.", queueActionMessage(QueueActionResult.AlreadyPlaying))
+        assertEquals("This track is already next.", queueActionMessage(QueueActionResult.AlreadyNext))
+        assertEquals("This track is already in the queue.", queueActionMessage(QueueActionResult.AlreadyQueued))
+        assertEquals("Playback isn't ready yet. Try again.", queueActionMessage(QueueActionResult.Unavailable))
+        assertEquals(null, queueActionMessage(QueueActionResult.Added))
+    }
+
     private fun song(id: Long) = Song(
         id = id,
         title = "Track $id",

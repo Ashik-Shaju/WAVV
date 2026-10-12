@@ -34,4 +34,13 @@ class EqualizerProfilesTest {
         assertNull(EqualizerProfiles.decodeGains(List(10) { "NaN" }.joinToString(",")))
         assertEquals(6f, EqualizerProfiles.decodeGains(List(10) { "99" }.joinToString(","))?.first())
     }
+
+    @Test
+    fun savedProfileNameConflictsAreCaseInsensitiveAndTrimmed() {
+        val profiles = listOf(SavedEqualizerProfile("id", EqualizerProfiles.presets[1]))
+
+        assertTrue(hasEqualizerProfileName(profiles, "  bASS  "))
+        assertTrue(!hasEqualizerProfileName(profiles, "Vocal"))
+        assertTrue(!hasEqualizerProfileName(profiles, "   "))
+    }
 }

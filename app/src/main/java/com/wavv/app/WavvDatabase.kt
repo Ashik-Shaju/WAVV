@@ -119,6 +119,16 @@ data class SongEmbeddingEntity(
     val updatedAt: Long,
 )
 
+data class SongEmbeddingIndexState(
+    val songId: Long,
+    val modelId: String,
+    val sourceSizeBytes: Long,
+    val sourceModifiedAt: Long,
+    val dimension: Int,
+    val dtype: String,
+    val normalized: Boolean,
+)
+
 @Entity(tableName = "music_understanding_results")
 data class MusicUnderstandingResultEntity(
     @PrimaryKey val songId: Long,
@@ -127,6 +137,13 @@ data class MusicUnderstandingResultEntity(
     val sourceModifiedAt: Long,
     val tagsJson: String,
     val updatedAt: Long,
+)
+
+data class MusicUnderstandingIndexState(
+    val songId: Long,
+    val modelId: String,
+    val sourceSizeBytes: Long,
+    val sourceModifiedAt: Long,
 )
 
 @Dao
@@ -260,6 +277,9 @@ interface SongEmbeddingDao {
     @Query("SELECT * FROM song_embeddings")
     suspend fun getAll(): List<SongEmbeddingEntity>
 
+    @Query("SELECT songId, modelId, sourceSizeBytes, sourceModifiedAt, dimension, dtype, normalized FROM song_embeddings")
+    suspend fun getIndexStates(): List<SongEmbeddingIndexState>
+
     @Query("SELECT * FROM song_embeddings WHERE songId = :songId")
     suspend fun get(songId: Long): SongEmbeddingEntity?
 
@@ -277,6 +297,9 @@ interface SongEmbeddingDao {
 interface MusicUnderstandingDao {
     @Query("SELECT * FROM music_understanding_results")
     suspend fun getAll(): List<MusicUnderstandingResultEntity>
+
+    @Query("SELECT songId, modelId, sourceSizeBytes, sourceModifiedAt FROM music_understanding_results")
+    suspend fun getIndexStates(): List<MusicUnderstandingIndexState>
 
     @Query("SELECT * FROM music_understanding_results WHERE songId = :songId")
     suspend fun get(songId: Long): MusicUnderstandingResultEntity?
@@ -445,47 +468,51 @@ class LibraryStore(private val database: WavvDatabase) {
         }
     }
 
-    suspend fun replaceSongs(songs: List<Song>) {
-        database.withTransaction {
-            val previousSongsByUri = database.songDao().getAll().associateBy(SongEntity::uri)
-            val uris = songs.asSequence()
-                .map(Song::uri)
-                .distinct()
-                .toList()
-                .chunked(STATE_QUERY_BATCH_SIZE)
-            val stateDao = database.songUserStateDao()
-            val userStatesByUri = mutableMapOf<String, SongUserStateEntity>()
-            for (uriBatch in uris) {
-                stateDao.getForUris(uriBatch).forEach { userStatesByUri[it.uri] = it }
-            }
-            database.songDao().deleteAll()
-            database.songDao().upsertAll(
-                songs.map { song ->
-                    val previous = previousSongsByUri[song.uri]
-                    val userState = userStatesByUri[song.uri]
-                    val restoredState = resolveCatalogUserState(
-                        previous = previous?.let { CatalogUserState(it.isFavorite, it.lastPlayedAt) },
-                        persisted = userState?.let { CatalogUserState(it.isFavorite, it.lastPlayedAt) },
-                    )
-                    song.copy(id = previous?.id ?: song.id)
-                        .toEntity(restoredState.isFavorite)
-                        .copy(
-                            lastPlayedAt = restoredState.lastPlayedAt,
-                            languageTagsJson = if (song.languageMetadataChecked || song.languageTags.isNotEmpty()) {
-                                song.languageTags.toJsonArray()
-                            } else previous?.languageTagsJson ?: "[]",
-                            languageMetadataChecked = song.languageMetadataChecked || (previous?.languageMetadataChecked == true),
-                        )
-                },
-            )
-            database.songEmbeddingDao().deleteMissingSongs()
-            database.musicUnderstandingDao().deleteMissingSongs()
-            database.analysisJobDao().upsertAll(
-                songs.map { song ->
-                    AnalysisJobEntity(song.id, METADATA_JOB, COMPLETED, updatedAt = System.currentTimeMillis())
-                },
-            )
+    suspend fun replaceSongs(songs: List<Song>): Boolean = database.withTransaction {
+        val previousSongs = database.songDao().getAll()
+        val previousSongsByUri = previousSongs.associateBy(SongEntity::uri)
+        val uris = songs.asSequence()
+            .map(Song::uri)
+            .distinct()
+            .toList()
+            .chunked(STATE_QUERY_BATCH_SIZE)
+        val stateDao = database.songUserStateDao()
+        val userStatesByUri = mutableMapOf<String, SongUserStateEntity>()
+        for (uriBatch in uris) {
+            stateDao.getForUris(uriBatch).forEach { userStatesByUri[it.uri] = it }
         }
+        val nextSongs = songs.map { song ->
+            val previous = previousSongsByUri[song.uri]
+            val userState = userStatesByUri[song.uri]
+            val restoredState = resolveCatalogUserState(
+                previous = previous?.let { CatalogUserState(it.isFavorite, it.lastPlayedAt) },
+                persisted = userState?.let { CatalogUserState(it.isFavorite, it.lastPlayedAt) },
+            )
+            song.copy(id = previous?.id ?: song.id)
+                .toEntity(restoredState.isFavorite)
+                .copy(
+                    lastPlayedAt = restoredState.lastPlayedAt,
+                    languageTagsJson = if (song.languageMetadataChecked || song.languageTags.isNotEmpty()) {
+                        song.languageTags.toJsonArray()
+                    } else previous?.languageTagsJson ?: "[]",
+                    languageMetadataChecked = song.languageMetadataChecked || (previous?.languageMetadataChecked == true),
+                )
+        }
+        val catalogChanged = previousSongs.size != nextSongs.size ||
+            previousSongsByUri.size != previousSongs.size ||
+            nextSongs.any { next -> previousSongsByUri[next.uri] != next }
+        if (catalogChanged) {
+            database.songDao().deleteAll()
+            database.songDao().upsertAll(nextSongs)
+        }
+        database.songEmbeddingDao().deleteMissingSongs()
+        database.musicUnderstandingDao().deleteMissingSongs()
+        database.analysisJobDao().upsertAll(
+            songs.map { song ->
+                AnalysisJobEntity(song.id, METADATA_JOB, COMPLETED, updatedAt = System.currentTimeMillis())
+            },
+        )
+        catalogChanged
     }
 
     suspend fun getSongs(): List<Song> = database.songDao().getAll().map(SongEntity::toSong)
@@ -503,10 +530,16 @@ class LibraryStore(private val database: WavvDatabase) {
 
     suspend fun getEmbedding(songId: Long): SongEmbeddingEntity? = database.songEmbeddingDao().get(songId)
 
+    internal suspend fun getEmbeddingIndexStates(): List<SongEmbeddingIndexState> =
+        database.songEmbeddingDao().getIndexStates()
+
     suspend fun saveEmbedding(embedding: SongEmbeddingEntity) = database.songEmbeddingDao().upsert(embedding)
 
     suspend fun getMusicUnderstanding(songId: Long): MusicUnderstandingResultEntity? =
         database.musicUnderstandingDao().get(songId)
+
+    internal suspend fun getMusicUnderstandingIndexStates(): List<MusicUnderstandingIndexState> =
+        database.musicUnderstandingDao().getIndexStates()
 
     suspend fun saveMusicUnderstanding(result: MusicUnderstandingResultEntity) =
         database.musicUnderstandingDao().upsert(result)
@@ -678,23 +711,62 @@ class LibraryStore(private val database: WavvDatabase) {
         }
     }
 
-    suspend fun createPlaylist(name: String): Long {
+    suspend fun createPlaylist(name: String, initialSongId: Long? = null): Long {
         val normalizedName = name.trim()
         require(normalizedName.isNotEmpty()) { "Playlist name cannot be empty" }
         val now = System.currentTimeMillis()
-        return database.playlistDao().insert(PlaylistEntity(name = normalizedName, createdAt = now, updatedAt = now))
+        return database.withTransaction {
+            val playlistId = database.playlistDao().insert(
+                PlaylistEntity(name = normalizedName, createdAt = now, updatedAt = now),
+            )
+            if (initialSongId != null) {
+                database.playlistDao().upsertItems(
+                    listOf(PlaylistItemEntity(playlistId, initialSongId, position = 0, addedAt = now)),
+                )
+                database.listeningEventDao().insert(
+                    ListeningEventEntity(
+                        userId = LOCAL_USER,
+                        songId = initialSongId,
+                        timestamp = now,
+                        sessionId = WavvSession.id,
+                        eventType = "playlist_add",
+                        playlistId = playlistId,
+                    ),
+                )
+                pruneListeningHistoryBefore(listeningHistoryCutoff(now))
+            }
+            playlistId
+        }
     }
 
     suspend fun addToPlaylist(playlistId: Long, songId: Long) {
+        addSongsToPlaylist(playlistId, listOf(songId))
+    }
+
+    suspend fun addSongsToPlaylist(playlistId: Long, songIds: List<Long>) {
         database.withTransaction {
             val playlistDao = database.playlistDao()
-            val songIds = playlistDao.getSongIds(playlistId)
-            if (songId !in songIds) {
+            val existingSongIds = playlistDao.getSongIds(playlistId).toSet()
+            val songsToAdd = songIds.distinct().filterNot(existingSongIds::contains)
+            if (songsToAdd.isNotEmpty()) {
                 val now = System.currentTimeMillis()
-                playlistDao.upsertItems(listOf(PlaylistItemEntity(playlistId, songId, songIds.size, now)))
-                database.listeningEventDao().insert(
-                    ListeningEventEntity(userId = LOCAL_USER, songId = songId, timestamp = now, sessionId = WavvSession.id, eventType = "playlist_add", playlistId = playlistId),
+                playlistDao.upsertItems(
+                    songsToAdd.mapIndexed { index, songId ->
+                        PlaylistItemEntity(playlistId, songId, existingSongIds.size + index, now)
+                    },
                 )
+                songsToAdd.forEach { songId ->
+                    database.listeningEventDao().insert(
+                        ListeningEventEntity(
+                            userId = LOCAL_USER,
+                            songId = songId,
+                            timestamp = now,
+                            sessionId = WavvSession.id,
+                            eventType = "playlist_add",
+                            playlistId = playlistId,
+                        ),
+                    )
+                }
                 pruneListeningHistoryBefore(listeningHistoryCutoff(now))
             }
         }

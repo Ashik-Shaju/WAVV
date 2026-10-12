@@ -17,6 +17,11 @@ internal data class SavedEqualizerProfile(
     val profile: EqualizerProfile,
 )
 
+internal fun hasEqualizerProfileName(profiles: List<SavedEqualizerProfile>, candidate: String): Boolean {
+    val normalized = candidate.trim().take(32)
+    return normalized.isNotEmpty() && profiles.any { it.profile.name.equals(normalized, ignoreCase = true) }
+}
+
 internal object EqualizerProfiles {
     const val MIN_GAIN_DB = -6f
     const val MAX_GAIN_DB = 6f

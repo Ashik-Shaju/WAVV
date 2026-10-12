@@ -302,7 +302,7 @@ internal fun LibraryScreen(
     onRequestDeletePlaylist: (UserPlaylist) -> Unit,
     onPlayNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
-    onAddSongToPlaylist: (Long, Long) -> Unit,
+    onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     onRemoveSongFromPlaylist: (Long, Long) -> Unit,
 ) {
     var songForPlaylist by remember { mutableStateOf<Song?>(null) }
@@ -585,7 +585,14 @@ internal fun LibraryScreen(
                 if (playlists.isEmpty()) Text("Create a playlist to save this song.")
                 else Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                     playlists.forEach { target ->
-                        TextButton(onClick = { onAddSongToPlaylist(target.id, selected.id); songForPlaylist = null }, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(
+                            onClick = {
+                                onAddSongToPlaylist(target.id, listOf(selected.id)) { success ->
+                                    if (success) songForPlaylist = null
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
                             Text(target.name, Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                         }
                     }
@@ -840,7 +847,7 @@ private fun LibraryCollectionScreen(
     onPlayNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
     onRequestAddToPlaylist: (Song) -> Unit,
-    onAddSongToPlaylist: (Long, Long) -> Unit,
+    onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     onRemoveSongFromPlaylist: (Long) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
@@ -1009,8 +1016,9 @@ private fun LibraryCollectionScreen(
                     targets.forEach { target ->
                         TextButton(
                             onClick = {
-                                displaySongs.forEach { onAddSongToPlaylist(target.id, it.id) }
-                                addToPlaylist = false
+                                onAddSongToPlaylist(target.id, displaySongs.map(Song::id)) { success ->
+                                    if (success) addToPlaylist = false
+                                }
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(target.name, Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Start) }

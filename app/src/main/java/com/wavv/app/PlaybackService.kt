@@ -142,6 +142,14 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        PlaybackEffectStatus.reset()
+        PlaybackEffectStatus.updateUHQ(
+            trackId = null,
+            status = if (UHQPlaybackPreference.isEnabled(this)) UhqPlaybackStatus.Waiting else UhqPlaybackStatus.Disabled,
+        )
+        PlaybackEffectStatus.updateEqualizer(
+            if (AudioEqualizerSettings.isEnabled(this)) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
+        )
         libraryStore = LibraryStore(WavvDatabase.get(this))
         uhqPreferences = UHQPlaybackPreference.preferences(this).also {
             it.registerOnSharedPreferenceChangeListener(uhqPreferenceListener)
@@ -167,6 +175,7 @@ class PlaybackService : MediaSessionService() {
         feedbackHandler.removeCallbacks(applyEqualizer)
         runCatching { audioEqualizer?.release() }
         audioEqualizer = null
+        PlaybackEffectStatus.reset()
         player?.removeListener(feedbackListener)
         mediaSession?.release()
         mediaSession = null
@@ -178,7 +187,17 @@ class PlaybackService : MediaSessionService() {
 
     private fun syncEqualizer() {
         val sessionId = equalizerSessionId
-        if (sessionId <= 0 || unavailableEqualizerSessionId == sessionId) return
+        val enabled = AudioEqualizerSettings.isEnabled(this)
+        if (sessionId <= 0) {
+            PlaybackEffectStatus.updateEqualizer(
+                if (enabled) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
+            )
+            return
+        }
+        if (unavailableEqualizerSessionId == sessionId) {
+            PlaybackEffectStatus.updateEqualizer(EqualizerPlaybackStatus.Unavailable)
+            return
+        }
         try {
             val effect = audioEqualizer ?: Equalizer(0, sessionId).also { audioEqualizer = it }
             val bandCount = effect.numberOfBands.toInt()
@@ -192,11 +211,15 @@ class PlaybackService : MediaSessionService() {
                     .coerceIn(levels[0].toInt(), levels[1].toInt())
                 effect.setBandLevel(band.toShort(), levelMb.toShort())
             }
-            effect.enabled = AudioEqualizerSettings.isEnabled(this)
+            effect.enabled = enabled
+            PlaybackEffectStatus.updateEqualizer(
+                if (enabled) EqualizerPlaybackStatus.Applied else EqualizerPlaybackStatus.Disabled,
+            )
         } catch (error: Exception) {
             runCatching { audioEqualizer?.release() }
             audioEqualizer = null
             unavailableEqualizerSessionId = sessionId
+            PlaybackEffectStatus.updateEqualizer(EqualizerPlaybackStatus.Unavailable)
             Log.w(TAG, "Android equalizer is unavailable for the active playback session", error)
         }
     }
@@ -235,66 +258,85 @@ class PlaybackService : MediaSessionService() {
         } else if (!force && uhqJob?.isActive == true) {
             return
         }
-        if (item.mediaMetadata.extras?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true) return
-        val source = item.localConfiguration?.uri ?: return
+        val songIdLong = songId.toLongOrNull()
+        if (item.mediaMetadata.extras?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true) {
+            PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Enhanced)
+            return
+        }
+        val source = item.localConfiguration?.uri ?: run {
+            PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Unsupported)
+            return
+        }
+        PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Preparing)
         uhqJob?.cancel()
         uhqJob = eventScope.launch {
-            val key = UHQAacCache.key(this@PlaybackService, source) ?: return@launch
-            if (!UHQPlaybackPreference.isEnabled(this@PlaybackService)) return@launch
-            val destination = UHQAacCache.file(this@PlaybackService, key)
-            if (destination.isFile && destination.length() > 44L) {
-                destination.setLastModified(System.currentTimeMillis())
-                withContext(Dispatchers.Main.immediate) {
-                    val current = player?.currentMediaItem
-                    if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
-                        routeToEnhanced(current, source, destination)
-                    }
-                }
-                return@launch
-            }
-
-            val workManager = WorkManager.getInstance(this@PlaybackService)
-            val workName = UHQAacCache.workName(key)
-            uhqWorkName = workName
-            val request = OneTimeWorkRequestBuilder<UHQEnhancementWorker>()
-                .setInputData(
-                    Data.Builder()
-                        .putString(UHQEnhancementWorker.INPUT_URI, source.toString())
-                        .putString(UHQEnhancementWorker.INPUT_KEY, key)
-                        .build(),
-                )
-                .build()
             try {
-                workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, request).result.get()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.w(TAG, "Couldn't queue UHQ enhancement", error)
-                return@launch
-            }
-            while (true) {
-                kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                val infos = workManager.getWorkInfosForUniqueWork(workName).get()
-                val info = infos.firstOrNull { it.id == request.id }
-                    ?: infos.lastOrNull { !it.state.isFinished }
-                    ?: infos.lastOrNull()
-                if (info?.state?.isFinished == true) {
-                    if (info.state == WorkInfo.State.SUCCEEDED && destination.isFile) {
-                        withContext(Dispatchers.Main.immediate) {
-                            val current = player?.currentMediaItem
-                            if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
-                                routeToEnhanced(current, source, destination)
-                            }
+                val key = UHQAacCache.key(this@PlaybackService, source) ?: run {
+                    PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Unsupported)
+                    return@launch
+                }
+                if (!UHQPlaybackPreference.isEnabled(this@PlaybackService)) return@launch
+                val destination = UHQAacCache.file(this@PlaybackService, key)
+                if (destination.isFile && destination.length() > 44L) {
+                    destination.setLastModified(System.currentTimeMillis())
+                    withContext(Dispatchers.Main.immediate) {
+                        val current = player?.currentMediaItem
+                        if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
+                            routeToEnhanced(current, source, destination)
+                            PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Enhanced)
                         }
                     }
                     return@launch
                 }
-                delay(750L)
+
+                val workManager = WorkManager.getInstance(this@PlaybackService)
+                val workName = UHQAacCache.workName(key)
+                uhqWorkName = workName
+                val request = OneTimeWorkRequestBuilder<UHQEnhancementWorker>()
+                    .setInputData(
+                        Data.Builder()
+                            .putString(UHQEnhancementWorker.INPUT_URI, source.toString())
+                            .putString(UHQEnhancementWorker.INPUT_KEY, key)
+                            .build(),
+                    )
+                    .build()
+                workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, request).result.get()
+                while (true) {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    val infos = workManager.getWorkInfosForUniqueWork(workName).get()
+                    val info = infos.firstOrNull { it.id == request.id }
+                        ?: infos.lastOrNull { !it.state.isFinished }
+                        ?: infos.lastOrNull()
+                    if (info?.state?.isFinished == true) {
+                        if (info.state == WorkInfo.State.SUCCEEDED && destination.isFile) {
+                            withContext(Dispatchers.Main.immediate) {
+                                val current = player?.currentMediaItem
+                                if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
+                                    routeToEnhanced(current, source, destination)
+                                    PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Enhanced)
+                                }
+                            }
+                        } else {
+                            PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Failed)
+                        }
+                        return@launch
+                    }
+                    delay(750L)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val currentTrackMatches = player?.currentMediaItem?.mediaId == songId
+                if (currentTrackMatches && UHQPlaybackPreference.isEnabled(this@PlaybackService)) {
+                    PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Failed)
+                }
+                Log.w(TAG, "UHQ enhancement could not be completed", error)
             }
         }
     }
 
     private fun disableUHQ(item: MediaItem) {
+        PlaybackEffectStatus.updateUHQ(item.mediaId.toLongOrNull(), UhqPlaybackStatus.Disabled)
         if (uhqSongId != item.mediaId) uhqSongId = item.mediaId
         uhqJob?.cancel()
         uhqWorkName?.let { WorkManager.getInstance(this).cancelUniqueWork(it) }
