@@ -8,9 +8,11 @@ import org.junit.Test
 class AnalysisIndexResultTest {
     @Test
     fun batchCombinesPartialTrackFailureCounts() {
-        val result = AnalysisIndexResult(failedOperations = 2) + AnalysisIndexResult(failedOperations = 1)
+        val result = AnalysisIndexResult(failedOperations = 2, updatedResults = 3) +
+            AnalysisIndexResult(failedOperations = 1, updatedResults = 2)
 
         assertEquals(3, result.failedOperations)
+        assertEquals(5, result.updatedResults)
         assertTrue(result.hasFailures)
         assertTrue(result.userMessage().contains("analysis tasks"))
     }

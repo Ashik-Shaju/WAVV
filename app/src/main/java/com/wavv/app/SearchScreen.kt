@@ -36,6 +36,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -72,6 +73,8 @@ internal fun SearchScreen(
     searchResults: List<Song>?,
     semanticLoading: Boolean = false,
     semanticSearchComplete: Boolean = false,
+    searchError: String? = null,
+    searchNotice: String? = null,
     onQueryChange: (String) -> Unit = {},
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -150,7 +153,45 @@ internal fun SearchScreen(
                         ShelfLabel(if (semanticSearchComplete) "Semantic results" else "Results")
                         Spacer(Modifier.height(4.dp))
                     }
-                    if (semanticLoading) item { CircularProgressIndicator(color = WavvPink, modifier = Modifier.padding(horizontal = 20.dp).size(18.dp)) }
+                    searchNotice?.let { notice ->
+                        item {
+                            Text(
+                                notice,
+                                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                                color = Color.White.copy(.58f),
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                    if (searchError != null) {
+                        item {
+                            Column(
+                                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(searchError, color = Color.White.copy(.66f), fontSize = 14.sp)
+                                TextButton(onClick = { onQueryChange(query) }) { Text("Try again", color = WavvPink) }
+                            }
+                        }
+                    }
+                    if (semanticLoading) {
+                        item {
+                            CircularProgressIndicator(
+                                color = WavvPink,
+                                modifier = Modifier.padding(horizontal = 20.dp).size(18.dp),
+                            )
+                        }
+                    }
+                    if (!semanticLoading && searchError == null && searchResults?.isEmpty() == true) {
+                        item {
+                            Text(
+                                "No matching tracks found.",
+                                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
+                                color = WavvMuted,
+                                fontSize = 14.sp,
+                            )
+                        }
+                    }
                     itemsIndexed(searchResults.orEmpty(), key = { _, song -> song.id }) { index, song ->
                         SearchResultRow(song, onPlay)
                         if (index != searchResults.orEmpty().lastIndex) Hairline()

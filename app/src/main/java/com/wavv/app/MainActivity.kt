@@ -635,6 +635,10 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
     val currentSongs = (libraryState as? LibraryUiState.Ready)?.songs.orEmpty()
     val showUnavailable: (String) -> Unit = { message -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
 
+    LaunchedEffect(libraryViewModel) {
+        libraryViewModel.actionFeedback.collect { message -> showUnavailable(message) }
+    }
+
     LaunchedEffect(currentSongs) {
         playbackController.updateCatalog(currentSongs)
     }
@@ -682,25 +686,33 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onUnavailable = showUnavailable,
                     onRepeatMode = playbackController::setRepeatMode,
                     onQueueMode = playbackController::setQueueMode,
-                    onPlayNext = { playbackController.playNext(it) },
-                    onAddToQueue = { playbackController.addToQueue(it) },
+                    onPlayNext = { reportQueueAction(playbackController.playNext(it), showUnavailable) },
+                    onAddToQueue = { reportQueueAction(playbackController.addToQueue(it), showUnavailable) },
                     onRemoveQueueItem = playbackController::removeFromQueue,
                     onMoveQueueItem = playbackController::moveQueueItem,
                     onPlayQueuedSong = playbackController::playQueueSong,
                     onPlayAutoplaySong = playbackController::playAutoplaySong,
-                    onPlayNextFromAutoplay = { playbackController.playNext(it, fromAutoplay = true) },
-                    onAddAutoplayToQueue = { playbackController.addToQueue(it, fromAutoplay = true) },
+                    onPlayNextFromAutoplay = {
+                        reportQueueAction(playbackController.playNext(it, fromAutoplay = true), showUnavailable)
+                    },
+                    onAddAutoplayToQueue = {
+                        reportQueueAction(playbackController.addToQueue(it, fromAutoplay = true), showUnavailable)
+                    },
                     onRemoveAutoplaySong = playbackController::removeAutoplaySong,
                     onMoveAutoplayItem = playbackController::moveAutoplayItem,
                     onSetAutoplayEnabled = playbackController::setAutoplayEnabled,
-                    onCreatePlaylist = { name, songId ->
-                        libraryViewModel.createPlaylist(name) { playlistId ->
-                            songId?.let { libraryViewModel.addSongToPlaylist(playlistId, it) }
-                        }
+                    onCreatePlaylist = { name, songId, onComplete ->
+                        libraryViewModel.createPlaylist(name, songId, onComplete)
                     },
-                    onRenamePlaylist = libraryViewModel::renamePlaylist,
-                    onDeletePlaylist = libraryViewModel::deletePlaylist,
-                    onAddSongToPlaylist = libraryViewModel::addSongToPlaylist,
+                    onRenamePlaylist = { playlistId, name, onComplete ->
+                        libraryViewModel.renamePlaylist(playlistId, name, onComplete)
+                    },
+                    onDeletePlaylist = { playlistId, onComplete ->
+                        libraryViewModel.deletePlaylist(playlistId, onComplete)
+                    },
+                    onAddSongToPlaylist = { playlistId, songIds, onComplete ->
+                        libraryViewModel.addSongsToPlaylist(playlistId, songIds, onComplete)
+                    },
                     onRemoveSongFromPlaylist = libraryViewModel::removeSongFromPlaylist,
                     onClearListeningHistory = libraryViewModel::clearListeningHistory,
                 ),
@@ -713,6 +725,13 @@ private fun audioPermission(): String = if (Build.VERSION.SDK_INT >= Build.VERSI
     Manifest.permission.READ_MEDIA_AUDIO
 } else {
     Manifest.permission.READ_EXTERNAL_STORAGE
+}
+
+private const val PLAYLIST_PIN_PREFERENCES = "wavv.playlists"
+private const val PLAYLIST_PIN_IDS = "pinned_ids"
+
+private fun reportQueueAction(result: QueueActionResult, showMessage: (String) -> Unit) {
+    queueActionMessage(result)?.let(showMessage)
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -765,10 +784,10 @@ internal data class WavvContentActions(
     val onRemoveAutoplaySong: (Song) -> Unit,
     val onMoveAutoplayItem: (Int, Int) -> Unit,
     val onSetAutoplayEnabled: (Boolean) -> Unit,
-    val onCreatePlaylist: (String, Long?) -> Unit,
-    val onRenamePlaylist: (Long, String) -> Unit,
-    val onDeletePlaylist: (Long) -> Unit,
-    val onAddSongToPlaylist: (Long, Long) -> Unit,
+    val onCreatePlaylist: (String, Long?, (Boolean) -> Unit) -> Unit,
+    val onRenamePlaylist: (Long, String, (Boolean) -> Unit) -> Unit,
+    val onDeletePlaylist: (Long, (Boolean) -> Unit) -> Unit,
+    val onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     val onRemoveSongFromPlaylist: (Long, Long) -> Unit,
     val onClearListeningHistory: () -> Unit,
 )
@@ -787,6 +806,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val searchResults = (libraryState as? LibraryUiState.Ready)?.searchResults
     val semanticLoading = (libraryState as? LibraryUiState.Ready)?.semanticLoading == true
     val semanticSearchComplete = (libraryState as? LibraryUiState.Ready)?.semanticSearchComplete == true
+    val searchError = (libraryState as? LibraryUiState.Ready)?.searchError
+    val searchNotice = (libraryState as? LibraryUiState.Ready)?.searchNotice
     val analysisProgress = (libraryState as? LibraryUiState.Ready)?.analysisProgress
     val onSearch = actions.onSearch
     val onChooseAllDevice = actions.onChooseAllDevice
@@ -872,6 +893,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         homeStatusChipLabels(statusPlaybackState, connectedSpeakerName, bluetoothCodec, bluetoothOutput.notice)
     }
     val hostActivity = remember(context) { context.findActivity() }
+    val playlistPinPreferences = remember(context) {
+        context.getSharedPreferences(PLAYLIST_PIN_PREFERENCES, Context.MODE_PRIVATE)
+    }
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
     var showStandby by rememberSaveable { mutableStateOf(false) }
@@ -889,7 +913,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val libraryDestination = libraryNavigation.destination
     var libraryHistoryVisible by rememberSaveable { mutableStateOf(false) }
     var libraryLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
-    var pinnedPlaylistIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+    var pinnedPlaylistIds by remember(playlistPinPreferences) {
+        mutableStateOf(decodePlaylistPinIds(playlistPinPreferences.getStringSet(PLAYLIST_PIN_IDS, emptySet()).orEmpty()))
+    }
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
     var createPlaylistName by rememberSaveable { mutableStateOf("") }
     var createPlaylistSongId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -1198,6 +1224,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         searchResults = searchResults,
                         semanticLoading = semanticLoading,
                         semanticSearchComplete = semanticSearchComplete,
+                        searchError = searchError,
+                        searchNotice = searchNotice,
                         onQueryChange = onSearch,
                         onPlay = startPlayback,
                         hasNowPlaying = activeSong != null,
@@ -1225,7 +1253,12 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             }
                         },
                         onSetFavorites = onSetFavorites,
-                        onTogglePin = { id -> pinnedPlaylistIds = if (id in pinnedPlaylistIds) pinnedPlaylistIds - id else pinnedPlaylistIds + id },
+                        onTogglePin = { id ->
+                            pinnedPlaylistIds = if (id in pinnedPlaylistIds) pinnedPlaylistIds - id else pinnedPlaylistIds + id
+                            playlistPinPreferences.edit()
+                                .putStringSet(PLAYLIST_PIN_IDS, encodePlaylistPinIds(pinnedPlaylistIds))
+                                .apply()
+                        },
                         onRequestCreatePlaylist = { songId -> createPlaylistSongId = songId; createPlaylistName = ""; showCreatePlaylist = true },
                         onRequestRenamePlaylist = { playlist -> renamePlaylist = playlist; renamePlaylistName = playlist.name },
                         onRequestDeletePlaylist = { deletePlaylist = it },
@@ -1244,6 +1277,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         onChooseAllDevice = onChooseAllDevice,
                         onClearListeningHistory = onClearListeningHistory,
                         standbyEnabled = StandbyPreference.isEnabled(context),
+                        activeTrackId = playbackState.song?.id,
                     )
                 }
             }
@@ -1424,8 +1458,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     TextButton(
                         enabled = createPlaylistName.isNotBlank(),
                         onClick = {
-                            onCreatePlaylist(createPlaylistName, createPlaylistSongId)
-                            showCreatePlaylist = false
+                            onCreatePlaylist(createPlaylistName, createPlaylistSongId) { success ->
+                                if (success) showCreatePlaylist = false
+                            }
                         },
                     ) { Text("Create") }
                 },
@@ -1447,7 +1482,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 confirmButton = {
                     TextButton(
                         enabled = renamePlaylistName.isNotBlank(),
-                        onClick = { onRenamePlaylist(playlist.id, renamePlaylistName); renamePlaylist = null },
+                        onClick = {
+                            onRenamePlaylist(playlist.id, renamePlaylistName) { success ->
+                                if (success) renamePlaylist = null
+                            }
+                        },
                     ) { Text("Save") }
                 },
                 dismissButton = { TextButton(onClick = { renamePlaylist = null }) { Text("Cancel") } },
@@ -1458,7 +1497,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 onDismissRequest = { deletePlaylist = null },
                 title = { Text("Delete playlist?") },
                 text = { Text("${playlist.name} will be removed. Songs in your library won't be deleted.") },
-                confirmButton = { TextButton(onClick = { onDeletePlaylist(playlist.id); deletePlaylist = null }) { Text("Delete") } },
+                confirmButton = {
+                    TextButton(onClick = {
+                        onDeletePlaylist(playlist.id) { success -> if (success) deletePlaylist = null }
+                    }) { Text("Delete") }
+                },
                 dismissButton = { TextButton(onClick = { deletePlaylist = null }) { Text("Cancel") } },
             )
         }
@@ -2365,7 +2408,7 @@ private fun FullPlayer(
     onSetAutoplayEnabled: (Boolean) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
     onMoveQueueItem: (Int, Int) -> Unit,
-    onAddSongToPlaylist: (Long, Long) -> Unit,
+    onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     onCreatePlaylist: (Long) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
@@ -2652,7 +2695,11 @@ private fun FullPlayer(
                     else Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                         playlists.forEach { playlist ->
                             TextButton(
-                                onClick = { onAddSongToPlaylist(playlist.id, selectedSong.id); playlistSong = null },
+                                onClick = {
+                                    onAddSongToPlaylist(playlist.id, listOf(selectedSong.id)) { success ->
+                                        if (success) playlistSong = null
+                                    }
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text(playlist.name, Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Start) }
                         }
@@ -3309,7 +3356,7 @@ private fun QueuePanel(
     onPlayNextFromAutoplay: (Song) -> Unit,
     onAddAutoplayToQueue: (Song) -> Unit,
     onRemoveAutoplaySong: (Song) -> Unit,
-    onAddSongToPlaylist: (Long, Long) -> Unit,
+    onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     onCreatePlaylist: (Long) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
@@ -3930,7 +3977,11 @@ private fun QueuePanel(
                     Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                         playlists.forEach { playlist ->
                             TextButton(
-                                onClick = { onAddSongToPlaylist(playlist.id, selectedSong.id); playlistSong = null },
+                                onClick = {
+                                    onAddSongToPlaylist(playlist.id, listOf(selectedSong.id)) { success ->
+                                        if (success) playlistSong = null
+                                    }
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text(playlist.name, Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Start) }
                         }

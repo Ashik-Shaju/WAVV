@@ -161,20 +161,23 @@ internal suspend fun indexMusicUnderstandingSongs(
     onProgress(0, songs.size)
     currentCoroutineContext().ensureActive()
     if (songs.isEmpty()) return AnalysisIndexResult()
-    val bundleAvailable = try {
-        context.assets.open("music-understanding/v1/manifest.json").use { true }
+    val modelId = try {
+        MusicUnderstandingBundle.readModelId(context)
     } catch (_: IOException) {
-        false
-    }
-    if (!bundleAvailable) {
         return AnalysisIndexResult(unavailableMessage = "The bundled music-understanding model is missing.")
     }
+    val cachedBySongId = store.getMusicUnderstandingIndexStates().associateBy(MusicUnderstandingIndexState::songId)
+    if (songs.none { song -> cachedBySongId[song.id]?.isCurrent(song, modelId) != true }) {
+        onProgress(songs.size, songs.size)
+        return AnalysisIndexResult()
+    }
     var failedOperations = 0
+    var updatedResults = 0
     MusicUnderstandingModel(context).use { model ->
+        check(model.modelId == modelId) { "Music-understanding model changed during indexing" }
         songs.forEachIndexed { index, song ->
             currentCoroutineContext().ensureActive()
-            val cached = store.getMusicUnderstanding(song.id)
-            if (cached?.isCurrent(song, model.modelId) == true) {
+            if (cachedBySongId[song.id]?.isCurrent(song, modelId) == true) {
                 onProgress(index + 1, songs.size)
                 return@forEachIndexed
             }
@@ -192,14 +195,14 @@ internal suspend fun indexMusicUnderstandingSongs(
                 )
             }
             if (failure is IOException) throw failure
-            if (failure != null) failedOperations += 1
+            if (failure != null) failedOperations += 1 else updatedResults += 1
             onProgress(index + 1, songs.size)
         }
     }
-    return AnalysisIndexResult(failedOperations = failedOperations)
+    return AnalysisIndexResult(failedOperations = failedOperations, updatedResults = updatedResults)
 }
 
-private fun MusicUnderstandingResultEntity.isCurrent(song: Song, modelId: String): Boolean =
+internal fun MusicUnderstandingIndexState.isCurrent(song: Song, modelId: String): Boolean =
     this.modelId == modelId &&
         sourceFingerprintMatches(sourceSizeBytes, sourceModifiedAt, song.fileSizeBytes, song.modifiedAt)
 
@@ -240,13 +243,12 @@ private class MusicUnderstandingBundle(
         private const val ASSET_ROOT = "music-understanding/v1"
         private const val MUSIC_MEL_FLOATS = 128 * 513
 
+        fun readModelId(context: Context): String = modelId(readManifest(context))
+
         @Synchronized
         fun install(context: Context): MusicUnderstandingBundle {
-            val manifest = JSONObject(context.assets.open("$ASSET_ROOT/manifest.json").bufferedReader().use { it.readText() })
-            require(manifest.getInt("formatVersion") == 1)
-            require(manifest.getInt("contractVersion") == MUSIC_UNDERSTANDING_CONTRACT_VERSION)
-            val modelId = manifest.getString("modelId")
-            require(modelId.startsWith("wavv-dymn04as-"))
+            val manifest = readManifest(context)
+            val modelId = modelId(manifest)
             val root = File(context.filesDir, "music-understanding/v1").apply { mkdirs() }
             val files = manifest.getJSONObject("files")
             val backbone = installVerified(context, root, "backbone.onnx", files)
@@ -276,6 +278,15 @@ private class MusicUnderstandingBundle(
             }
             require(heads.size == 16 && heads.none { it.task == "instrument:electricguitar" })
             return MusicUnderstandingBundle(context, modelId, backbone, mel, featureMean, featureScale, heads)
+        }
+
+        private fun readManifest(context: Context) =
+            JSONObject(context.assets.open("$ASSET_ROOT/manifest.json").bufferedReader().use { it.readText() })
+
+        private fun modelId(manifest: JSONObject): String {
+            require(manifest.getInt("formatVersion") == 1)
+            require(manifest.getInt("contractVersion") == MUSIC_UNDERSTANDING_CONTRACT_VERSION)
+            return manifest.getString("modelId").also { require(it.startsWith("wavv-dymn04as-")) }
         }
 
         private fun installVerified(context: Context, root: File, name: String, files: JSONObject): File {

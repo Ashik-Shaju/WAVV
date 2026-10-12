@@ -38,6 +38,28 @@ data class PlaybackState(
 
 data class PlaybackProgress(val positionMs: Long = 0L, val durationMs: Long = 0L)
 
+internal enum class NextPlaybackAction { Queue, Autoplay, None }
+
+internal fun nextPlaybackAction(
+    hasNextInQueue: Boolean,
+    autoplayEnabled: Boolean,
+    hasAutoplayCandidate: Boolean,
+): NextPlaybackAction = when {
+    hasNextInQueue -> NextPlaybackAction.Queue
+    autoplayEnabled && hasAutoplayCandidate -> NextPlaybackAction.Autoplay
+    else -> NextPlaybackAction.None
+}
+
+internal enum class QueueActionResult { Added, AlreadyPlaying, AlreadyNext, AlreadyQueued, Unavailable }
+
+internal fun queueActionMessage(result: QueueActionResult): String? = when (result) {
+    QueueActionResult.Added -> null
+    QueueActionResult.AlreadyPlaying -> "This track is already playing."
+    QueueActionResult.AlreadyNext -> "This track is already next."
+    QueueActionResult.AlreadyQueued -> "This track is already in the queue."
+    QueueActionResult.Unavailable -> "Playback isn't ready yet. Try again."
+}
+
 class PlaybackController(context: Context) {
     private data class PendingPlay(
         val song: Song,
@@ -269,7 +291,12 @@ class PlaybackController(context: Context) {
     }
 
     fun next() {
-        controller?.takeIf { it.hasNextMediaItem() }?.seekToNextMediaItem()
+        val player = controller ?: return
+        when (nextPlaybackAction(player.hasNextMediaItem(), _state.value.autoplayEnabled, autoplayCandidates.isNotEmpty())) {
+            NextPlaybackAction.Queue -> player.seekToNextMediaItem()
+            NextPlaybackAction.Autoplay -> advanceToAutoplayIfNeeded()
+            NextPlaybackAction.None -> Unit
+        }
     }
 
     fun previous() {
@@ -283,18 +310,25 @@ class PlaybackController(context: Context) {
         }
     }
 
-    fun playNext(song: Song, fromAutoplay: Boolean = false) {
-        val player = controller ?: return
-        val currentId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return
-        if (song.id == currentId) return
-        val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
-        if (cameFromAutoplay) removeAutoplayCandidate(song.id)
-        val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
-        if (existing != null) player.removeMediaItem(existing)
+    internal fun playNext(song: Song, fromAutoplay: Boolean = false): QueueActionResult {
+        val player = controller ?: return QueueActionResult.Unavailable
+        val currentId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return QueueActionResult.Unavailable
+        if (song.id == currentId) return QueueActionResult.AlreadyPlaying
         val currentIndex = (0 until player.mediaItemCount).firstOrNull {
             player.getMediaItemAt(it).mediaId.toLongOrNull() == currentId
-        } ?: return
-        val insertionIndex = (currentIndex + 1).coerceAtMost(player.mediaItemCount)
+        } ?: return QueueActionResult.Unavailable
+        val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
+        val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
+        if (existing == currentIndex + 1) {
+            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+            return QueueActionResult.AlreadyNext
+        }
+        if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+        if (existing != null) player.removeMediaItem(existing)
+        val updatedCurrentIndex = (0 until player.mediaItemCount).firstOrNull {
+            player.getMediaItemAt(it).mediaId.toLongOrNull() == currentId
+        } ?: return QueueActionResult.Unavailable
+        val insertionIndex = (updatedCurrentIndex + 1).coerceAtMost(player.mediaItemCount)
         player.addMediaItem(insertionIndex, mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
         val managed = managedQueue.filterNot { it.id == song.id }.toMutableList()
         val managedCurrentIndex = managed.indexOfFirst { it.id == currentId }
@@ -302,17 +336,27 @@ class PlaybackController(context: Context) {
         managedQueue = managed
         lastShuffleOrder = null
         syncQueue(player)
+        return QueueActionResult.Added
     }
 
-    fun addToQueue(song: Song, fromAutoplay: Boolean = false) {
-        val player = controller ?: return
-        if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) return
+    internal fun addToQueue(song: Song, fromAutoplay: Boolean = false): QueueActionResult {
+        val player = controller ?: return QueueActionResult.Unavailable
+        val currentId = player.currentMediaItem?.mediaId?.toLongOrNull()
         val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
+        if (currentId == song.id) {
+            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+            return QueueActionResult.AlreadyPlaying
+        }
+        if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) {
+            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+            return QueueActionResult.AlreadyQueued
+        }
         if (cameFromAutoplay) removeAutoplayCandidate(song.id)
         player.addMediaItem(mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
         managedQueue = managedQueue + song
         lastShuffleOrder = null
         syncQueue(player)
+        return QueueActionResult.Added
     }
 
     fun playQueueSong(song: Song) {

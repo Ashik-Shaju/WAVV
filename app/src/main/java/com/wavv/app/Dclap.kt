@@ -615,14 +615,19 @@ internal suspend fun indexDclapSongs(
     val songs = store.getSongs()
     onProgress(0, songs.size)
     if (songs.isEmpty()) return AnalysisIndexResult()
+    val cachedBySongId = store.getEmbeddingIndexStates().associateBy(SongEmbeddingIndexState::songId)
+    if (songs.none { song -> cachedBySongId[song.id]?.isCurrent(song) != true }) {
+        onProgress(songs.size, songs.size)
+        return AnalysisIndexResult()
+    }
     val models = DclapModelInstaller.install(context)
     val workerContext = currentCoroutineContext()
     var failedOperations = 0
+    var updatedResults = 0
     DclapAudioEncoder(models.audio).use { encoder ->
         songs.forEachIndexed { index, song ->
             workerContext.ensureActive()
-            val cached = store.getEmbedding(song.id)
-            if (cached?.isCurrent(song) == true) {
+            if (cachedBySongId[song.id]?.isCurrent(song) == true) {
                 onProgress(index + 1, songs.size)
                 return@forEachIndexed
             }
@@ -643,14 +648,14 @@ internal suspend fun indexDclapSongs(
                 )
             }
             if (failure is IOException) throw failure
-            if (failure != null) failedOperations += 1
+            if (failure != null) failedOperations += 1 else updatedResults += 1
             onProgress(index + 1, songs.size)
         }
     }
-    return AnalysisIndexResult(failedOperations = failedOperations)
+    return AnalysisIndexResult(failedOperations = failedOperations, updatedResults = updatedResults)
 }
 
-private fun SongEmbeddingEntity.isCurrent(song: Song): Boolean =
+internal fun SongEmbeddingIndexState.isCurrent(song: Song): Boolean =
     modelId == DCLAP_MODEL_ID &&
         sourceFingerprintMatches(sourceSizeBytes, sourceModifiedAt, song.fileSizeBytes, song.modifiedAt) &&
         dimension == 512 && dtype == "float32" && normalized

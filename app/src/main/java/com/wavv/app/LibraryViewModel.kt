@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -34,6 +37,8 @@ sealed interface LibraryUiState {
         val searchResults: List<Song>? = null,
         val semanticLoading: Boolean = false,
         val semanticSearchComplete: Boolean = false,
+        val searchError: String? = null,
+        val searchNotice: String? = null,
         val indexingError: String? = null,
         val analysisProgress: MusicAnalysisProgress? = null,
         val personalizedRecommendations: List<Song> = emptyList(),
@@ -55,6 +60,8 @@ class LibraryViewModel(
     private val _source = MutableStateFlow(sourceStore.read())
     val source: StateFlow<LibrarySource?> = _source.asStateFlow()
     private val favoriteIds = MutableStateFlow<Set<Long>>(emptySet())
+    private val actionFeedbackChannel = Channel<String>(Channel.BUFFERED)
+    val actionFeedback: Flow<String> = actionFeedbackChannel.receiveAsFlow()
 
     private val sessionId = WavvSession.id
     private var loadJob: Job? = null
@@ -128,7 +135,8 @@ class LibraryViewModel(
                 if (!isCurrentSource(selectedSource)) return@launch
                 when (workInfo?.state) {
                     WorkInfo.State.SUCCEEDED -> {
-                        publishReady()
+                        val catalogChanged = workInfo.outputData.getBoolean(LibraryIndexWorker.KEY_CATALOG_CHANGED, true)
+                        if (!hasIndexedCatalog || catalogChanged) publishReady(startDiscovery = false)
                         val analysisWorkId = dclapScheduler.enqueue()
                         val analysisInfo = dclapScheduler.observe(analysisWorkId)
                             .onEach { info ->
@@ -142,15 +150,27 @@ class LibraryViewModel(
                             }
                             .first { it?.state?.isFinished == true }
                         if (!isCurrentSource(selectedSource)) return@launch
-                        when (analysisInfo?.state) {
-                            WorkInfo.State.FAILED -> publishIndexError(
-                                analysisInfo.outputData.getString(DclapIndexWorker.KEY_ERROR)
-                                    ?: "Music analysis could not be completed",
+                        val analysisResultsChanged = when (analysisInfo?.state) {
+                            WorkInfo.State.SUCCEEDED -> analysisInfo.outputData.getBoolean(
+                                DclapIndexWorker.KEY_RESULTS_CHANGED,
+                                true,
                             )
-                            WorkInfo.State.CANCELLED -> publishIndexError("Music analysis was canceled")
-                            else -> Unit
+                            WorkInfo.State.FAILED -> {
+                                publishIndexError(
+                                    analysisInfo.outputData.getString(DclapIndexWorker.KEY_ERROR)
+                                        ?: "Music analysis could not be completed",
+                                )
+                                analysisInfo.outputData.getBoolean(DclapIndexWorker.KEY_RESULTS_CHANGED, true)
+                            }
+                            WorkInfo.State.CANCELLED -> {
+                                publishIndexError("Music analysis was canceled")
+                                true
+                            }
+                            else -> true
                         }
-                        observeDiscovery((state.value as? LibraryUiState.Ready)?.songs.orEmpty())
+                        if (!hasIndexedCatalog || catalogChanged || analysisResultsChanged) {
+                            observeDiscovery((state.value as? LibraryUiState.Ready)?.songs.orEmpty())
+                        }
                     }
                     WorkInfo.State.FAILED -> publishIndexError(
                         workInfo.outputData.getString(LibraryIndexWorker.KEY_ERROR) ?: "Could not refresh the music library",
@@ -173,7 +193,7 @@ class LibraryViewModel(
         }
     }
 
-    private suspend fun publishReady() {
+    private suspend fun publishReady(startDiscovery: Boolean = true) {
         libraryStore.pruneListeningHistory()
         val songs = libraryStore.getSongs()
         val currentFavorites = libraryStore.getFavoriteIds()
@@ -185,7 +205,12 @@ class LibraryViewModel(
             playbackHistory = libraryStore.getPlaybackHistory(),
             playlists = libraryStore.getPlaylists(),
         )
-        observeDiscovery(songs)
+        if (startDiscovery) {
+            observeDiscovery(songs)
+        } else {
+            discoveryJob?.cancel()
+            discoveryJob = null
+        }
     }
 
     private fun observeDiscovery(songs: List<Song>) {
@@ -225,7 +250,9 @@ class LibraryViewModel(
     }
 
     private suspend fun refreshPlaylists() {
-        val playlists = libraryStore.getPlaylists()
+        val playlists = runStoreAction("Couldn't refresh playlists. Reopen Library to try again.") {
+            libraryStore.getPlaylists()
+        } ?: return
         _state.update { state -> if (state is LibraryUiState.Ready) state.copy(playlists = playlists) else state }
     }
 
@@ -244,7 +271,13 @@ class LibraryViewModel(
         if (query.isBlank()) {
             _state.update { state ->
                 if (state is LibraryUiState.Ready) {
-                    state.copy(searchResults = null, semanticLoading = false, semanticSearchComplete = false)
+                    state.copy(
+                        searchResults = null,
+                        semanticLoading = false,
+                        semanticSearchComplete = false,
+                        searchError = null,
+                        searchNotice = null,
+                    )
                 } else state
             }
             return
@@ -252,7 +285,13 @@ class LibraryViewModel(
         val songs = (state.value as? LibraryUiState.Ready)?.songs ?: return
         _state.update { state ->
             if (state is LibraryUiState.Ready) {
-                state.copy(searchResults = emptyList(), semanticLoading = true, semanticSearchComplete = false)
+                state.copy(
+                    searchResults = emptyList(),
+                    semanticLoading = true,
+                    semanticSearchComplete = false,
+                    searchError = null,
+                    searchNotice = null,
+                )
             } else state
         }
         searchJob = viewModelScope.launch {
@@ -277,11 +316,13 @@ class LibraryViewModel(
                 _state.update { current ->
                     if (current is LibraryUiState.Ready) current.copy(songs = searchableSongs) else current
                 }
+                var semanticSearchFailed = false
                 val semanticMatches = if (intent.semanticText.isBlank()) emptyList() else try {
                     withContext(Dispatchers.IO) { textSearch.search(intent.semanticText, searchableSongs, libraryStore) }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (_: Exception) {
+                    semanticSearchFailed = true
                     emptyList()
                 }
                 val results = withContext(Dispatchers.Default) {
@@ -293,6 +334,12 @@ class LibraryViewModel(
                             searchResults = results,
                             semanticLoading = false,
                             semanticSearchComplete = intent.semanticText.isNotBlank() && semanticMatches.isNotEmpty(),
+                            searchError = null,
+                            searchNotice = if (semanticSearchFailed) {
+                                "Semantic matching is unavailable; showing local metadata results."
+                            } else {
+                                null
+                            },
                         )
                     } else state
                 }
@@ -300,16 +347,23 @@ class LibraryViewModel(
                 throw error
             } catch (_: Exception) {
                 _state.update { state ->
-                    if (state is LibraryUiState.Ready) state.copy(semanticLoading = false) else state
+                    if (state is LibraryUiState.Ready) state.copy(
+                        searchResults = emptyList(),
+                        semanticLoading = false,
+                        searchError = "Search couldn't be completed. Try again.",
+                        searchNotice = null,
+                    ) else state
                 }
             }
         }
     }
 
     fun toggleFavorite(songId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.toggleFavorite(songId, sessionId)
-            val ids = libraryStore.getFavoriteIds()
+        viewModelScope.launch {
+            val ids = runStoreAction("Couldn't update this favorite. Try again.") {
+                libraryStore.toggleFavorite(songId, sessionId)
+                libraryStore.getFavoriteIds()
+            } ?: return@launch
             favoriteIds.value = ids
             _state.update { state ->
                 if (state is LibraryUiState.Ready) state.copy(favoriteIds = ids) else state
@@ -319,9 +373,11 @@ class LibraryViewModel(
 
     fun setFavorites(songIds: Set<Long>, favorite: Boolean) {
         if (songIds.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.setFavorites(songIds, favorite, sessionId)
-            val ids = libraryStore.getFavoriteIds()
+        viewModelScope.launch {
+            val ids = runStoreAction("Couldn't update favorites. Try again.") {
+                libraryStore.setFavorites(songIds, favorite, sessionId)
+                libraryStore.getFavoriteIds()
+            } ?: return@launch
             favoriteIds.value = ids
             _state.update { state ->
                 if (state is LibraryUiState.Ready) state.copy(favoriteIds = ids) else state
@@ -330,65 +386,110 @@ class LibraryViewModel(
     }
 
     fun clearListeningHistory() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                libraryStore.clearListeningHistory()
-                _state.update { current ->
-                    if (current is LibraryUiState.Ready) current.copy(
-                        recentlyPlayed = emptyList(),
-                        playbackHistory = emptyList(),
-                    ) else current
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                publishIndexError(error.message ?: "Couldn't clear listening history")
+        viewModelScope.launch {
+            if (runStoreAction("Couldn't clear listening history. Try again.") {
+                    libraryStore.clearListeningHistory()
+                } == null
+            ) return@launch
+            _state.update { current ->
+                if (current is LibraryUiState.Ready) current.copy(
+                    recentlyPlayed = emptyList(),
+                    playbackHistory = emptyList(),
+                ) else current
             }
         }
     }
 
-    fun createPlaylist(name: String, onCreated: (Long) -> Unit = {}) {
-        if (name.isBlank()) return
+    fun createPlaylist(name: String, songId: Long? = null, onComplete: (Boolean) -> Unit = {}) {
+        if (name.isBlank()) {
+            actionFeedbackChannel.trySend("Enter a playlist name.")
+            onComplete(false)
+            return
+        }
         viewModelScope.launch {
-            val id = withContext(Dispatchers.IO) { libraryStore.createPlaylist(name) }
-            val playlists = withContext(Dispatchers.IO) { libraryStore.getPlaylists() }
-            _state.update { state -> if (state is LibraryUiState.Ready) state.copy(playlists = playlists) else state }
-            onCreated(id)
+            val id = runStoreAction("Couldn't create the playlist. Try again.") {
+                libraryStore.createPlaylist(name, songId)
+            }
+            if (id == null) {
+                onComplete(false)
+                return@launch
+            }
+            refreshPlaylists()
+            onComplete(true)
         }
     }
 
-    fun renamePlaylist(playlistId: Long, name: String) {
-        if (name.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.renamePlaylist(playlistId, name)
+    fun renamePlaylist(playlistId: Long, name: String, onComplete: (Boolean) -> Unit = {}) {
+        if (name.isBlank()) {
+            actionFeedbackChannel.trySend("Enter a playlist name.")
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch {
+            if (runStoreAction("Couldn't rename the playlist. Try again.") {
+                libraryStore.renamePlaylist(playlistId, name)
+            } == null) {
+                onComplete(false)
+                return@launch
+            }
             refreshPlaylists()
+            onComplete(true)
         }
     }
 
-    fun deletePlaylist(playlistId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.deletePlaylist(playlistId)
+    fun deletePlaylist(playlistId: Long, onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            if (runStoreAction("Couldn't delete the playlist. Try again.") {
+                libraryStore.deletePlaylist(playlistId)
+            } == null) {
+                onComplete(false)
+                return@launch
+            }
             refreshPlaylists()
+            onComplete(true)
         }
     }
 
-    fun addSongToPlaylist(playlistId: Long, songId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.addToPlaylist(playlistId, songId)
+    fun addSongsToPlaylist(playlistId: Long, songIds: List<Long>, onComplete: (Boolean) -> Unit = {}) {
+        if (songIds.isEmpty()) {
+            onComplete(true)
+            return
+        }
+        viewModelScope.launch {
+            if (runStoreAction("Couldn't add tracks to the playlist. Try again.") {
+                libraryStore.addSongsToPlaylist(playlistId, songIds)
+            } == null) {
+                onComplete(false)
+                return@launch
+            }
             refreshPlaylists()
+            onComplete(true)
         }
     }
 
     fun removeSongFromPlaylist(playlistId: Long, songId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            libraryStore.removeFromPlaylist(playlistId, songId)
+        viewModelScope.launch {
+            if (runStoreAction("Couldn't remove the song from the playlist. Try again.") {
+                    libraryStore.removeFromPlaylist(playlistId, songId)
+                } == null
+            ) return@launch
             refreshPlaylists()
         }
+    }
+
+    private suspend fun <T> runStoreAction(message: String, action: suspend () -> T): T? = try {
+        withContext(Dispatchers.IO) { action() }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        actionFeedbackChannel.trySend(message)
+        null
     }
 
     override fun onCleared() {
         searchJob?.cancel()
         discoveryJob?.cancel()
+        actionFeedbackChannel.close()
         textSearch.close()
         super.onCleared()
     }

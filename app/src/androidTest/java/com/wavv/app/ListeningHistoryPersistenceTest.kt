@@ -91,6 +91,26 @@ class ListeningHistoryPersistenceTest {
         }
     }
 
+    @Test
+    fun addingTracksToPlaylistIsDeduplicatedAndRecordedAsOneBatch() = runBlocking {
+        val database = inMemoryDatabase()
+        try {
+            val store = LibraryStore(database)
+            val songs = (1L..3L).map { song("content://wavv/batch-$it", it) }
+            store.replaceSongs(songs)
+            val playlistId = store.createPlaylist("Batch")
+            store.addToPlaylist(playlistId, songs.first().id)
+
+            store.addSongsToPlaylist(playlistId, listOf(songs[1].id, songs[1].id, songs[2].id))
+
+            assertEquals(songs.map(Song::id), store.getPlaylists().single().songIds)
+            val addEvents = store.observeDiscoveryEvents(0L).first().filter { it.eventType == "playlist_add" }
+            assertEquals(setOf(songs[0].id, songs[1].id, songs[2].id), addEvents.map(LocalListeningEvent::songId).toSet())
+        } finally {
+            database.close()
+        }
+    }
+
     private fun inMemoryDatabase() = Room.inMemoryDatabaseBuilder(context, WavvDatabase::class.java)
         .allowMainThreadQueries()
         .build()
