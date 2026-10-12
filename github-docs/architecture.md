@@ -58,3 +58,5 @@ An absent field remains absent. Similarity is relevance, not a verified genre, m
 The UI sends queue and transport actions through `PlaybackController`, a Media3 `MediaController` client. `PlaybackService` owns ExoPlayer and its `MediaSession`; this separates playback lifetime from the screen that initiated it. The service records playback feedback after player state confirms it. Android's codecs and audio-routing stack determine which formats and routes work on a particular device.
 
 See [Playback](playback.md) for queue behavior and device-dependent support. These responsibilities describe source code, not a claim of universal device validation.
+
+When the user enables UHQ AAC, `PlaybackService` queues a separate `UHQEnhancementWorker` for supported AAC. The source keeps playing while the worker writes a cached PCM WAV; the service switches to that file at the current position after success and falls back to the source on failure. This playback path does not add catalog tags or embeddings.

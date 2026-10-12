@@ -4,14 +4,18 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint as AndroidPaint
+import android.graphics.Path as AndroidPath
 import android.graphics.Rect as AndroidRect
 import android.graphics.RenderEffect as AndroidRenderEffect
 import android.graphics.Shader as AndroidShader
 import android.graphics.PorterDuff
 import android.os.Build
 import android.view.View
+import android.graphics.RenderNode as AndroidRenderNode
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
@@ -21,9 +25,19 @@ import kotlin.math.roundToInt
 internal val HomeFrostedGlass = Color(0x761E2024)
 internal val HomeFrostedFill = Color(0x3D282930)
 internal val HomeFrostedBorder = Color.White.copy(alpha = .12f)
+internal fun Modifier.staticGlassFill(tint: Color) = background(
+    Brush.verticalGradient(listOf(Color.White.copy(alpha = .075f), tint, Color.Black.copy(alpha = .18f))),
+)
+
+private const val BACKDROP_FRAME_SCALE = .30f
 internal object FrostedBackdropFrames {
-    private const val FRAME_SCALE = .30f
+    private const val CAPTURE_PADDING_DP = 60f
     private val bitmapCanvas = AndroidCanvas()
+    private val capturePath = AndroidPath()
+    private val rootLocation = IntArray(2)
+    private val surfaceLocation = IntArray(2)
+    private val sourceRect = AndroidRect()
+    private val destinationRect = AndroidRect()
     private val captureInProgress = AtomicBoolean(false)
     private val surfaces = linkedMapOf<FrostedBackdropView, AtomicBoolean>()
     private var frameRoot: View? = null
@@ -93,8 +107,8 @@ internal object FrostedBackdropFrames {
             return
         }
 
-        val bitmapWidth = (root.width * FRAME_SCALE).roundToInt().coerceAtLeast(1)
-        val bitmapHeight = (root.height * FRAME_SCALE).roundToInt().coerceAtLeast(1)
+        val bitmapWidth = (root.width * BACKDROP_FRAME_SCALE).roundToInt().coerceAtLeast(1)
+        val bitmapHeight = (root.height * BACKDROP_FRAME_SCALE).roundToInt().coerceAtLeast(1)
         if (frameRoot !== root || frame?.width != bitmapWidth || frame?.height != bitmapHeight) {
             frame?.recycle()
             captureBuffer?.recycle()
@@ -107,12 +121,34 @@ internal object FrostedBackdropFrames {
             captureInProgress.set(false)
             return
         }
-        target.eraseColor(android.graphics.Color.rgb(10, 10, 10))
         bitmapCanvas.setBitmap(target)
         bitmapCanvas.save()
-        bitmapCanvas.scale(FRAME_SCALE, FRAME_SCALE)
+        bitmapCanvas.scale(BACKDROP_FRAME_SCALE, BACKDROP_FRAME_SCALE)
         surfaces.values.forEach { it.set(true) }
         try {
+            // Only rasterize areas sampled by active glass surfaces. The margin preserves
+            // upstream artwork blur when the clipped root is rendered into this bitmap.
+            // shortcut: 60dp covers current backdrop blurs; increase it if a larger one is added.
+            root.getLocationInWindow(rootLocation)
+            val padding = (CAPTURE_PADDING_DP * root.resources.displayMetrics.density).roundToInt()
+            capturePath.reset()
+            surfaces.keys.forEach { surface ->
+                if (surface.isAttachedToWindow && surface.shouldRefreshBackdrop() &&
+                    surface.findComposeRoot() === root && surface.width > 0 && surface.height > 0
+                ) {
+                    surface.getLocationInWindow(surfaceLocation)
+                    val left = (surfaceLocation[0] - rootLocation[0] - padding).coerceAtLeast(0)
+                    val top = (surfaceLocation[1] - rootLocation[1] - padding).coerceAtLeast(0)
+                    val right = (surfaceLocation[0] - rootLocation[0] + surface.width + padding).coerceAtMost(root.width)
+                    val bottom = (surfaceLocation[1] - rootLocation[1] + surface.height + padding).coerceAtMost(root.height)
+                    if (right > left && bottom > top) {
+                        capturePath.addRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), AndroidPath.Direction.CW)
+                    }
+                }
+            }
+            if (capturePath.isEmpty) return
+            bitmapCanvas.clipPath(capturePath)
+            bitmapCanvas.drawColor(android.graphics.Color.rgb(10, 10, 10), PorterDuff.Mode.SRC)
             root.draw(bitmapCanvas)
             val previous = frame
             frame = target
@@ -130,31 +166,40 @@ internal object FrostedBackdropFrames {
         // per-frame allocations, or a redraw cascade at the end of a fling.
         surfaces.keys.forEach { surface ->
             if (surface.isAttachedToWindow && surface.shouldRefreshBackdrop() &&
-                surface.updateBackdropPixels(target, root, FRAME_SCALE)
+                surface.updateBackdropPixels(target, root, BACKDROP_FRAME_SCALE)
             ) surface.invalidate()
         }
     }
 
-    fun drawFrame(view: FrostedBackdropView, canvas: AndroidCanvas, paint: AndroidPaint): Boolean {
+    fun drawFrame(
+        view: FrostedBackdropView,
+        canvas: AndroidCanvas,
+        paint: AndroidPaint,
+        destinationScale: Float = 1f,
+    ): Boolean {
         if (captureInProgress.get() && !canvas.isHardwareAccelerated) return false
         val currentFrame = frame ?: return false
         val root = frameRoot ?: return false
         if (view.findComposeRoot() !== root || view.width <= 0 || view.height <= 0) return false
 
-        val rootLocation = IntArray(2)
-        val surfaceLocation = IntArray(2)
         root.getLocationInWindow(rootLocation)
         view.getLocationInWindow(surfaceLocation)
-        val left = ((surfaceLocation[0] - rootLocation[0]) * FRAME_SCALE).toInt().coerceAtLeast(0)
-        val top = ((surfaceLocation[1] - rootLocation[1]) * FRAME_SCALE).toInt().coerceAtLeast(0)
-        val source = AndroidRect(
+        val left = ((surfaceLocation[0] - rootLocation[0]) * BACKDROP_FRAME_SCALE).toInt().coerceAtLeast(0)
+        val top = ((surfaceLocation[1] - rootLocation[1]) * BACKDROP_FRAME_SCALE).toInt().coerceAtLeast(0)
+        sourceRect.set(
             left,
             top,
-            (left + view.width * FRAME_SCALE).roundToInt().coerceAtMost(currentFrame.width),
-            (top + view.height * FRAME_SCALE).roundToInt().coerceAtMost(currentFrame.height),
+            (left + view.width * BACKDROP_FRAME_SCALE).roundToInt().coerceAtMost(currentFrame.width),
+            (top + view.height * BACKDROP_FRAME_SCALE).roundToInt().coerceAtMost(currentFrame.height),
         )
-        if (source.width() <= 0 || source.height() <= 0) return false
-        canvas.drawBitmap(currentFrame, source, AndroidRect(0, 0, view.width, view.height), paint)
+        if (sourceRect.width() <= 0 || sourceRect.height() <= 0) return false
+        destinationRect.set(
+            0,
+            0,
+            (view.width * destinationScale).roundToInt().coerceAtLeast(1),
+            (view.height * destinationScale).roundToInt().coerceAtLeast(1),
+        )
+        canvas.drawBitmap(currentFrame, sourceRect, destinationRect, paint)
         return true
     }
 }
@@ -167,6 +212,9 @@ internal class FrostedBackdropView(
     tint: Color,
 ) : View(context) {
     private val paint = AndroidPaint(AndroidPaint.ANTI_ALIAS_FLAG or AndroidPaint.FILTER_BITMAP_FLAG)
+    private val backdropRenderNode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        AndroidRenderNode("wavv-frosted-backdrop")
+    } else null
     private var blurRadiusPx = blurRadiusDp * resources.displayMetrics.density
     private var appliedBlurRadiusPx = Float.NaN
     private var tintColor = tint.toArgb()
@@ -211,7 +259,27 @@ internal class FrostedBackdropView(
         // through a parent draw modifier, which can leave cached layers blank.
         if (captureState.get()) return
         super.onDraw(canvas)
-        if (!FrostedBackdropFrames.drawFrame(this, canvas, paint)) {
+        val frameDrawn = if (canvas.isHardwareAccelerated && backdropRenderNode != null) {
+            val nodeWidth = (width * BACKDROP_FRAME_SCALE).roundToInt().coerceAtLeast(1)
+            val nodeHeight = (height * BACKDROP_FRAME_SCALE).roundToInt().coerceAtLeast(1)
+            backdropRenderNode.setPosition(0, 0, nodeWidth, nodeHeight)
+            val recordingCanvas = backdropRenderNode.beginRecording(nodeWidth, nodeHeight)
+            val drawn = try {
+                FrostedBackdropFrames.drawFrame(this, recordingCanvas, paint, BACKDROP_FRAME_SCALE)
+            } finally {
+                backdropRenderNode.endRecording()
+            }
+            if (drawn) {
+                canvas.save()
+                canvas.scale(1f / BACKDROP_FRAME_SCALE, 1f / BACKDROP_FRAME_SCALE)
+                canvas.drawRenderNode(backdropRenderNode)
+                canvas.restore()
+            }
+            drawn
+        } else {
+            FrostedBackdropFrames.drawFrame(this, canvas, paint)
+        }
+        if (!frameDrawn) {
             // Keep frosted surfaces opaque before the first shared frame is ready.
             canvas.drawColor(android.graphics.Color.rgb(25, 26, 30))
         }
@@ -242,10 +310,11 @@ internal class FrostedBackdropView(
 
     private fun applyBlurEffect(force: Boolean = false) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (force || appliedBlurRadiusPx != blurRadiusPx)) {
-            setRenderEffect(
+            // Blur in the downsampled node, then scale it up so the on-screen blur radius stays unchanged.
+            backdropRenderNode?.setRenderEffect(
                 AndroidRenderEffect.createBlurEffect(
-                    blurRadiusPx,
-                    blurRadiusPx,
+                    blurRadiusPx * BACKDROP_FRAME_SCALE,
+                    blurRadiusPx * BACKDROP_FRAME_SCALE,
                     AndroidShader.TileMode.CLAMP,
                 ),
             )

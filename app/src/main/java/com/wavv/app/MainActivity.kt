@@ -266,6 +266,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.PI
@@ -654,7 +655,7 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
     MaterialTheme(colorScheme = darkColorScheme(background = WavvBackground, surface = WavvSurface)) {
         CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = WavvFontFamily)) {
             WavvContent(
-                state = WavvContentState(libraryState, playbackState, source),
+                state = WavvContentState(libraryState, playbackState, playbackController.progress, source),
                 actions = WavvContentActions(
                     onSearch = libraryViewModel::search,
                     onChooseAllDevice = chooseAllDevice,
@@ -723,6 +724,7 @@ private fun Activity.setStandbySystemBarsHidden(hidden: Boolean) {
 internal data class WavvContentState(
     val libraryState: LibraryUiState,
     val playbackState: PlaybackState,
+    val progressFlow: StateFlow<PlaybackProgress>,
     val source: LibrarySource?,
 )
 
@@ -1207,6 +1209,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
                 liked = activeSong.id in favoriteIds,
+                progressFlow = state.progressFlow,
                 onToggle = onTogglePlayback,
                 onLike = { onToggleFavorite(activeSong.id) },
                 onPrevious = onPrevious,
@@ -1268,6 +1271,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 FullPlayer(
                     song = it,
                     state = playbackState,
+                    progressFlow = state.progressFlow,
                     liked = it.id in favoriteIds,
                     showQueue = showQueue,
                     onClose = { frame -> closePlayer(frame) },
@@ -1635,19 +1639,13 @@ private fun BottomNav(
         dampingRatio = .88f,
         stiffness = 520f,
     )
-    val captureState = remember { AtomicBoolean(false) }
     Box(
         modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 4.dp).height(60.dp)
             .shadow(12.dp, CircleShape)
             .clip(CircleShape)
             .border(.75.dp, HomeFrostedBorder, CircleShape),
     ) {
-        FrostedBackdrop(
-            captureState,
-            blurRadiusDp = 36f,
-            tint = HomeFrostedGlass,
-            modifier = Modifier.matchParentSize(),
-        )
+        Box(Modifier.matchParentSize().staticGlassFill(HomeFrostedGlass))
         BoxWithConstraints(
             Modifier.fillMaxSize().padding(4.dp)
                 .draggable(
@@ -1718,12 +1716,7 @@ private fun BottomNav(
                     // Deformation changes with the gesture; the frosted fill and
                     // border stay identical before, during, and after dragging.
                     // This software-safe capture avoids the RuntimeShader crash on drag.
-                    FrostedBackdrop(
-                        captureState,
-                        blurRadiusDp = 22f,
-                        tint = Color(0x55101013),
-                        modifier = Modifier.matchParentSize(),
-                    )
+                    Box(Modifier.matchParentSize().staticGlassFill(Color(0x55101013)))
                     Box(
                         Modifier.matchParentSize()
                             .border(1.dp, Color.White.copy(.11f), CircleShape),
@@ -1778,8 +1771,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
-    val captureState = remember { AtomicBoolean(false) }
+private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
     val height by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar height") {
@@ -1804,8 +1796,6 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
         if (it == NowPlayingBarMode.Expanded) 11.dp else 10.dp
     }
     val shape = RoundedCornerShape(cornerRadius)
-    val durationMs = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
-    val positionMs = state.positionMs.coerceIn(0L, durationMs)
     val density = LocalDensity.current
     val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
@@ -1848,12 +1838,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
         .shadow(18.dp, shape).clip(shape)
         .border(.75.dp, HomeFrostedBorder, shape)
         .clickable(onClick = onOpen)) {
-        FrostedBackdrop(
-            captureState,
-            blurRadiusDp = 34f,
-            tint = HomeFrostedGlass,
-            modifier = Modifier.matchParentSize(),
-        )
+        Box(Modifier.matchParentSize().staticGlassFill(HomeFrostedGlass))
         Box(
             Modifier.align(Alignment.TopStart).offset(x = artworkX, y = artworkY).size(artworkSize)
                 .onGloballyPositioned { coordinates ->
@@ -1884,15 +1869,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
                         FavouriteButton(liked, onLike)
                     }
                     Spacer(Modifier.height(12.dp))
-                    Column {
-                        Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)).background(Color.White.copy(.15f))) {
-                            Box(Modifier.fillMaxWidth(positionMs.toFloat() / durationMs).fillMaxHeight().background(Color.White.copy(.8f)))
-                        }
-                        Row(Modifier.fillMaxWidth().padding(top = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(formatTime(positionMs), color = Color.White.copy(.32f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                            Text("-${formatTime(durationMs - positionMs)}", color = Color.White.copy(.32f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
+                    MiniPlayerTimeline(song, progressFlow)
                     Row(
                         Modifier.fillMaxWidth().weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(38.dp, Alignment.CenterHorizontally),
@@ -1935,6 +1912,23 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, expanded: Boolean, s
         }
     }
 }
+
+}
+
+@Composable
+private fun MiniPlayerTimeline(song: Song, progressFlow: StateFlow<PlaybackProgress>) {
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val duration = max(progress.durationMs, song.durationMs).coerceAtLeast(1L)
+    val position = progress.positionMs.coerceIn(0L, duration)
+    Column {
+        Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)).background(Color.White.copy(.15f))) {
+            Box(Modifier.fillMaxWidth(position.toFloat() / duration).fillMaxHeight().background(Color.White.copy(.8f)))
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatTime(position), color = Color.White.copy(.32f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            Text("-${formatTime(duration - position)}", color = Color.White.copy(.32f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
 }
 
 @Composable
@@ -2074,6 +2068,7 @@ internal fun FigmaMoreIcon(iconSize: Dp) {
 private fun FullPlayer(
     song: Song,
     state: PlaybackState,
+    progressFlow: StateFlow<PlaybackProgress>,
     liked: Boolean,
     showQueue: Boolean,
     queueMode: QueueMode,
@@ -2293,27 +2288,7 @@ private fun FullPlayer(
                         Box(Modifier.size(38.dp).clickable { showTrackOptions = true }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
                     }
                 }
-                val duration = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
-                val position = state.positionMs.coerceIn(0L, duration)
-                Box(
-                    Modifier.fillMaxWidth().padding(top = 16.dp).height(6.dp).clip(RoundedCornerShape(3.dp))
-                        .background(Color.White.copy(.2f))
-                        .pointerInput(duration) {
-                            detectTapGestures { point -> onSeek((point.x / size.width * duration).toLong().coerceIn(0L, duration)) }
-                        }
-                        .pointerInput(duration) {
-                            detectDragGestures { change, _ ->
-                                onSeek((change.position.x / size.width * duration).toLong().coerceIn(0L, duration))
-                                change.consume()
-                            }
-                        },
-                ) {
-                    Box(Modifier.fillMaxWidth(position.toFloat() / duration).fillMaxHeight().background(Color.White.copy(.8f)))
-                }
-                    Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatTime(position), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
-                    Text("-${formatTime(duration - position)}", color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
-                }
+                FullPlayerTimeline(song, progressFlow, onSeek)
             }
             PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 48.dp)
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2378,7 +2353,7 @@ private fun FullPlayer(
             enter = fadeIn(tween(180)) + slideInVertically(tween(460, easing = WavvMotionEasing)) { it },
             exit = fadeOut(tween(160)) + slideOutVertically(tween(420, easing = WavvMotionEasing)) { it },
         ) {
-            LyricsPanel(song, state.positionMs, state.durationMs, onSeek, { showLyrics = false })
+            LyricsPanel(song, progressFlow, onSeek, { showLyrics = false })
         }
         if (showOutputs) AudioOutputPanel(song, state.isPlaying, onClose = { showOutputs = false })
         if (showTrackOptions) {
@@ -2498,15 +2473,44 @@ private fun Modifier.radialArtworkGlowMask(): Modifier =
     }
 
 @Composable
+private fun FullPlayerTimeline(song: Song, progressFlow: StateFlow<PlaybackProgress>, onSeek: (Long) -> Unit) {
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val duration = max(progress.durationMs, song.durationMs).coerceAtLeast(1L)
+    val position = progress.positionMs.coerceIn(0L, duration)
+    Column {
+        Box(
+            Modifier.fillMaxWidth().padding(top = 16.dp).height(6.dp).clip(RoundedCornerShape(3.dp))
+                .background(Color.White.copy(.2f))
+                .pointerInput(duration) {
+                    detectTapGestures { point -> onSeek((point.x / size.width * duration).toLong().coerceIn(0L, duration)) }
+                }
+                .pointerInput(duration) {
+                    detectDragGestures { change, _ ->
+                        onSeek((change.position.x / size.width * duration).toLong().coerceIn(0L, duration))
+                        change.consume()
+                    }
+                },
+        ) {
+            Box(Modifier.fillMaxWidth(position.toFloat() / duration).fillMaxHeight().background(Color.White.copy(.8f)))
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatTime(position), color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
+            Text("-${formatTime(duration - position)}", color = Color.White.copy(.5f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
+        }
+    }
+}
+
+@Composable
 private fun PlayerProgress(
-    state: PlaybackState,
+    progressFlow: StateFlow<PlaybackProgress>,
     song: Song,
     onSeek: (Long) -> Unit = {},
     accentColor: Color = Color(0xFFFFAE46),
     sliderHeight: androidx.compose.ui.unit.Dp = 20.dp,
 ) {
-    val duration = max(state.durationMs, song.durationMs).coerceAtLeast(1L)
-    val position = state.positionMs.coerceIn(0L, duration)
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val duration = max(progress.durationMs, song.durationMs).coerceAtLeast(1L)
+    val position = progress.positionMs.coerceIn(0L, duration)
     Column(Modifier.fillMaxWidth()) {
         Slider(
             value = position.toFloat(),
@@ -3675,7 +3679,7 @@ private fun QueuePanel(
 private fun QueueMode.next() = if (this == QueueMode.Off) QueueMode.Shuffle else QueueMode.Off
 
 @Composable
-private fun LyricsPanel(song: Song, positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit, onClose: () -> Unit) {
+private fun LyricsPanel(song: Song, progressFlow: StateFlow<PlaybackProgress>, onSeek: (Long) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val lyricLines by produceState<List<LyricLine>?>(initialValue = null, song.uri) {
         value = try {
@@ -3687,7 +3691,8 @@ private fun LyricsPanel(song: Song, positionMs: Long, durationMs: Long, onSeek: 
         }
     }
     val lyricsState = rememberLazyListState()
-    val activeLyricIndex = lyricLines?.indexOfLast { it.timeMs?.let { time -> time <= positionMs } == true } ?: -1
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val activeLyricIndex = lyricLines?.indexOfLast { it.timeMs?.let { time -> time <= progress.positionMs } == true } ?: -1
     LaunchedEffect(activeLyricIndex) {
         if (activeLyricIndex >= 0) lyricsState.animateScrollToItem(activeLyricIndex)
     }
@@ -3743,7 +3748,7 @@ private fun LyricsPanel(song: Song, positionMs: Long, durationMs: Long, onSeek: 
                 }
             }
             PlayerProgress(
-                state = PlaybackState(positionMs = positionMs, durationMs = durationMs),
+                progressFlow = progressFlow,
                 song = song,
                 onSeek = onSeek,
                 accentColor = WavvPink,

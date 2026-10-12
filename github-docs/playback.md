@@ -17,6 +17,12 @@ ExoPlayer uses the platform renderer factory with decoder fallback enabled, conf
 - Repeat cycles through off, repeat queue, and repeat one.
 - Listening events are written after player state confirms playback, not merely when a play request is issued.
 
+## Experimental AAC enhancement
+
+The **UHQ AAC** setting in **You** is off by default. When enabled, the service processes AAC that Android reports with the supported AAC decoder type. Playback starts from the source; after background processing succeeds, Wavv switches to a cached PCM WAV at the same position. Unsupported formats or processing failures continue from the source. Turning the setting off returns the current item to its source, and the source file is never modified.
+
+Enhanced files live in the app cache, which is limited to 1 GiB for UHQ audio and may be evicted by Wavv or Android. The player’s UHQ badge is not a bit-perfect, high-resolution, or listening-quality certification. Android decoding, model quality, and performance vary by device; UHQ AAC has not been validated across devices.
+
 ## Audio output routes
 
 The output panel uses Android `MediaRouter` to display enabled routes matching its live-audio selector. Bluetooth, wired, USB, built-in speaker, and external routes appear only when the system exposes a compatible route. Android and the route provider control device selection and routing behavior. Wavv cannot guarantee support for every accessory or audio format.

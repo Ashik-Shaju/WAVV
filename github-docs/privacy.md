@@ -13,8 +13,11 @@ Wavv is designed around files the user selects and data kept by the app on the d
 | Analysis status, embeddings, and tag estimates | Avoid unnecessary inference and support local discovery | Room database |
 | Embedded artwork copied for display | Show artwork when a selected file or Android media provider supplies it | App-private `filesDir/embedded-artwork` |
 | Installed model files | Run bundled analysis after first use | App-private files directory |
+| Temporary UHQ AAC processing audio and enhanced copies | Optional playback enhancement after the user enables it | App cache; decoded intermediates are temporary, enhanced WAV copies are limited to 1 GiB total and may be evicted |
 
 Wavv does not copy the original selected audio into a separate music collection or edit its embedded tags. Removing a source grant does not delete the source audio. A later library scan may stop showing a file that is no longer in the selected source.
+
+UHQ AAC reads a selected source and temporarily writes decoded audio while processing. Turning the setting off returns playback to the source but does not immediately erase completed enhanced copies; they remain in app cache until Wavv evicts them for space or Android clears the cache. The original audio is not changed.
 
 ## Listening history controls
 

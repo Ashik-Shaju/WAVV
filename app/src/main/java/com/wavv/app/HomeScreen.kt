@@ -36,14 +36,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDp
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
@@ -254,7 +247,6 @@ import androidx.mediarouter.media.MediaRouter
 import androidx.mediarouter.media.MediaRouteSelector
 import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
 import java.util.Date
 import java.util.Locale
@@ -357,6 +349,9 @@ internal fun homeSectionOrder(sectionCount: Int, stackIndex: Int): List<Int> {
     return (startIndex until sectionCount).toList() + (0 until startIndex).toList()
 }
 
+internal fun homeStackContentVisible(expanded: Boolean, compactVisible: Boolean, expansionProgress: Float): Boolean =
+    expanded || compactVisible || expansionProgress > 0f
+
 @Composable
 internal fun HomeScreen(
     songs: List<Song>,
@@ -384,15 +379,6 @@ internal fun HomeScreen(
     onPlayMix: (SmartMix) -> Unit = {},
 ) {
     val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
-    val homeGlowTransition = rememberInfiniteTransition(label = "home accent glow")
-    val homeGlowPhase by homeGlowTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(6200, easing = LinearEasing), RepeatMode.Reverse),
-        label = "home accent phase",
-    )
-    val homeGlowHue = 220f + homeGlowPhase * 62f
-    val homeGlowColor = Color.hsv(homeGlowHue, .48f, .42f, .10f)
     val sections = remember(songs, favoriteIds, recentSongs, smartMixes) {
         val recentlyAdded = orderedSongs
         val (primaryTitle, primarySongs) = primaryHomeShelf(recentSongs, recentlyAdded)
@@ -462,18 +448,6 @@ internal fun HomeScreen(
             }
         } else {
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                Box(
-                    Modifier.align(Alignment.BottomCenter).offset(y = (-190).dp).size(170.dp)
-                        .background(
-                            Brush.radialGradient(
-                                0f to homeGlowColor,
-                                .58f to homeGlowColor.copy(alpha = .08f),
-                                1f to Color.Transparent,
-                            ),
-                            CircleShape,
-                        )
-                        .blur(24.dp),
-                )
                 Column(
                     Modifier.fillMaxWidth().graphicsLayer {
                         val progress = stackExpansionProgress.value
@@ -622,6 +596,11 @@ private fun HomeStackPanel(
                     val next = actualIndex == stackIndex + 1 && !playerExpanded
                     val leaving = actualIndex == stackIndex - 1 && !playerExpanded
                     val compactVisible = active || next || leaving
+                    val contentVisible by remember(expansionProgress, stackListExpanded, compactVisible) {
+                        derivedStateOf {
+                            homeStackContentVisible(stackListExpanded, compactVisible, expansionProgress.value)
+                        }
+                    }
                     val compactY = when {
                         active -> if (playerExpanded) 40.dp else 0.dp
                         next -> 40.dp
@@ -631,38 +610,6 @@ private fun HomeStackPanel(
                     val compactScale = if (active && !playerExpanded) 1f else .94f
                     val compactAlpha = if (compactVisible) 1f else 0f
                     val compactTopForCard = with(density) { compactY.toPx() }
-                    // Scroll offsets update every frame. Keep this visibility gate derived so
-                    // only cards crossing the backdrop viewport boundary recompose; each card's
-                    // continuous position/scale remains in its graphicsLayer block below.
-                    val cardBackdropVisible by remember(
-                        scrollState,
-                        expansionProgress,
-                        displayIndex,
-                        compactAlpha,
-                        compactTopForCard,
-                        expandedHeightPx,
-                        compactTopPx,
-                        topInsetPx,
-                        rowHeightPx,
-                        stackBoundaryPx,
-                        stackPeekPx,
-                        cardHeightPx,
-                    ) {
-                        derivedStateOf {
-                            val progress = expansionProgress.value.coerceIn(0f, 1f)
-                            val naturalTop = topInsetPx + displayIndex * rowHeightPx - scrollState.value
-                            val tuck = ((naturalTop - stackBoundaryPx) / rowHeightPx).coerceIn(0f, 1f)
-                            val easedTuck = tuck * tuck * (3f - 2f * tuck)
-                            val expandedTop = if (naturalTop > stackBoundaryPx) {
-                                naturalTop + (stackBoundaryPx + stackPeekPx - naturalTop) * easedTuck
-                            } else naturalTop
-                            val collapsedTop = compactTopPx + compactTopForCard
-                            val backdropTop = collapsedTop * (1f - progress) + expandedTop * progress
-                            val backdropAlpha = compactAlpha + (1f - compactAlpha) * progress
-                            backdropAlpha > .02f && backdropTop < expandedHeightPx &&
-                                backdropTop + cardHeightPx > 0f
-                        }
-                    }
                     val shape = RoundedCornerShape(28.dp)
                     Box(
                         Modifier.fillMaxWidth().height(rowHeight)
@@ -757,7 +704,7 @@ private fun HomeStackPanel(
                                 HomeStackCard(
                                     section = section,
                                     enabled = stackListExpanded || active,
-                                    backdropRefreshEnabled = cardBackdropVisible,
+                                    contentVisible = contentVisible,
                                     modifier = Modifier.fillMaxSize(),
                                     onPlayMix = onPlayMix,
                                     onEntryClick = { entry ->
@@ -780,23 +727,16 @@ private fun HomeStackPanel(
 private fun HomeStackCard(
     section: HomeStackSection,
     enabled: Boolean,
-    backdropRefreshEnabled: Boolean,
+    contentVisible: Boolean,
     modifier: Modifier = Modifier,
     onPlayMix: (SmartMix) -> Unit,
     onEntryClick: (HomeStackEntry) -> Unit,
 ) {
-    val captureState = remember { AtomicBoolean(false) }
+    val entryListState = rememberLazyListState()
     val tileWidth = ((LocalConfiguration.current.screenWidthDp.dp - 96.dp) / 3).coerceIn(64.dp, 88.dp)
     val cardShape = RoundedCornerShape(28.dp)
-    Box(modifier.clip(cardShape)) {
-        FrostedBackdrop(
-            captureState,
-            blurRadiusDp = 34f,
-            tint = HomeFrostedGlass,
-            modifier = Modifier.matchParentSize(),
-            refreshEnabled = backdropRefreshEnabled,
-        )
-        Column(
+    Box(modifier.clip(cardShape).staticGlassFill(HomeFrostedGlass)) {
+        if (contentVisible) Column(
             Modifier.fillMaxSize()
                 .border(1.dp, HomeFrostedBorder, cardShape)
                 .drawWithCache {
@@ -817,7 +757,8 @@ private fun HomeStackCard(
                 color = Color.White.copy(.48f), fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
             )
         }
-        LazyRow(
+        if (contentVisible) LazyRow(
+            state = entryListState,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 3.dp),
         ) {
@@ -1054,7 +995,6 @@ private fun HeroCard(
 
 @Composable
 private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: String) {
-    val captureState = remember { AtomicBoolean(false) }
     val shape = CircleShape
     Box(
         Modifier.width(86.dp).height(42.dp).clip(shape)
@@ -1065,7 +1005,7 @@ private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: Strin
                 onLongClick = onLongClick,
             ),
     ) {
-        FrostedBackdrop(captureState, blurRadiusDp = 22f, tint = Color(0x906A6A6A), modifier = Modifier.matchParentSize())
+        Box(Modifier.matchParentSize().staticGlassFill(Color(0x906A6A6A)))
         Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(5.dp))

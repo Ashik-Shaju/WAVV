@@ -35,6 +35,8 @@ data class PlaybackState(
     val errorMessage: String? = null,
 )
 
+data class PlaybackProgress(val positionMs: Long = 0L, val durationMs: Long = 0L)
+
 class PlaybackController(context: Context) {
     private data class PendingPlay(
         val song: Song,
@@ -66,10 +68,19 @@ class PlaybackController(context: Context) {
         PlaybackState(autoplayEnabled = preferences.getBoolean(PREF_AUTOPLAY_ENABLED, true)),
     )
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
+    private val _progress = MutableStateFlow(PlaybackProgress())
+    val progress: StateFlow<PlaybackProgress> = _progress.asStateFlow()
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.value = _state.value.copy(isPlaying = isPlaying)
+            refreshProgress()
+            if (!isPlaying) {
+                _state.value = _state.value.copy(
+                    positionMs = _progress.value.positionMs,
+                    durationMs = _progress.value.durationMs,
+                )
+            }
             if (isPlaying) confirmRequestedPlaybackStart()
         }
 
@@ -91,6 +102,7 @@ class PlaybackController(context: Context) {
                     playingFrom = playingFrom,
                     errorMessage = null,
                 )
+                refreshProgress()
                 confirmRequestedPlaybackStart()
             }
         }
@@ -226,6 +238,7 @@ class PlaybackController(context: Context) {
             autoplayEnabled = _state.value.autoplayEnabled,
             playingFrom = playingFrom,
         )
+        _progress.value = PlaybackProgress(durationMs = song.durationMs)
         currentController.setMediaItems(
             sessionQueue.map { queuedSong ->
                 val source = when {
@@ -411,11 +424,9 @@ class PlaybackController(context: Context) {
     fun refreshProgress() {
         val song = _state.value.song ?: return
         val currentController = controller ?: return
-        val duration = currentController.duration.takeIf { it > 0L } ?: song.durationMs
-        _state.value = _state.value.copy(
+        _progress.value = PlaybackProgress(
             positionMs = currentController.currentPosition.coerceAtLeast(0L),
-            durationMs = duration,
-            isPlaying = currentController.isPlaying,
+            durationMs = currentController.duration.takeIf { it > 0L } ?: song.durationMs,
         )
     }
 
@@ -451,6 +462,7 @@ class PlaybackController(context: Context) {
             autoplayEnabled = _state.value.autoplayEnabled,
             playingFrom = playingFrom,
         )
+        refreshProgress()
     }
 
     private fun syncQueue(player: MediaController) {

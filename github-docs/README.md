@@ -16,6 +16,7 @@ Wavv is a local-first Android music player. It indexes audio the user selects, s
 | Reviewing local storage and permissions | [Privacy and local data](privacy.md) |
 | Diagnosing a problem | [Troubleshooting](troubleshooting.md) |
 | Sharing source or an app build | [Redistribution and notices](redistribution.md) |
+| Checking model and dataset terms | [Model and data provenance](model-and-data-provenance.md) |
 
 The root [README](../README.md) is the single source for build prerequisites and commands. Dependency versions live in `gradle/libs.versions.toml`; the source and tests are the authority for current behavior.
 

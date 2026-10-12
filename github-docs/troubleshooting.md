@@ -26,6 +26,10 @@ Check analysis status on the You screen and retry after fixing source access. Se
 
 Catalog recognition does not certify that the device has a decoder for the container and codec. Try a format supported by the Android device, check that the source URI remains readable, and review the playback error. Bluetooth and external routes are reported by Android; reconnect the device or choose the route in Android settings if it is not available in Wavv.
 
+## UHQ does not switch an AAC track to the enhanced copy
+
+UHQ is off by default and applies only to AAC that Android exposes in the supported decoder format. Enable **You → UHQ AAC**, keep the source readable, and allow background processing to finish. Wavv keeps the original playing when input is unsupported or processing fails; no source file is changed.
+
 ## Lyrics are unavailable
 
 Wavv reads supported lyrics embedded in the selected file. It does not download lyrics. A file without a readable lyrics field will show no lyrics.

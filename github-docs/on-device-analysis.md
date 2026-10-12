@@ -25,3 +25,5 @@ This runtime tries ONNX Runtime's XNNPACK execution provider and falls back to C
 Analysis can fail when Android cannot read or decode a source, a required model asset is unavailable, or inference fails. WorkManager reports the failure and the app can retry; search can still use text and file metadata when semantic analysis is unavailable. Device-specific speed, memory use, inference behavior, and decoder compatibility require instrumented tests on that device. The presence of those tests or bundled models alone does not prove runtime success.
 
 Check the model-specific `LICENSE-*` and `THIRD_PARTY_NOTICES.txt` beside each asset before distributing a build. See [Redistribution](redistribution.md).
+
+The optional UHQ AAC playback enhancement is separate from these catalog-analysis paths. It does not produce search embeddings or music tags; see [Playback](playback.md) for its supported input and cache behavior.

@@ -19,7 +19,7 @@ Indexing fills the library from the selected source; it does not move or rewrite
 - **Home** shows library-driven shelves, such as recent tracks and available mixes. A mix appears only when local listening or favorite signals are sufficient; a new or sparse library may have no recommendations yet.
 - **Search** matches titles and metadata and can use local audio-text similarity for descriptive queries. Category cards are built from actual genre tags and tracks with artwork. If your files lack those tags or art, the app does not invent them.
 - **Library** organizes songs, albums, artists, favorites, and user-created playlists. Playlist changes require an explicit action.
-- **You** shows local library counts, analysis progress, the selected source, notification settings, and listening-history controls. The Theme row reports the current dark appearance; it is not a theme switch. Storage Used estimates the total size of the indexed audio files, not Wavv's app storage.
+- **You** shows local library counts, analysis progress, the selected source, notification and listening-history controls, Equalizer settings, and the optional UHQ AAC setting. The Theme row reports the current dark appearance; it is not a theme switch. Storage Used estimates the total size of the indexed audio files, not Wavv's app storage.
 
 ## Search honestly
 
@@ -32,6 +32,8 @@ Language filtering is stricter: Wavv matches recognized language metadata explic
 Tap a track to start playback. The mini-player opens the full player; use its transport buttons and seek bar to control playback. The queue can show upcoming tracks, play a track next, add tracks, reorder or remove upcoming tracks, shuffle upcoming items, and repeat the current item or queue. Repeat behavior is controlled by the player UI.
 
 The output panel lists compatible Android audio routes currently reported to Wavv. The operating system, device, selected route, and installed decoder determine actual format and output support. See [Playback](playback.md) for the boundary.
+
+UHQ AAC is an experimental, opt-in setting in **You** and is off by default. For AAC tracks Android can decode in the supported form, Wavv keeps the original playing while it prepares a cached enhanced copy, then may switch to that copy. Other formats and processing failures keep using the original. Turning UHQ off returns playback to the original; cached copies can remain until Android clears them or the cache needs space. Wavv never changes the source file.
 
 ## Artwork, metadata, and lyrics
 

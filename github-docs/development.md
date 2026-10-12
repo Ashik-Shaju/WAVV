@@ -13,6 +13,7 @@ Wavv is an Android application written in Kotlin with Jetpack Compose. Build pre
 | Playback | `PlaybackController.kt`, `PlaybackService.kt` | Media3 controller, queue operations, service-owned ExoPlayer and session |
 | Search and personalization | `OfflineDiscovery.kt`, `SongSearch.kt` | Query parsing, local ranking, mixes, observed-playback reducer |
 | Model inference | `Dclap.kt`, `DclapIndexing.kt`, `MusicUnderstanding.kt`, `MusicUnderstandingRuntime.kt` | On-device embeddings, tag estimates, caching and worker progress |
+| Experimental playback enhancement | `UHQEnhancement.kt` | AAC decoding, ONNX enhancement, private cache, and playback source switching |
 | Embedded file content | `EmbeddedLanguageMetadata.kt`, `Lyrics.kt` | Supported language fields and lyrics read from selected files |
 
 ## Test levels
@@ -23,9 +24,11 @@ Run the commands in the root README for these checks:
 | --- | --- | --- |
 | `:app:assembleDebug` | Kotlin/Compose compilation and debug packaging | Permission flow, playback, device codecs, output routes, or device performance |
 | `:app:testDebugUnitTest` | Deterministic JVM logic such as query parsing, ranking, queue rules, metadata parsing, and reducers | Android framework behavior, Room on-device behavior, actual audio, or visual parity |
-| `:app:connectedDebugAndroidTest` | Instrumented paths, including bundled inference, Room persistence, and selected UI rendering tests | Compatibility with every device, codec, audio route, or Android release |
+| `:app:connectedDebugAndroidTest` | Bundled DCLAP and Music Understanding inference and Room persistence | Compatibility with every device, codec, audio route, or Android release |
 
 Relevant local test classes include `OfflineDiscoveryTest`, `PlaybackQueueTest`, `PlaybackFeedbackReducerTest`, `LibraryBackendTest`, `LyricsTest`, and `DclapTest`. Instrumentation tests live under `app/src/androidTest/`; their presence is not evidence that they passed. Run them on an emulator or device and report the exact result before making a runtime claim.
+
+The current tree has no Compose UI test or UHQ AAC end-to-end playback test. `UHQResourceLimitsTest` checks the supported decoder MIME and temporary-audio size boundaries; it does not validate AAC decoding, DSP output, cache switching, or device performance.
 
 ## Practical change boundaries
 
