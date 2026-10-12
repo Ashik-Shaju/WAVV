@@ -222,7 +222,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -1372,7 +1371,27 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             enter = fadeIn(tween(300, easing = WavvScreenEasing)),
             exit = fadeOut(tween(220, easing = WavvScreenEasing)),
         ) {
-            BottomNav(tab, { tab = it }, Modifier)
+            BottomNav(
+                active = tab,
+                onChange = { tab = it },
+                onReselect = { selected ->
+                    when (selected) {
+                        Tab.Home -> {
+                            homeStackListExpanded = false
+                            homeStackIndex = 0
+                            playerExpanded = activeSong != null
+                            playerPositionInitialized = activeSong != null
+                            if (showPlayer) closePlayer() else showQueue = false
+                        }
+                        Tab.Library -> {
+                            libraryHistoryVisible = false
+                            libraryNavigation = LibraryNavigationState()
+                        }
+                        else -> Unit
+                    }
+                },
+                modifier = Modifier,
+            )
         }
         AnimatedVisibility(
             visible = showPlayer,
@@ -1609,7 +1628,7 @@ internal fun ScreenHeader(
         ) {
             Text(
                 title,
-                color = if (brandHome) WavvPink else Color.White,
+                color = if (brandHome) Color(0xFFD6D6D6) else Color.White,
                 fontSize = if (brandHome) 33.sp else 32.sp,
                 fontWeight = if (brandHome) FontWeight.Black else FontWeight.ExtraBold,
                 letterSpacing = if (brandHome) (-1.15).sp else (-1).sp,
@@ -1626,6 +1645,7 @@ internal fun ScreenHeader(
                 Spacer(Modifier.width(12.dp))
                 Waveform(isPlaying)
             }
+            if (!waveform) Spacer(Modifier.weight(1f))
             trailingContent()
         }
         if (!waveform) {
@@ -1946,11 +1966,13 @@ private fun LoadingScreen() {
 private fun BottomNav(
     active: Tab,
     onChange: (Tab) -> Unit,
+    onReselect: (Tab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
     val activeIndex = tabs.indexOfFirst { it.first == active }
     val currentOnChange by rememberUpdatedState(onChange)
+    val currentOnReselect by rememberUpdatedState(onReselect)
     var pillOffsetPx by remember { mutableFloatStateOf(0f) }
     var pillTargetTab by remember { mutableStateOf(active) }
     var pillIsDragging by remember { mutableStateOf(false) }
@@ -2063,7 +2085,7 @@ private fun BottomNav(
                             }
                             .clickable(role = Role.Tab) {
                             pillTargetTab = tab
-                            currentOnChange(tab)
+                            if (tab == active) currentOnReselect(tab) else currentOnChange(tab)
                         },
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
@@ -2357,78 +2379,37 @@ private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious
 internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
     val fillProgress by animateFloatAsState(
         targetValue = if (filled) 1f else 0f,
-        animationSpec = spring(dampingRatio = .86f, stiffness = Spring.StiffnessMedium),
+        animationSpec = tween(durationMillis = 280),
         label = "favorite icon transition",
     )
     Canvas(Modifier.size(iconSize)) {
         val unit = size.minDimension / 24f
-        val center = Offset(size.width / 2f, size.height / 2f)
         val fillAlpha = fillProgress.coerceIn(0f, 1f)
-        val shellRadius = 11.5f * unit
-        drawCircle(Color.White.copy(.11f * (1f - fillAlpha)), radius = shellRadius)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color.White.copy(.32f * fillAlpha),
-                    WavvPink.copy(.28f * fillAlpha),
-                    Color(0xFF7951C8).copy(.16f * fillAlpha),
-                ),
-                center = Offset(size.width * .34f, size.height * .26f),
-                radius = shellRadius * 1.8f,
-            ),
-            radius = shellRadius,
-        )
-        drawCircle(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color.White.copy(.38f), Color.White.copy(.13f), Color.White.copy(.06f)),
-            ),
-            radius = shellRadius,
-            style = Stroke(width = .7f * unit),
-        )
-        val star = Path().apply {
-            moveTo(12f * unit, 4.2f * unit)
-            cubicTo(12.55f * unit, 8.65f * unit, 15.35f * unit, 11.45f * unit, 19.8f * unit, 12f * unit)
-            cubicTo(15.35f * unit, 12.55f * unit, 12.55f * unit, 15.35f * unit, 12f * unit, 19.8f * unit)
-            cubicTo(11.45f * unit, 15.35f * unit, 8.65f * unit, 12.55f * unit, 4.2f * unit, 12f * unit)
-            cubicTo(8.65f * unit, 11.45f * unit, 11.45f * unit, 8.65f * unit, 12f * unit, 4.2f * unit)
+        val buttonRadius = 11.8f * unit
+        drawCircle(Color.White.copy(alpha = .15f), radius = buttonRadius)
+
+        val iconScale = .72f
+        fun inset(value: Float) = 12f + (value - 12f) * iconScale
+        val sparkle = Path().apply {
+            moveTo(inset(12f) * unit, inset(.8f) * unit)
+            cubicTo(inset(13.5f) * unit, inset(8f) * unit, inset(16f) * unit, inset(10.5f) * unit, inset(23.2f) * unit, inset(12f) * unit)
+            cubicTo(inset(16f) * unit, inset(13.5f) * unit, inset(13.5f) * unit, inset(16f) * unit, inset(12f) * unit, inset(23.2f) * unit)
+            cubicTo(inset(10.5f) * unit, inset(16f) * unit, inset(8f) * unit, inset(13.5f) * unit, inset(.8f) * unit, inset(12f) * unit)
+            cubicTo(inset(8f) * unit, inset(10.5f) * unit, inset(10.5f) * unit, inset(8f) * unit, inset(12f) * unit, inset(.8f) * unit)
             close()
         }
-        val starScale = .84f + fillProgress * .08f
-        withTransform({
-            rotate(degrees = -24f * fillProgress, pivot = center)
-            scale(scaleX = starScale, scaleY = starScale, pivot = center)
-        }) {
-            drawPath(
-                star,
-                color = Color.White,
-                alpha = 1f - fillAlpha,
-                style = Stroke(width = .95f * unit, join = androidx.compose.ui.graphics.StrokeJoin.Round),
-            )
-        }
-        val tick = Path().apply {
-            moveTo(7.0f * unit, 12.2f * unit)
-            lineTo(10.4f * unit, 15.6f * unit)
-            lineTo(17.4f * unit, 8.4f * unit)
+        val fillTop = size.height * (1f - fillAlpha)
+        if (fillAlpha > 0f) {
+            drawContext.canvas.save()
+            drawContext.canvas.clipRect(0f, fillTop, size.width, size.height)
+            drawPath(sparkle, color = Color.White)
+            drawContext.canvas.restore()
         }
         drawPath(
-            tick,
-            color = WavvPink,
-            alpha = fillAlpha,
-            style = Stroke(width = 2.2f * unit, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+            sparkle,
+            color = Color.White,
+            style = Stroke(width = 1.25f * unit, join = androidx.compose.ui.graphics.StrokeJoin.Round),
         )
-        val reflection = Path().apply {
-            moveTo(8.1f * unit, 9.3f * unit)
-            quadraticTo(9.1f * unit, 7.45f * unit, 12f * unit, 7.1f * unit)
-            quadraticTo(13.6f * unit, 7.2f * unit, 14.8f * unit, 8.05f * unit)
-        }
-        drawPath(
-            reflection,
-            Color.White.copy(alpha = (1f - fillAlpha) * .82f),
-            style = Stroke(width = .7f * unit, cap = androidx.compose.ui.graphics.StrokeCap.Round),
-        )
-        val sparkleCenter = Offset(19.1f * unit, 5.5f * unit)
-        drawLine(Color.White.copy(alpha = (1f - fillAlpha) * .9f), sparkleCenter.copy(y = sparkleCenter.y - 1.45f * unit), sparkleCenter.copy(y = sparkleCenter.y + 1.45f * unit), .7f * unit)
-        drawLine(Color.White.copy(alpha = (1f - fillAlpha) * .9f), sparkleCenter.copy(x = sparkleCenter.x - 1.45f * unit), sparkleCenter.copy(x = sparkleCenter.x + 1.45f * unit), .7f * unit)
     }
 }
 

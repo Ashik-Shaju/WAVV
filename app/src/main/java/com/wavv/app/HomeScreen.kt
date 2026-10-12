@@ -562,6 +562,11 @@ private fun HomeStackPanel(
     val density = LocalDensity.current
     val densityScale = density.density
     val scrollState = rememberScrollState()
+    LaunchedEffect(stackListExpanded) {
+        if (!stackListExpanded && scrollState.value != 0) {
+            scrollState.scrollTo(0)
+        }
+    }
     val currentStackListExpanded = rememberUpdatedState(stackListExpanded)
     val currentOnStackListExpandedChange = rememberUpdatedState(onStackListExpandedChange)
     val currentOnIndexChange = rememberUpdatedState(onIndexChange)
@@ -643,7 +648,8 @@ private fun HomeStackPanel(
                         Box(
                             Modifier.fillMaxWidth().height(cardHeight).graphicsLayer {
                                 val progress = expansionProgress.value.coerceIn(0f, 1f)
-                                val naturalTop = topInsetPx + displayIndex * rowHeightPx - scrollState.value
+                                val listScrollOffset = if (stackListExpanded) scrollState.value else 0
+                                val naturalTop = topInsetPx + displayIndex * rowHeightPx - listScrollOffset
                                 // Keep the same card moving through the list/stack boundary.
                                 // The overflow card eases into the single tucked layer over
                                 // one row instead of jumping there as soon as it crosses the
