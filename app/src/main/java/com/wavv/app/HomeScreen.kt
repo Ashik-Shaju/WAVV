@@ -745,14 +745,9 @@ private fun HomeStackCard(
     val entryListState = rememberLazyListState()
     val tileWidth = ((LocalConfiguration.current.screenWidthDp.dp - 96.dp) / 3).coerceIn(64.dp, 88.dp)
     val cardShape = RoundedCornerShape(28.dp)
-    Box(modifier.clip(cardShape).staticGlassFill(HomeFrostedGlass)) {
+    Box(modifier.clip(cardShape).homeStackCardFill()) {
         if (contentVisible) Column(
             Modifier.fillMaxSize()
-                .border(1.dp, HomeFrostedBorder, cardShape)
-                .drawWithCache {
-                    val wash = Brush.linearGradient(listOf(Color.White.copy(.055f), Color.White.copy(.012f), Color.Transparent))
-                    onDrawBehind { drawRect(wash) }
-                }
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
         Row(
@@ -1015,7 +1010,7 @@ private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: Strin
                 onLongClick = onLongClick,
             ),
     ) {
-        Box(Modifier.matchParentSize().staticGlassFill(Color(0x906A6A6A)))
+        Box(Modifier.matchParentSize().homeBlueVioletHighlightFill())
         Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(5.dp))

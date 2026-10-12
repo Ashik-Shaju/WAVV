@@ -33,6 +33,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.animateColor
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -929,6 +930,20 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val playbackHistory = (libraryState as? LibraryUiState.Ready)?.playbackHistory.orEmpty()
     val playlists = (libraryState as? LibraryUiState.Ready)?.playlists.orEmpty()
     val activeSong = playbackState.song
+    var songChangeDirection by remember { mutableIntStateOf(1) }
+    var playbackAccentTarget by remember {
+        mutableStateOf(homeFallbackAccent(activeSong?.id ?: 0L))
+    }
+    val playbackAccentColor by animateColorAsState(
+        targetValue = playbackAccentTarget,
+        animationSpec = tween(650, easing = WavvMotionEasing),
+        label = "now playing artwork accent",
+    )
+    LaunchedEffect(activeSong?.id, activeSong?.albumArtUri, activeSong?.uri) {
+        activeSong?.let { song ->
+            playbackAccentTarget = withContext(Dispatchers.IO) { homeAcrylicChipColor(context, song) }
+        }
+    }
     var miniPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var fullPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var artworkFlight by remember { mutableStateOf<PlayerArtworkFlight?>(null) }
@@ -1303,11 +1318,13 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
                 liked = activeSong.id in favoriteIds,
+                accentColor = playbackAccentColor,
+                songChangeDirection = songChangeDirection,
                 progressFlow = state.progressFlow,
                 onToggle = onTogglePlayback,
                 onLike = { onToggleFavorite(activeSong.id) },
-                onPrevious = onPrevious,
-                onNext = onNext,
+                onPrevious = { songChangeDirection = -1; onPrevious() },
+                onNext = { songChangeDirection = 1; onNext() },
                 onOpen = openPlayer,
                 onCollapse = { playerExpanded = false },
                 onExpand = {
@@ -1954,10 +1971,9 @@ private fun BottomNav(
     Box(
         modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 4.dp).height(60.dp)
             .shadow(12.dp, CircleShape)
-            .clip(CircleShape)
-            .border(.75.dp, HomeFrostedBorder, CircleShape),
+            .clip(CircleShape),
     ) {
-        Box(Modifier.matchParentSize().staticGlassFill(HomeFrostedGlass))
+        Box(Modifier.matchParentSize().homeNavBarFill())
         BoxWithConstraints(
             Modifier.fillMaxSize().padding(4.dp)
                 .draggable(
@@ -2025,14 +2041,8 @@ private fun BottomNav(
                     pillBaseModifier
                         .clip(CircleShape),
                 ) {
-                    // Deformation changes with the gesture; the frosted fill and
-                    // border stay identical before, during, and after dragging.
-                    // This software-safe capture avoids the RuntimeShader crash on drag.
-                    Box(Modifier.matchParentSize().staticGlassFill(Color(0x55101013)))
-                    Box(
-                        Modifier.matchParentSize()
-                            .border(1.dp, Color.White.copy(.11f), CircleShape),
-                    )
+                    // Keep the dark highlight static while its pill shape deforms under drag.
+                    Box(Modifier.matchParentSize().homeNavBubbleFill())
                 }
             }
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
@@ -2083,7 +2093,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, accentColor: Color, songChangeDirection: Int, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
     val height by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar height") {
@@ -2148,9 +2158,8 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
             }
         }
         .shadow(18.dp, shape).clip(shape)
-        .border(.75.dp, HomeFrostedBorder, shape)
         .clickable(onClick = onOpen)) {
-        Box(Modifier.matchParentSize().staticGlassFill(HomeFrostedGlass))
+        Box(Modifier.matchParentSize().homeNowPlayingFill(accentColor))
         Box(
             Modifier.align(Alignment.TopStart).offset(x = artworkX, y = artworkY).size(artworkSize)
                 .onGloballyPositioned { coordinates ->
@@ -2164,7 +2173,22 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                 }
                 .alpha(if (artworkFlightActive) 0f else 1f)
         ) {
-            AlbumArt(song, Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(artworkCorner)), song.title, artworkCorner)
+            AnimatedContent(
+                targetState = song,
+                contentKey = { it.id },
+                transitionSpec = {
+                    fadeIn(tween(300, easing = WavvMotionEasing)) togetherWith
+                        fadeOut(tween(260, easing = WavvMotionEasing))
+                },
+                label = "player artwork track change",
+            ) { displayedSong ->
+                AlbumArt(
+                    displayedSong,
+                    Modifier.fillMaxSize().shadow(12.dp, RoundedCornerShape(artworkCorner)),
+                    displayedSong.title,
+                    artworkCorner,
+                )
+            }
         }
         AnimatedContent(
             targetState = expanded,
@@ -2177,7 +2201,20 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                 Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Spacer(Modifier.width(50.dp))
-                        TrackText(song, Modifier.weight(1f), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp)
+                        AnimatedContent(
+                            targetState = song,
+                            contentKey = { it.id },
+                            transitionSpec = {
+                                (slideInHorizontally(tween(320, easing = WavvMotionEasing)) { it * songChangeDirection } +
+                                    fadeIn(tween(260, easing = WavvMotionEasing))) togetherWith
+                                    (slideOutHorizontally(tween(260, easing = WavvMotionEasing)) { -it * songChangeDirection } +
+                                        fadeOut(tween(200, easing = WavvMotionEasing)))
+                            },
+                            label = "expanded player track change",
+                            modifier = Modifier.weight(1f),
+                        ) { displayedSong ->
+                            TrackText(displayedSong, Modifier.fillMaxWidth(), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp)
+                        }
                         FavouriteButton(liked, onLike)
                     }
                     Spacer(Modifier.height(12.dp))
@@ -2200,7 +2237,20 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
             } else {
                 Row(Modifier.fillMaxSize().padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Spacer(Modifier.width(40.dp))
-                    TrackText(song, Modifier.weight(1f), 14.sp)
+                    AnimatedContent(
+                        targetState = song,
+                        contentKey = { it.id },
+                        transitionSpec = {
+                            (slideInHorizontally(tween(320, easing = WavvMotionEasing)) { it * songChangeDirection } +
+                                fadeIn(tween(260, easing = WavvMotionEasing))) togetherWith
+                                (slideOutHorizontally(tween(260, easing = WavvMotionEasing)) { -it * songChangeDirection } +
+                                    fadeOut(tween(200, easing = WavvMotionEasing)))
+                        },
+                        label = "compact player track change",
+                        modifier = Modifier.weight(1f),
+                    ) { displayedSong ->
+                        TrackText(displayedSong, Modifier.fillMaxWidth(), 14.sp)
+                    }
                     Image(
                         androidx.compose.ui.res.painterResource(R.drawable.skip_prev),
                         "Previous",
@@ -2418,6 +2468,10 @@ private fun FullPlayer(
     onArtworkDragProgress: (Float) -> Unit,
     onArtworkDragCancel: () -> Unit,
 ) {
+    val latestOnClose by rememberUpdatedState(onClose)
+    val latestOnArtworkDragStart by rememberUpdatedState(onArtworkDragStart)
+    val latestOnArtworkDragProgress by rememberUpdatedState(onArtworkDragProgress)
+    val latestOnArtworkDragCancel by rememberUpdatedState(onArtworkDragCancel)
     var showLyrics by remember(song.id) { mutableStateOf(false) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
@@ -2472,7 +2526,7 @@ private fun FullPlayer(
                     maskedArtworkAlpha = maskedArtAlpha,
                     shadowElevationPx = with(density) { artworkShadow.toPx() },
                 )
-                onClose(latestFrame)
+                latestOnClose(latestFrame)
                 isDismissing = true
             }
         }
@@ -2489,15 +2543,15 @@ private fun FullPlayer(
                         ),
                     ) { value, _ ->
                         playerDragOffset = value
-                        if (artworkGestureStarted) onArtworkDragProgress(value)
+                        if (artworkGestureStarted) latestOnArtworkDragProgress(value)
                     }
                     if (artworkGestureStarted) {
-                        onArtworkDragCancel()
+                        latestOnArtworkDragCancel()
                         artworkGestureStarted = false
                     }
                 }
             } else if (artworkGestureStarted) {
-                onArtworkDragCancel()
+                latestOnArtworkDragCancel()
                 artworkGestureStarted = false
             }
         }
@@ -2510,7 +2564,7 @@ private fun FullPlayer(
                     alpha = 1f - (playerDragOffset / (playerHeightPx * .18f)).coerceIn(0f, 1f)
                 }
                 .background(Color.Black)
-                .pointerInput(showQueue, isDismissing, playerHeightPx) {
+                .pointerInput(song.id, showQueue, isDismissing, playerHeightPx) {
             var total = 0f
             var downwardDragStarted = false
             detectVerticalDragGestures(
@@ -2533,12 +2587,12 @@ private fun FullPlayer(
                                 shadowElevationPx = with(density) { artworkShadow.toPx() },
                             )
                             if (frame != null) {
-                                onArtworkDragStart(frame)
+                                latestOnArtworkDragStart(frame)
                                 artworkGestureStarted = true
                             }
                         }
                         playerDragOffset = nextOffset
-                        if (artworkGestureStarted) onArtworkDragProgress(nextOffset)
+                        if (artworkGestureStarted) latestOnArtworkDragProgress(nextOffset)
                     }
                 },
                 onDragEnd = {

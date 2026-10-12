@@ -15,6 +15,8 @@ import android.graphics.RenderNode as AndroidRenderNode
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -25,6 +27,84 @@ import kotlin.math.roundToInt
 internal val HomeFrostedGlass = Color(0x761E2024)
 internal val HomeFrostedFill = Color(0x3D282930)
 internal val HomeFrostedBorder = Color.White.copy(alpha = .12f)
+internal fun Modifier.homeBlueVioletFill() = homeBlueVioletSurface(highlight = false)
+internal fun Modifier.homeBlueVioletHighlightFill() = homeBlueVioletSurface(highlight = true)
+internal fun Modifier.homeNavBarFill() = background(Color(0xFF191919))
+internal fun Modifier.homeNavBubbleFill() = background(Color(0xFF212121))
+
+internal fun Modifier.homeStackCardFill() = background(Color(0xFF161616))
+
+internal fun Modifier.homeNowPlayingFill(accent: Color) = drawWithCache {
+    val solidAccent = accent.copy(alpha = 1f)
+    val deepAccent = Color(
+        red = (accent.red * .68f).coerceAtLeast(.035f),
+        green = (accent.green * .68f).coerceAtLeast(.035f),
+        blue = (accent.blue * .68f).coerceAtLeast(.055f),
+    )
+    val accentGradient = Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to solidAccent,
+            .38f to solidAccent,
+            .72f to deepAccent,
+            1f to deepAccent,
+        ),
+        endY = size.height,
+    )
+    onDrawBehind { drawRect(accentGradient) }
+}
+
+internal fun homeFallbackAccent(seed: Long): Color {
+    val palette = listOf(
+        Color(0xFF293D5A),
+        Color(0xFF443451),
+        Color(0xFF24464B),
+        Color(0xFF49313F),
+        Color(0xFF453822),
+        Color(0xFF304554),
+    )
+    return palette[Math.floorMod(seed, palette.size.toLong()).toInt()]
+}
+
+private fun Modifier.homeBlueVioletSurface(highlight: Boolean) = drawWithCache {
+    val base = Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to if (highlight) Color(0xFF101735) else Color(0xFF0D1326),
+            .22f to if (highlight) Color(0xFF111832) else Color(0xFF101630),
+            .48f to if (highlight) Color(0xFF11152E) else Color(0xFF12172F),
+            .76f to if (highlight) Color(0xFF0C1122) else Color(0xFF0C1121),
+            1f to if (highlight) Color(0xFF090C18) else Color(0xFF090B16),
+        ),
+        endY = size.height,
+    )
+    val glowRadius = minOf(size.width * .64f, size.height * 1.25f).coerceAtLeast(1f)
+    val glow = Brush.radialGradient(
+        colorStops = if (highlight) {
+            arrayOf(
+                0f to Color(0xF53B3BAA),
+                .22f to Color(0xE735359C),
+                .44f to Color(0xC52B2F89),
+                .64f to Color(0x9821276B),
+                .84f to Color(0x58171D49),
+                1f to Color.Transparent,
+            )
+        } else {
+            arrayOf(
+                0f to Color(0xF5312E96),
+                .22f to Color(0xE8302D90),
+                .44f to Color(0xC4262B7C),
+                .64f to Color(0x961F245F),
+                .84f to Color(0x56151B42),
+                1f to Color.Transparent,
+            )
+        },
+        center = Offset(size.width * .5f, size.height * .06f),
+        radius = glowRadius,
+    )
+    onDrawBehind {
+        drawRect(base)
+        drawRect(glow)
+    }
+}
 internal fun Modifier.staticGlassFill(tint: Color) = background(
     Brush.verticalGradient(listOf(Color.White.copy(alpha = .075f), tint, Color.Black.copy(alpha = .18f))),
 )
