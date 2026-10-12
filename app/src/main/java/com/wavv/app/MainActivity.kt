@@ -1607,7 +1607,7 @@ internal fun ScreenHeader(
         ) {
             Text(
                 title,
-                color = Color.White,
+                color = if (brandHome) WavvPink else Color.White,
                 fontSize = if (brandHome) 33.sp else 32.sp,
                 fontWeight = if (brandHome) FontWeight.Black else FontWeight.ExtraBold,
                 letterSpacing = if (brandHome) (-1.15).sp else (-1).sp,

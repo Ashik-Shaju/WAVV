@@ -993,6 +993,11 @@ private fun HeroCard(
     LaunchedEffect(song.id, song.albumArtUri, song.uri) {
         thumbnailAccent = withContext(Dispatchers.IO) { homeThumbnailAccentColor(context, song) }
     }
+    val playAccent = Color(
+        red = (thumbnailAccent.red * 1.45f).coerceAtMost(.95f),
+        green = (thumbnailAccent.green * 1.45f).coerceAtMost(.95f),
+        blue = (thumbnailAccent.blue * 1.45f).coerceAtMost(.95f),
+    )
     val cardShape = RoundedCornerShape(20.dp)
     Box(
         Modifier.fillMaxWidth().aspectRatio(.95f)
@@ -1021,7 +1026,7 @@ private fun HeroCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text(song.title.uppercase(), color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.title.uppercase(), color = playAccent, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     GlassPill(
@@ -1029,6 +1034,7 @@ private fun HeroCard(
                         onLongClick = { showActions = true },
                         label = "Play",
                         accentColor = thumbnailAccent,
+                        iconAccentColor = playAccent,
                     )
                 }
             }
@@ -1058,7 +1064,7 @@ private fun HeroCard(
 }
 
 @Composable
-private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: String, accentColor: Color) {
+private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: String, accentColor: Color, iconAccentColor: Color) {
     val shape = CircleShape
     Box(
         Modifier.width(86.dp).height(42.dp).clip(shape)
@@ -1071,14 +1077,9 @@ private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: Strin
     ) {
         Box(Modifier.matchParentSize().homeThumbnailAccentFill(accentColor))
         Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            val iconAccent = Color(
-                red = (accentColor.red * 1.45f).coerceAtMost(.95f),
-                green = (accentColor.green * 1.45f).coerceAtMost(.95f),
-                blue = (accentColor.blue * 1.45f).coerceAtMost(.95f),
-            )
             Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = iconAccent.copy(alpha = .78f), modifier = Modifier.size(20.dp).blur(4.dp))
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = iconAccent, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = iconAccentColor.copy(alpha = .78f), modifier = Modifier.size(20.dp).blur(4.dp))
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = iconAccentColor, modifier = Modifier.size(16.dp))
             }
             Spacer(Modifier.width(5.dp))
             Text(label, color = Color.White.copy(alpha = .72f), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Cursive)
