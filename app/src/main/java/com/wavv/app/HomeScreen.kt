@@ -939,6 +939,11 @@ private fun HeroCard(
     onNavigateToArtist: (Song) -> Unit,
 ) {
     var showActions by remember(song.id) { mutableStateOf(false) }
+    var thumbnailAccent by remember(song.id) { mutableStateOf(homeFallbackAccent(song.id)) }
+    val context = LocalContext.current
+    LaunchedEffect(song.id, song.albumArtUri, song.uri) {
+        thumbnailAccent = withContext(Dispatchers.IO) { homeThumbnailAccentColor(context, song) }
+    }
     val cardShape = RoundedCornerShape(20.dp)
     Box(
         Modifier.fillMaxWidth().aspectRatio(.95f)
@@ -970,7 +975,12 @@ private fun HeroCard(
                         Text(song.title.uppercase(), color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    GlassPill(onClick = { onPlay(song) }, onLongClick = { showActions = true }, label = "Play")
+                    GlassPill(
+                        onClick = { onPlay(song) },
+                        onLongClick = { showActions = true },
+                        label = "Play",
+                        accentColor = thumbnailAccent,
+                    )
                 }
             }
         }
@@ -999,7 +1009,7 @@ private fun HeroCard(
 }
 
 @Composable
-private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: String) {
+private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: String, accentColor: Color) {
     val shape = CircleShape
     Box(
         Modifier.width(86.dp).height(42.dp).clip(shape)
@@ -1010,11 +1020,19 @@ private fun GlassPill(onClick: () -> Unit, onLongClick: () -> Unit, label: Strin
                 onLongClick = onLongClick,
             ),
     ) {
-        Box(Modifier.matchParentSize().homeBlueVioletHighlightFill())
+        Box(Modifier.matchParentSize().homeThumbnailAccentFill(accentColor))
         Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            val iconAccent = Color(
+                red = (accentColor.red * 1.45f).coerceAtMost(.95f),
+                green = (accentColor.green * 1.45f).coerceAtMost(.95f),
+                blue = (accentColor.blue * 1.45f).coerceAtMost(.95f),
+            )
+            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = iconAccent.copy(alpha = .78f), modifier = Modifier.size(20.dp).blur(4.dp))
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = iconAccent, modifier = Modifier.size(16.dp))
+            }
             Spacer(Modifier.width(5.dp))
-            Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Cursive)
+            Text(label, color = Color.White.copy(alpha = .72f), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Cursive)
         }
     }
 }

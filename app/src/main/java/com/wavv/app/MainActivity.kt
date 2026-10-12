@@ -4302,6 +4302,48 @@ internal suspend fun homeAcrylicChipColor(context: Context, song: Song): Color {
     )
 }
 
+internal suspend fun homeThumbnailAccentColor(context: Context, song: Song): Color {
+    val targetEdge = 96
+    val sourceKey = "${song.albumArtUri.orEmpty()}|${song.uri}"
+    val bitmap = decodeAlbumArt(
+        context,
+        song.albumArtUri,
+        song.uri,
+        "$sourceKey|carousel-accent-$targetEdge",
+        targetEdge,
+    ) ?: return homeFallbackAccent(song.id)
+
+    val buckets = Array(24) { FloatArray(4) }
+    val hsv = FloatArray(3)
+    val stepX = (bitmap.width / 24).coerceAtLeast(1)
+    val stepY = (bitmap.height / 24).coerceAtLeast(1)
+    for (y in 0 until bitmap.height step stepY) {
+        for (x in 0 until bitmap.width step stepX) {
+            val pixel = bitmap.getPixel(x, y)
+            if (android.graphics.Color.alpha(pixel) < 48) continue
+            android.graphics.Color.colorToHSV(pixel, hsv)
+            val saturation = hsv[1]
+            val brightness = hsv[2]
+            if (saturation < .18f || brightness < .12f) continue
+            val hueBucket = (hsv[0] / 15f).toInt().coerceIn(0, 23)
+            val brightnessWeight = (1f - kotlin.math.abs(brightness - .58f) / .58f).coerceIn(.15f, 1f)
+            val weight = saturation * saturation * brightnessWeight
+            val bucket = buckets[hueBucket]
+            bucket[0] += android.graphics.Color.red(pixel) * weight
+            bucket[1] += android.graphics.Color.green(pixel) * weight
+            bucket[2] += android.graphics.Color.blue(pixel) * weight
+            bucket[3] += weight
+        }
+    }
+    val dominantAccent = buckets.maxByOrNull { it[3] }?.takeIf { it[3] > 0f }
+        ?: return homeFallbackAccent(song.id)
+    return Color(
+        red = (dominantAccent[0] / dominantAccent[3] / 255f).coerceIn(0f, 1f),
+        green = (dominantAccent[1] / dominantAccent[3] / 255f).coerceIn(0f, 1f),
+        blue = (dominantAccent[2] / dominantAccent[3] / 255f).coerceIn(0f, 1f),
+    )
+}
+
 @Composable
 private fun NoArtwork(modifier: Modifier, contentDescription: String?, radius: Dp) {
     Box(

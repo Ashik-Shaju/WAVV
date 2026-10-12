@@ -30,9 +30,30 @@ internal val HomeFrostedBorder = Color.White.copy(alpha = .12f)
 internal fun Modifier.homeBlueVioletFill() = homeBlueVioletSurface(highlight = false)
 internal fun Modifier.homeBlueVioletHighlightFill() = homeBlueVioletSurface(highlight = true)
 internal fun Modifier.homeNavBarFill() = background(Color(0xFF191919))
-internal fun Modifier.homeNavBubbleFill() = background(Color(0xFF212121))
+internal fun Modifier.homeNavBubbleFill() = background(Color(0xFF2D2D2D))
 
 internal fun Modifier.homeStackCardFill() = background(Color(0xFF161616))
+
+internal fun Modifier.homeThumbnailAccentFill(accent: Color) = drawWithCache {
+    val body = Color(
+        red = (accent.red * .38f).coerceAtLeast(.018f),
+        green = (accent.green * .38f).coerceAtLeast(.018f),
+        blue = (accent.blue * .38f).coerceAtLeast(.018f),
+    )
+    val base = Brush.verticalGradient(
+        listOf(body, Color(body.red * .82f, body.green * .82f, body.blue * .82f)),
+        endY = size.height,
+    )
+    val accentGlow = Brush.radialGradient(
+        colors = listOf(accent.copy(alpha = .32f), accent.copy(alpha = .12f), Color.Transparent),
+        center = Offset(size.width * .5f, size.height * .12f),
+        radius = minOf(size.width * .9f, size.height * 2f).coerceAtLeast(1f),
+    )
+    onDrawBehind {
+        drawRect(base)
+        drawRect(accentGlow)
+    }
+}
 
 internal fun Modifier.homeNowPlayingFill(accent: Color) = drawWithCache {
     val solidAccent = accent.copy(alpha = 1f)
