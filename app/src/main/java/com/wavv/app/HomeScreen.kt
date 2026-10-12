@@ -215,6 +215,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -714,6 +715,7 @@ private fun HomeStackPanel(
                                 HomeStackCard(
                                     section = section,
                                     enabled = stackListExpanded || active,
+                                    stackScrollInProgress = scrollState.isScrollInProgress,
                                     contentVisible = contentVisible,
                                     modifier = Modifier.fillMaxSize(),
                                     onPlayMix = onPlayMix,
@@ -737,12 +739,15 @@ private fun HomeStackPanel(
 private fun HomeStackCard(
     section: HomeStackSection,
     enabled: Boolean,
+    stackScrollInProgress: Boolean,
     contentVisible: Boolean,
     modifier: Modifier = Modifier,
     onPlayMix: (SmartMix) -> Unit,
     onEntryClick: (HomeStackEntry) -> Unit,
 ) {
     val entryListState = rememberLazyListState()
+    val rowScrollInProgress = rememberUpdatedState(entryListState.isScrollInProgress)
+    val stackScrollActive = rememberUpdatedState(stackScrollInProgress)
     val tileWidth = ((LocalConfiguration.current.screenWidthDp.dp - 96.dp) / 3).coerceIn(64.dp, 88.dp)
     val cardShape = RoundedCornerShape(28.dp)
     Box(modifier.clip(cardShape).homeStackCardFill()) {
@@ -758,7 +763,14 @@ private fun HomeStackCard(
             Text(section.label.uppercase(), color = Color.White, fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black, letterSpacing = .45.sp, fontFamily = FontFamily.SansSerif)
             Text(
                 if (section.mix != null) "PLAY MIX" else "Swipe to explore",
-                Modifier.then(if (section.mix != null) Modifier.clickable { onPlayMix(section.mix) } else Modifier),
+                Modifier.then(
+                    if (section.mix != null) {
+                        Modifier.scrollSafeTap(
+                            enabled = enabled,
+                            canTap = { !stackScrollActive.value && !rowScrollInProgress.value },
+                        ) { onPlayMix(section.mix) }
+                    } else Modifier,
+                ),
                 color = Color.White.copy(.48f), fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
             )
         }
@@ -772,7 +784,10 @@ private fun HomeStackCard(
                 key = { index, entry -> entry.song?.id ?: "${section.label}:${entry.title}:$index" },
             ) { _, entry ->
                 Column(
-                Modifier.width(tileWidth).clickable(enabled = enabled, role = Role.Button) { onEntryClick(entry) },
+                Modifier.width(tileWidth).scrollSafeTap(
+                    enabled = enabled,
+                    canTap = { !stackScrollActive.value && !rowScrollInProgress.value },
+                ) { onEntryClick(entry) },
                 ) {
                     Box(
                         Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp))
@@ -803,6 +818,40 @@ private fun HomeStackCard(
                 }
             }
         }
+        }
+    }
+}
+
+private fun Modifier.scrollSafeTap(
+    enabled: Boolean,
+    canTap: () -> Boolean,
+    onTap: () -> Unit,
+): Modifier = composed {
+    var gestureMoved by remember { mutableStateOf(false) }
+    val latestEnabled = rememberUpdatedState(enabled)
+    val latestCanTap = rememberUpdatedState(canTap)
+    val latestOnTap = rememberUpdatedState(onTap)
+    pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            gestureMoved = down.isConsumed || !latestCanTap.value()
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                val delta = change.position - down.position
+                if (
+                    change.isConsumed ||
+                    kotlin.math.abs(delta.x) > viewConfiguration.touchSlop ||
+                    kotlin.math.abs(delta.y) > viewConfiguration.touchSlop
+                ) {
+                    gestureMoved = true
+                }
+                if (!change.pressed) break
+            }
+        }
+    }.clickable(enabled = enabled, role = Role.Button) {
+        if (latestEnabled.value && !gestureMoved && latestCanTap.value()) {
+            latestOnTap.value()
         }
     }
 }
