@@ -32,6 +32,7 @@ data class PlaybackState(
     val autoplaySongs: List<Song> = emptyList(),
     val autoplayEnabled: Boolean = true,
     val playingFrom: String? = null,
+    val isUHQEnhanced: Boolean = false,
     val errorMessage: String? = null,
 )
 
@@ -93,6 +94,7 @@ class PlaybackController(context: Context) {
                 }
                 _state.value = _state.value.copy(
                     song = song,
+                    isUHQEnhanced = mediaItem.mediaMetadata.extras?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true,
                     isPlaying = controller?.isPlaying == true,
                     positionMs = 0L,
                     durationMs = controller?.duration.takeIf { it != null && it > 0L } ?: song.durationMs,
@@ -109,6 +111,13 @@ class PlaybackController(context: Context) {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) advanceToAutoplayIfNeeded()
+        }
+
+        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+            val current = controller?.currentMediaItem?.mediaMetadata?.extras
+            _state.value = _state.value.copy(
+                isUHQEnhanced = current?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true,
+            )
         }
 
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
@@ -449,7 +458,8 @@ class PlaybackController(context: Context) {
         if (currentController.mediaItemCount == 0) return
         val currentQueue = readQueue(currentController)
         if (managedQueue.isEmpty()) managedQueue = currentQueue
-        val song = currentController.currentMediaItem?.let(::songFor) ?: return
+        val item = currentController.currentMediaItem ?: return
+        val song = songFor(item) ?: return
         _state.value = PlaybackState(
             song = song,
             isPlaying = currentController.isPlaying,
@@ -461,6 +471,7 @@ class PlaybackController(context: Context) {
             autoplaySongs = autoplayCandidates.take(AUTOPLAY_VISIBLE_LIMIT),
             autoplayEnabled = _state.value.autoplayEnabled,
             playingFrom = playingFrom,
+            isUHQEnhanced = item.mediaMetadata.extras?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true,
         )
         refreshProgress()
     }
@@ -561,6 +572,7 @@ class PlaybackController(context: Context) {
 
 internal const val MEDIA_EXTRA_SELECTION_SOURCE = "com.wavv.app.SELECTION_SOURCE"
 internal const val MEDIA_EXTRA_RECOMMENDATION_ID = "com.wavv.app.RECOMMENDATION_ID"
+internal const val MEDIA_EXTRA_UHQ_SOURCE_URI = "com.wavv.app.UHQ_SOURCE_URI"
 
 internal class PlaybackStartConfirmation {
     private var requestedSongId: Long? = null

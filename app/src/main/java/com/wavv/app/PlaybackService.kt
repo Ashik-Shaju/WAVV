@@ -55,7 +55,6 @@ object PlaybackPlayerFactory {
         .build()
 }
 
-private const val MEDIA_EXTRA_UHQ_SOURCE_URI = "com.wavv.app.UHQ_SOURCE_URI"
 private const val MEDIA_EXTRA_UHQ_INTERNAL_SWITCH = "com.wavv.app.UHQ_INTERNAL_SWITCH"
 
 class PlaybackService : MediaSessionService() {

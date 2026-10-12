@@ -377,6 +377,7 @@ internal fun HomeScreen(
     recentSongs: List<Song> = emptyList(),
     smartMixes: List<SmartMix> = emptyList(),
     onPlayMix: (SmartMix) -> Unit = {},
+    statusChips: List<HomeStatusChip> = emptyList(),
 ) {
     val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
     val sections = remember(songs, favoriteIds, recentSongs, smartMixes) {
@@ -416,6 +417,13 @@ internal fun HomeScreen(
     }
     var selectedCategory by remember { mutableStateOf<HomeStackEntry?>(null) }
     var backdropSong by remember(songs) { mutableStateOf(songs.firstOrNull()) }
+    var acrylicChipColor by remember { mutableStateOf(Color(0xFF26385D)) }
+    val context = LocalContext.current
+    LaunchedEffect(backdropSong) {
+        acrylicChipColor = backdropSong?.let { song ->
+            withContext(Dispatchers.IO) { homeAcrylicChipColor(context, song) }
+        } ?: Color(0xFF26385D)
+    }
 
     Box(Modifier.fillMaxSize()) {
         AnimatedContent(
@@ -441,6 +449,8 @@ internal fun HomeScreen(
             isPlaying = isPlaying,
             showAmbient = false,
             backgroundColor = Color.Transparent,
+            statusChips = statusChips,
+            statusChipColor = acrylicChipColor,
         )
         if (songs.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

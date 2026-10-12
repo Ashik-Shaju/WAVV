@@ -9,6 +9,9 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -222,6 +225,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -235,7 +239,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
@@ -245,6 +251,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -770,6 +777,11 @@ internal data class WavvContentActions(
 internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val libraryState = state.libraryState
     val playbackState = state.playbackState
+    val playbackProgress by state.progressFlow.collectAsStateWithLifecycle()
+    val statusPlaybackState = playbackState.copy(
+        positionMs = playbackProgress.positionMs,
+        durationMs = playbackProgress.durationMs.takeIf { it > 0L } ?: playbackState.durationMs,
+    )
     val source = state.source
     val favoriteIds = (libraryState as? LibraryUiState.Ready)?.favoriteIds.orEmpty()
     val searchResults = (libraryState as? LibraryUiState.Ready)?.searchResults
@@ -812,6 +824,53 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onRemoveSongFromPlaylist = actions.onRemoveSongFromPlaylist
     val onClearListeningHistory = actions.onClearListeningHistory
     val context = LocalContext.current
+    val bluetoothOutput = rememberBluetoothOutputStatus(context)
+    val connectedSpeakerName = bluetoothOutput.name
+    var bluetoothPermissionGranted by remember {
+        mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)
+    }
+    val bluetoothCodec = rememberBluetoothCodec(context, bluetoothPermissionGranted)
+    val bluetoothPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        bluetoothPermissionGranted = granted
+    }
+    var bluetoothPermissionRequested by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(connectedSpeakerName, bluetoothPermissionRequested) {
+        if (connectedSpeakerName != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !bluetoothPermissionRequested && !bluetoothPermissionGranted
+        ) {
+            bluetoothPermissionRequested = true
+            bluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+    }
+    LaunchedEffect(bluetoothOutput.notice) {
+        if (bluetoothOutput.notice != null) {
+            delay(2_200)
+            bluetoothOutput.clearNotice()
+        }
+    }
+    val nextSongChipEligible = statusPlaybackState.isPlaying &&
+        (statusPlaybackState.durationMs - statusPlaybackState.positionMs) in 1..20_000
+    val homeStatusChips = remember(
+        statusPlaybackState.song?.id,
+        statusPlaybackState.song?.codec,
+        statusPlaybackState.song?.container,
+        statusPlaybackState.isPlaying,
+        statusPlaybackState.isUHQEnhanced,
+        statusPlaybackState.positionMs,
+        statusPlaybackState.durationMs,
+        nextSongChipEligible,
+        statusPlaybackState.queue,
+        statusPlaybackState.currentQueueIndex,
+        statusPlaybackState.autoplaySongs,
+        statusPlaybackState.autoplayEnabled,
+        statusPlaybackState.playingFrom,
+        connectedSpeakerName,
+        bluetoothCodec,
+        bluetoothOutput.notice,
+    ) {
+        homeStatusChipLabels(statusPlaybackState, connectedSpeakerName, bluetoothCodec, bluetoothOutput.notice)
+    }
     val hostActivity = remember(context) { context.findActivity() }
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
@@ -1095,6 +1154,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         songs = songs,
                         favoriteIds = favoriteIds,
                         isPlaying = playbackState.isPlaying,
+                        statusChips = homeStatusChips,
                         onChooseSource = onChooseSource,
                         onPlay = startPlayback,
                         onPlayFromContext = { song, contextQueue, sourceLabel ->
@@ -1432,6 +1492,8 @@ internal fun ScreenHeader(
     isPlaying: Boolean = false,
     showAmbient: Boolean = true,
     backgroundColor: Color? = null,
+    statusChips: List<HomeStatusChip> = emptyList(),
+    statusChipColor: Color = Color(0xFF26385D),
     trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
     val brandHome = title == "Wavv" && !showAmbient
@@ -1482,7 +1544,6 @@ internal fun ScreenHeader(
             modifier = Modifier.fillMaxWidth().statusBarsPadding()
                 .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = if (waveform) 12.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 title,
@@ -1492,13 +1553,221 @@ internal fun ScreenHeader(
                 letterSpacing = if (brandHome) (-1.15).sp else (-1).sp,
                 fontFamily = if (brandHome) FontFamily.SansSerif else FontFamily.Default,
             )
-            if (waveform) Waveform(isPlaying)
+            if (waveform) {
+                Spacer(Modifier.width(16.dp))
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    HomeStatusChips(statusChips, statusChipColor, Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.width(12.dp))
+                Waveform(isPlaying)
+            }
             trailingContent()
         }
         if (!waveform) {
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(1.dp).background(Color.White.copy(.06f)))
         }
     }
+}
+
+internal fun homeStatusChipLabels(
+    playback: PlaybackState,
+    connectedSpeakerName: String?,
+    bluetoothCodec: String? = null,
+    bluetoothConnectionNotice: String? = null,
+): List<HomeStatusChip> {
+    return buildList {
+        bluetoothConnectionNotice?.takeIf(String::isNotBlank)?.let { add(HomeStatusChip(it)) }
+        bluetoothCodec?.takeIf {
+            it.isNotBlank() && !it.equals("AAC", ignoreCase = true) && !it.equals("SBC", ignoreCase = true)
+        }?.let { add(HomeStatusChip(it)) }
+        connectedSpeakerName?.trim()?.takeIf(String::isNotEmpty)?.let { add(HomeStatusChip(it)) }
+        val song = playback.song
+        if (song != null) {
+            val fileName = Uri.decode(Uri.parse(song.uri).lastPathSegment.orEmpty())
+            val metadata = "${song.codec.orEmpty()} ${song.container.orEmpty()} $fileName".lowercase(Locale.ROOT)
+            when {
+                playback.isUHQEnhanced -> add(HomeStatusChip("UHQ"))
+                metadata.contains("flac") -> add(HomeStatusChip("FLAC"))
+                metadata.contains("alac") || fileName.endsWith(".m4a", ignoreCase = true) -> add(HomeStatusChip("ALAC"))
+            }
+            val nextSong = playback.queue.getOrNull(playback.currentQueueIndex + 1)
+                ?: playback.autoplaySongs.firstOrNull().takeIf { playback.autoplayEnabled }
+            val remainingMs = playback.durationMs - playback.positionMs
+            nextSong?.takeIf { it.id != song.id && playback.isPlaying && remainingMs in 1..20_000 }
+                ?.let { add(HomeStatusChip("Next song: ${it.title}", truncateToFit = true)) }
+            playback.playingFrom?.trim()?.takeIf(String::isNotEmpty)?.let { add(HomeStatusChip("Playing from · $it")) }
+        }
+    }
+}
+
+@Composable
+private fun rememberUHQPlaybackEnabled(context: Context): Boolean {
+    var enabled by remember(context) { mutableStateOf(UHQPlaybackPreference.isEnabled(context)) }
+    DisposableEffect(context) {
+        val preferences = UHQPlaybackPreference.preferences(context)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == UHQPlaybackPreference.preferenceKey()) {
+                enabled = UHQPlaybackPreference.isEnabled(context)
+            }
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        enabled = UHQPlaybackPreference.isEnabled(context)
+        onDispose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    return enabled
+}
+
+private data class BluetoothOutputStatus(
+    val name: String? = null,
+    val notice: String? = null,
+    val clearNotice: () -> Unit = {},
+)
+
+@Composable
+private fun rememberBluetoothOutputStatus(context: Context): BluetoothOutputStatus {
+    val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    var name by remember(audioManager) { mutableStateOf(findConnectedBluetoothOutputName(audioManager)) }
+    var notice by remember(audioManager) { mutableStateOf<String?>(null) }
+    DisposableEffect(audioManager) {
+        fun refreshConnection() {
+            val updatedName = findConnectedBluetoothOutputName(audioManager)
+            if (updatedName != name) {
+                notice = if (updatedName != null) "Device connected"
+                else if (name != null) "Device disconnected" else null
+                name = updatedName
+            }
+        }
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                refreshConnection()
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                refreshConnection()
+            }
+        }
+        audioManager.registerAudioDeviceCallback(callback, android.os.Handler(android.os.Looper.getMainLooper()))
+        refreshConnection()
+        onDispose { audioManager.unregisterAudioDeviceCallback(callback) }
+    }
+    return BluetoothOutputStatus(name, notice) { notice = null }
+}
+
+private fun findConnectedBluetoothOutputName(audioManager: AudioManager): String? =
+    audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        .firstOrNull { device ->
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER
+        }
+        ?.productName?.toString()?.trim()?.takeIf(String::isNotEmpty)
+
+@Composable
+private fun rememberBluetoothCodec(context: Context, hasBluetoothOutput: Boolean): String? {
+    val tracker = remember(context) { BluetoothCodecTracker(context.applicationContext) }
+    val codec by tracker.codec.collectAsStateWithLifecycle()
+    DisposableEffect(tracker, hasBluetoothOutput) {
+        if (hasBluetoothOutput) tracker.start()
+        onDispose { tracker.stop() }
+    }
+    return codec
+}
+
+internal data class HomeStatusChip(
+    val label: String,
+    val truncateToFit: Boolean = false,
+    val maxWidthPx: Int? = null,
+)
+
+@Composable
+private fun HomeStatusChips(labels: List<HomeStatusChip>, color: Color, modifier: Modifier = Modifier) {
+    if (labels.isEmpty()) return
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val density = LocalDensity.current
+        val textMeasurer = rememberTextMeasurer()
+        val textStyle = LocalTextStyle.current.merge(
+            TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.sp),
+        )
+        val maxWidthPx = with(density) { maxWidth.roundToPx() }
+        val gapPx = with(density) { 7.dp.roundToPx() }
+        val horizontalPaddingPx = with(density) { 24.dp.roundToPx() }
+        val pages = remember(labels, maxWidthPx, textMeasurer, textStyle) {
+            val pages = mutableListOf<List<HomeStatusChip>>()
+            var page = mutableListOf<HomeStatusChip>()
+            var usedWidth = 0
+            labels.forEach { chip ->
+                val textWidth = textMeasurer.measure(
+                    text = AnnotatedString(chip.label),
+                    style = textStyle,
+                    maxLines = 1,
+                    softWrap = false,
+                ).size.width
+                val naturalChipWidth = textWidth + horizontalPaddingPx
+                val chipWidth = if (chip.truncateToFit) naturalChipWidth.coerceAtMost(maxWidthPx) else naturalChipWidth
+                if (!chip.truncateToFit && chipWidth > maxWidthPx) return@forEach
+                val packedChip = if (chip.truncateToFit) chip.copy(maxWidthPx = chipWidth) else chip
+                val proposedWidth = if (page.isEmpty()) chipWidth else usedWidth + gapPx + chipWidth
+                if (page.isNotEmpty() && proposedWidth > maxWidthPx) {
+                    pages += page
+                    page = mutableListOf()
+                    usedWidth = 0
+                }
+                if (page.isEmpty()) usedWidth = chipWidth else usedWidth += gapPx + chipWidth
+                page += packedChip
+            }
+            if (page.isNotEmpty()) pages += page
+            pages
+        }
+
+        var pageIndex by remember { mutableIntStateOf(0) }
+        LaunchedEffect(pages) {
+            pageIndex = 0
+            if (pages.size > 1) {
+                while (isActive) {
+                    delay(4_500)
+                    pageIndex = (pageIndex + 1) % pages.size
+                }
+            }
+        }
+
+        AnimatedContent(
+            targetState = pages.getOrNull(pageIndex).orEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.CenterEnd,
+            transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(180)) },
+            label = "home status chip pages",
+        ) { page ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                page.forEach { chip ->
+                    val maxWidth = chip.maxWidthPx?.let { with(density) { it.toDp() } }
+                    HomeStatusPill(chip.label, color, textStyle, maxWidth)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeStatusPill(label: String, acrylicColor: Color, textStyle: TextStyle, maxWidth: Dp? = null) {
+    val shape = RoundedCornerShape(13.dp)
+    Text(
+        text = label,
+        color = Color.White.copy(.94f),
+        style = textStyle,
+        maxLines = 1,
+        overflow = if (maxWidth != null) TextOverflow.Ellipsis else TextOverflow.Clip,
+        modifier = Modifier.clip(shape)
+            .background(acrylicColor.copy(alpha = .72f))
+            .then(if (maxWidth != null) Modifier.widthIn(max = maxWidth) else Modifier)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    )
 }
 
 @Composable
@@ -3885,6 +4154,47 @@ private suspend fun decodeAlbumArt(context: Context, uriString: String?, audioUr
             }
         }
     }
+}
+
+internal suspend fun homeAcrylicChipColor(context: Context, song: Song): Color {
+    val targetEdge = 96
+    val sourceKey = "${song.albumArtUri.orEmpty()}|${song.uri}"
+    val bitmap = decodeAlbumArt(
+        context,
+        song.albumArtUri,
+        song.uri,
+        "$sourceKey|acrylic-chip-$targetEdge",
+        targetEdge,
+    ) ?: return Color(0xFF26385D)
+
+    var red = 0L
+    var green = 0L
+    var blue = 0L
+    var samples = 0
+    val stepX = (bitmap.width / 12).coerceAtLeast(1)
+    val stepY = (bitmap.height / 12).coerceAtLeast(1)
+    for (y in 0 until bitmap.height step stepY) {
+        for (x in 0 until bitmap.width step stepX) {
+            val pixel = bitmap.getPixel(x, y)
+            if (android.graphics.Color.alpha(pixel) < 48) continue
+            red += android.graphics.Color.red(pixel)
+            green += android.graphics.Color.green(pixel)
+            blue += android.graphics.Color.blue(pixel)
+            samples++
+        }
+    }
+    if (samples == 0) return Color(0xFF26385D)
+
+    // The home acrylic veil keeps most of the cover darkened; tint the chips with
+    // a restrained sample of the same artwork, without capturing or refracting it.
+    val imageRed = red.toFloat() / samples / 255f
+    val imageGreen = green.toFloat() / samples / 255f
+    val imageBlue = blue.toFloat() / samples / 255f
+    return Color(
+        red = .035f + (imageRed * .42f),
+        green = .045f + (imageGreen * .42f),
+        blue = .085f + (imageBlue * .48f),
+    )
 }
 
 @Composable

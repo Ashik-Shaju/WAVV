@@ -137,6 +137,7 @@ class MediaLibraryRepository(context: Context) {
                 val sizeColumn = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
                 val modifiedColumn = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
                 val mimeColumn = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                val displayNameColumn = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
                 val composerColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.COMPOSER)
                 val albumArtistColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.ALBUM_ARTIST)
                 val yearColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.YEAR)
@@ -168,7 +169,14 @@ class MediaLibraryRepository(context: Context) {
                             albumArtUri = artUri,
                             fileSizeBytes = cursor.getLongOrZero(sizeColumn),
                             modifiedAt = cursor.getLongOrZero(modifiedColumn) * 1_000L,
-                            codec = cursor.getStringOrNull(mimeColumn)?.substringAfterLast('/')?.ifBlank { null },
+                            codec = cursor.getStringOrNull(mimeColumn)?.let { mime ->
+                                val displayName = cursor.getStringOrNull(displayNameColumn).orEmpty()
+                                when {
+                                    displayName.endsWith(".flac", ignoreCase = true) || mime.contains("flac", ignoreCase = true) -> "flac"
+                                    displayName.endsWith(".m4a", ignoreCase = true) || displayName.endsWith(".alac", ignoreCase = true) -> "alac"
+                                    else -> mime.substringAfterLast('/').ifBlank { null }
+                                }
+                            },
                             container = cursor.getStringOrNull(mimeColumn),
                             metadataSource = "embedded",
                             genre = genres[id]?.firstOrNull(),
@@ -340,7 +348,11 @@ class MediaLibraryRepository(context: Context) {
         return try {
             retriever.setDataSource(metadataContext, uri)
             container = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
-            codec = container?.substringAfterLast('/')?.ifBlank { null }
+            codec = when {
+                displayName.endsWith(".flac", ignoreCase = true) -> "flac"
+                displayName.endsWith(".m4a", ignoreCase = true) || displayName.endsWith(".alac", ignoreCase = true) -> "alac"
+                else -> container?.substringAfterLast('/')?.ifBlank { null }
+            }
             sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
             } else null
