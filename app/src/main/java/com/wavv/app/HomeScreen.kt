@@ -493,6 +493,13 @@ internal fun HomeScreen(
                     onOpenSong = onPlay,
                     onOpenCategory = { selectedCategory = it },
                     onPlayMix = onPlayMix,
+                    favoriteIds = favoriteIds,
+                    onPlayNext = onPlayNext,
+                    onAddToQueue = onAddToQueue,
+                    onToggleFavorite = onToggleFavorite,
+                    onRequestAddToPlaylist = onRequestAddToPlaylist,
+                    onNavigateToAlbum = onNavigateToAlbum,
+                    onNavigateToArtist = onNavigateToArtist,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -543,6 +550,13 @@ private fun HomeStackPanel(
     onOpenSong: (Song) -> Unit,
     onOpenCategory: (HomeStackEntry) -> Unit,
     onPlayMix: (SmartMix) -> Unit,
+    favoriteIds: Set<Long>,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -719,6 +733,13 @@ private fun HomeStackPanel(
                                     contentVisible = contentVisible,
                                     modifier = Modifier.fillMaxSize(),
                                     onPlayMix = onPlayMix,
+                                    favoriteIds = favoriteIds,
+                                    onPlayNext = onPlayNext,
+                                    onAddToQueue = onAddToQueue,
+                                    onToggleFavorite = onToggleFavorite,
+                                    onRequestAddToPlaylist = onRequestAddToPlaylist,
+                                    onNavigateToAlbum = onNavigateToAlbum,
+                                    onNavigateToArtist = onNavigateToArtist,
                                     onEntryClick = { entry ->
                                         if (!stackListExpanded && !active) return@HomeStackCard
                                         if (entry.color != null) onOpenCategory(entry)
@@ -743,8 +764,16 @@ private fun HomeStackCard(
     contentVisible: Boolean,
     modifier: Modifier = Modifier,
     onPlayMix: (SmartMix) -> Unit,
+    favoriteIds: Set<Long>,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
     onEntryClick: (HomeStackEntry) -> Unit,
 ) {
+    var songForActions by remember { mutableStateOf<Song?>(null) }
     val entryListState = rememberLazyListState()
     val rowScrollInProgress = rememberUpdatedState(entryListState.isScrollInProgress)
     val stackScrollActive = rememberUpdatedState(stackScrollInProgress)
@@ -787,6 +816,7 @@ private fun HomeStackCard(
                 Modifier.width(tileWidth).scrollSafeTap(
                     enabled = enabled,
                     canTap = { !stackScrollActive.value && !rowScrollInProgress.value },
+                    onLongClick = { entry.song?.let { songForActions = it } },
                 ) { onEntryClick(entry) },
                 ) {
                     Box(
@@ -820,17 +850,32 @@ private fun HomeStackCard(
         }
         }
     }
+    songForActions?.let { song ->
+        SongActionsSheet(
+            song = song,
+            isFavorite = song.id in favoriteIds,
+            onDismiss = { songForActions = null },
+            onPlayNext = onPlayNext,
+            onAddToQueue = onAddToQueue,
+            onToggleFavorite = onToggleFavorite,
+            onRequestAddToPlaylist = onRequestAddToPlaylist,
+            onNavigateToAlbum = onNavigateToAlbum,
+            onNavigateToArtist = onNavigateToArtist,
+        )
+    }
 }
 
 private fun Modifier.scrollSafeTap(
     enabled: Boolean,
     canTap: () -> Boolean,
+    onLongClick: (() -> Unit)? = null,
     onTap: () -> Unit,
 ): Modifier = composed {
     var gestureMoved by remember { mutableStateOf(false) }
     val latestEnabled = rememberUpdatedState(enabled)
     val latestCanTap = rememberUpdatedState(canTap)
     val latestOnTap = rememberUpdatedState(onTap)
+    val latestOnLongClick = rememberUpdatedState(onLongClick)
     pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -849,11 +894,31 @@ private fun Modifier.scrollSafeTap(
                 if (!change.pressed) break
             }
         }
-    }.clickable(enabled = enabled, role = Role.Button) {
-        if (latestEnabled.value && !gestureMoved && latestCanTap.value()) {
-            latestOnTap.value()
-        }
-    }
+    }.then(
+        if (onLongClick == null) {
+            Modifier.clickable(enabled = enabled, role = Role.Button) {
+                if (latestEnabled.value && !gestureMoved && latestCanTap.value()) {
+                    latestOnTap.value()
+                }
+            }
+        } else {
+            Modifier.combinedClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = {
+                    if (latestEnabled.value && !gestureMoved && latestCanTap.value()) {
+                        latestOnTap.value()
+                    }
+                },
+                onLongClickLabel = "Song actions",
+                onLongClick = {
+                    if (latestEnabled.value && !gestureMoved && latestCanTap.value()) {
+                        latestOnLongClick.value?.invoke()
+                    }
+                },
+            )
+        },
+    )
 }
 
 @Composable
@@ -1026,8 +1091,8 @@ private fun HeroCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text(song.title.uppercase(), color = playAccent, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.title.uppercase(), Modifier.songMetadataMarquee(), color = playAccent, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                        Text(song.artist, Modifier.padding(top = 2.dp).songMetadataMarquee(), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
                     }
                     GlassPill(
                         onClick = { onPlay(song) },
@@ -1041,25 +1106,50 @@ private fun HeroCard(
         }
     }
     if (showActions) {
-        WavvBottomSheet(onDismissRequest = { showActions = false }) { close ->
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-                AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
-                Column(Modifier.weight(1f)) {
-                    Text("Song actions", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+        SongActionsSheet(
+            song = song,
+            isFavorite = isFavorite,
+            onDismiss = { showActions = false },
+            onPlayNext = onPlayNext,
+            onAddToQueue = onAddToQueue,
+            onToggleFavorite = onToggleFavorite,
+            onRequestAddToPlaylist = onRequestAddToPlaylist,
+            onNavigateToAlbum = onNavigateToAlbum,
+            onNavigateToArtist = onNavigateToArtist,
+        )
+    }
+}
+
+@Composable
+private fun SongActionsSheet(
+    song: Song,
+    isFavorite: Boolean,
+    onDismiss: () -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+            AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
+            Column(Modifier.weight(1f)) {
+                Text("Song actions", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(song.artist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Spacer(Modifier.height(14.dp))
-            SheetActionRow(Icons.Default.SkipNext, "Play next") { close(); onPlayNext(song) }
-            SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") { close(); onAddToQueue(song) }
-            SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
-                close(); onToggleFavorite(song)
-            }
-            SheetActionRow(Icons.Default.Add, "Add to playlist") { close(); onRequestAddToPlaylist(song) }
-            SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
-            SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
         }
+        Spacer(Modifier.height(14.dp))
+        SheetActionRow(Icons.Default.SkipNext, "Play next") { close(); onPlayNext(song) }
+        SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") { close(); onAddToQueue(song) }
+        SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
+            close(); onToggleFavorite(song)
+        }
+        SheetActionRow(Icons.Default.Add, "Add to playlist") { close(); onRequestAddToPlaylist(song) }
+        SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
+        SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
     }
 }
 

@@ -68,6 +68,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.MarqueeSpacing
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -2213,7 +2215,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                             label = "expanded player track change",
                             modifier = Modifier.weight(1f),
                         ) { displayedSong ->
-                            TrackText(displayedSong, Modifier.fillMaxWidth(), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp)
+                            TrackText(displayedSong, Modifier.fillMaxWidth(), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp, marquee = true)
                         }
                         FavouriteButton(liked, onLike)
                     }
@@ -2249,7 +2251,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                         label = "compact player track change",
                         modifier = Modifier.weight(1f),
                     ) { displayedSong ->
-                        TrackText(displayedSong, Modifier.fillMaxWidth(), 14.sp)
+                        TrackText(displayedSong, Modifier.fillMaxWidth(), 14.sp, marquee = true)
                     }
                     Image(
                         androidx.compose.ui.res.painterResource(R.drawable.skip_prev),
@@ -2302,12 +2304,40 @@ private fun TrackText(
     titleLetterSpacing: TextUnit = TextUnit.Unspecified,
     titleColor: Color = Color.White,
     subtitleColor: Color = Color.White.copy(.5f),
+    marquee: Boolean = false,
 ) {
     Column(modifier) {
-        Text(song.title, color = titleColor, fontSize = titleSize, fontWeight = FontWeight.Bold, letterSpacing = titleLetterSpacing, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(song.artist, color = subtitleColor, fontSize = subtitleSize, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+        Text(
+            song.title,
+            modifier = if (marquee) Modifier.songMetadataMarquee() else Modifier,
+            color = titleColor,
+            fontSize = titleSize,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = titleLetterSpacing,
+            maxLines = 1,
+            softWrap = false,
+            overflow = if (marquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+        )
+        Text(
+            song.artist,
+            modifier = Modifier.padding(top = 2.dp).then(if (marquee) Modifier.songMetadataMarquee() else Modifier),
+            color = subtitleColor,
+            fontSize = subtitleSize,
+            maxLines = 1,
+            softWrap = false,
+            overflow = if (marquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+        )
     }
 }
+
+@OptIn(ExperimentalFoundationApi::class)
+internal fun Modifier.songMetadataMarquee(): Modifier = basicMarquee(
+    iterations = Int.MAX_VALUE,
+    initialDelayMillis = 1_000,
+    repeatDelayMillis = 1_600,
+    spacing = MarqueeSpacing(24.dp),
+    velocity = 22.dp,
+)
 
 @Composable
 private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, iconSize: Dp) {
@@ -2648,7 +2678,7 @@ private fun FullPlayer(
         ) {
             Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TrackText(song, Modifier.weight(1f).padding(end = 12.dp), 28.sp, 20.sp, (-.65).sp)
+                    TrackText(song, Modifier.weight(1f).padding(end = 12.dp), 28.sp, 20.sp, (-.65).sp, marquee = true)
                     Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
                         FavouriteButton(liked, onLike)
                         Box(Modifier.size(38.dp).clickable { showTrackOptions = true }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }

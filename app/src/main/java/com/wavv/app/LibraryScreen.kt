@@ -769,16 +769,22 @@ internal fun WavvBottomSheet(
     var visible by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
     val dismiss by rememberUpdatedState(onDismissRequest)
+    val requestClose = {
+        if (!dismissing) {
+            dismissing = true
+            visible = false
+        }
+    }
     LaunchedEffect(Unit) { visible = true }
     LaunchedEffect(dismissing) {
         if (dismissing) {
-            delay(260)
+            delay(240)
             dismiss()
         }
     }
 
     Dialog(
-        onDismissRequest = { dismissing = true },
+        onDismissRequest = requestClose,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -791,7 +797,7 @@ internal fun WavvBottomSheet(
                 Box(
                     Modifier.fillMaxSize()
                         .background(Color.Black.copy(.5f))
-                        .clickable { if (!dismissing) dismissing = true },
+                    .clickable(onClick = requestClose),
                 )
             }
             AnimatedVisibility(
@@ -810,12 +816,12 @@ internal fun WavvBottomSheet(
                         .padding(horizontal = 18.dp, vertical = 14.dp),
                 ) {
                     Box(
-                        Modifier.fillMaxWidth().padding(bottom = 16.dp).clickable { if (!dismissing) dismissing = true },
+                        Modifier.fillMaxWidth().padding(bottom = 16.dp).clickable(onClick = requestClose),
                         contentAlignment = Alignment.Center,
                     ) {
                         Box(Modifier.width(42.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(.28f)))
                     }
-                    content { if (!dismissing) dismissing = true }
+                    content(requestClose)
                 }
             }
         }
