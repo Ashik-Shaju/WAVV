@@ -74,6 +74,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -722,6 +723,7 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onMoveAutoplayItem = playbackController::moveAutoplayItem,
                     onSetAutoplayEnabled = playbackController::setAutoplayEnabled,
                     onSetTrackUHQ = playbackController::setCurrentTrackUHQ,
+                    onSelectAudioDevice = playbackController::setPreferredAudioDevice,
                     onCreatePlaylist = { name, songId, onComplete ->
                         libraryViewModel.createPlaylist(name, songId, onComplete)
                     },
@@ -806,6 +808,7 @@ internal data class WavvContentActions(
     val onMoveAutoplayItem: (Int, Int) -> Unit,
     val onSetAutoplayEnabled: (Boolean) -> Unit,
     val onSetTrackUHQ: (Long, Boolean) -> Unit,
+    val onSelectAudioDevice: (Int?) -> Unit,
     val onCreatePlaylist: (String, Long?, (Boolean) -> Unit) -> Unit,
     val onRenamePlaylist: (Long, String, (Boolean) -> Unit) -> Unit,
     val onDeletePlaylist: (Long, (Boolean) -> Unit) -> Unit,
@@ -860,6 +863,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onRemoveAutoplaySong = actions.onRemoveAutoplaySong
     val onMoveAutoplayItem = actions.onMoveAutoplayItem
     val onSetAutoplayEnabled = actions.onSetAutoplayEnabled
+    val onSelectAudioDevice = actions.onSelectAudioDevice
     val onCreatePlaylist = actions.onCreatePlaylist
     val onRenamePlaylist = actions.onRenamePlaylist
     val onDeletePlaylist = actions.onDeletePlaylist
@@ -1427,6 +1431,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     song = it,
                     state = playbackState,
                     progressFlow = state.progressFlow,
+                    onSelectAudioDevice = onSelectAudioDevice,
                     liked = it.id in favoriteIds,
                     showQueue = showQueue,
                     onClose = { frame -> closePlayer(frame) },
@@ -2495,6 +2500,7 @@ private fun FullPlayer(
     song: Song,
     state: PlaybackState,
     progressFlow: StateFlow<PlaybackProgress>,
+    onSelectAudioDevice: (Int?) -> Unit,
     liked: Boolean,
     showQueue: Boolean,
     queueMode: QueueMode,
@@ -2752,7 +2758,7 @@ private fun FullPlayer(
             PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 48.dp)
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { showLyrics = true }) { Image(androidx.compose.ui.res.painterResource(R.drawable.song_lyrics), "Lyrics", Modifier.size(24.dp).alpha(.7f), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)) }
-                IconButton(onClick = { showOutputs = true }) { Image(androidx.compose.ui.res.painterResource(R.drawable.output_device), "Audio output", Modifier.size(24.dp).alpha(.7f)) }
+                AudioOutputButton(onClick = { showOutputs = true })
                 IconButton(onClick = onCycleLoop) {
                     Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
                 }
@@ -2825,7 +2831,12 @@ private fun FullPlayer(
         ) {
             LyricsPanel(song, progressFlow, onSeek, { showLyrics = false })
         }
-        if (showOutputs) AudioOutputPanel(song, state.isPlaying, onClose = { showOutputs = false })
+        if (showOutputs) AudioOutputPanel(
+            song = song,
+            isPlaying = state.isPlaying,
+            onSelectAudioDevice = onSelectAudioDevice,
+            onClose = { showOutputs = false },
+        )
         if (showTrackOptions) {
             WavvBottomSheet(onDismissRequest = { showTrackOptions = false }) { close ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -3184,136 +3195,366 @@ private fun PlayerProgress(
 }
 
 @Composable
-private fun AudioOutputPanel(song: Song, isPlaying: Boolean, onClose: () -> Unit) {
+private fun AudioOutputButton(onClick: () -> Unit) {
     val context = LocalContext.current
     val router = remember(context) { MediaRouter.getInstance(context.applicationContext) }
-    val selector = remember {
-        MediaRouteSelector.Builder()
-            .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
-            .build()
+    val selectedRoute = rememberSelectedAudioRoute(router).selectedRoute
+    val external = selectedRoute.isExternalAudioRoute()
+    IconButton(onClick = onClick) {
+        OutputGlyph(
+            kind = if (external) "headphones" else "speaker",
+            color = Color.White.copy(.78f),
+            modifier = Modifier.size(23.dp).semantics {
+                contentDescription = if (external) "Audio output, external device" else "Audio output, phone speaker"
+            },
+        )
     }
-    var outputs by remember(router, selector) { mutableStateOf(emptyList<MediaRouter.RouteInfo>()) }
-    DisposableEffect(router, selector) {
-        fun refreshRoutes() {
-            outputs = router.routes.filter { it.isEnabled && it.matchesSelector(selector) }
+}
+
+internal val supportedAudioOutputTypes = setOf(
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+    AudioDeviceInfo.TYPE_LINE_ANALOG,
+    AudioDeviceInfo.TYPE_LINE_DIGITAL,
+    AudioDeviceInfo.TYPE_USB_DEVICE,
+    AudioDeviceInfo.TYPE_USB_ACCESSORY,
+    AudioDeviceInfo.TYPE_USB_HEADSET,
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+    AudioDeviceInfo.TYPE_BLE_HEADSET,
+    AudioDeviceInfo.TYPE_BLE_SPEAKER,
+    AudioDeviceInfo.TYPE_BLE_BROADCAST,
+    AudioDeviceInfo.TYPE_HDMI,
+    AudioDeviceInfo.TYPE_HDMI_ARC,
+    AudioDeviceInfo.TYPE_HDMI_EARC,
+    AudioDeviceInfo.TYPE_AUX_LINE,
+    AudioDeviceInfo.TYPE_DOCK,
+)
+
+internal val audioOutputRouteSelector = MediaRouteSelector.Builder()
+    .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
+    .build()
+
+private data class AudioRouteState(
+    val selectedRoute: MediaRouter.RouteInfo,
+    val revision: Int,
+)
+
+@Composable
+private fun rememberSelectedAudioRoute(router: MediaRouter): AudioRouteState {
+    var selectedRoute by remember(router) { mutableStateOf(router.selectedRoute) }
+    var revision by remember(router) { mutableIntStateOf(0) }
+    DisposableEffect(router) {
+        fun refreshSelectedRoute() {
+            selectedRoute = router.selectedRoute
+            revision++
         }
         val callback = object : MediaRouter.Callback() {
-            override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                refreshRoutes()
-            }
-
-            override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                refreshRoutes()
-            }
-
-            override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                refreshRoutes()
-            }
-
             override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
-                refreshRoutes()
+                selectedRoute = route
+                revision++
             }
 
             override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
-                refreshRoutes()
+                refreshSelectedRoute()
+            }
+
+            override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                revision++
+            }
+
+            override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                refreshSelectedRoute()
+            }
+
+            override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+                refreshSelectedRoute()
             }
 
             override fun onRouteVolumeChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
-                refreshRoutes()
+                revision++
             }
         }
-        router.addCallback(selector, callback, MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY)
-        refreshRoutes()
+        router.addCallback(
+            audioOutputRouteSelector,
+            callback,
+            MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY,
+        )
+        refreshSelectedRoute()
         onDispose { router.removeCallback(callback) }
     }
+    return AudioRouteState(selectedRoute, revision)
+}
+
+private fun findSystemRouteForOutput(
+    router: MediaRouter,
+    device: AudioDeviceInfo,
+    outputs: List<AudioDeviceInfo>,
+): MediaRouter.RouteInfo? {
+    val routes = router.routes.filter { route ->
+        route.isEnabled && route.isSystemRoute && route.matchesSelector(audioOutputRouteSelector)
+    }
+    if (device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+        return routes.firstOrNull { it.isDeviceSpeaker } ?: router.defaultRoute
+    }
+
+    val outputName = normalizedAudioRouteName(audioOutputName(device))
+    routes.firstOrNull { route ->
+        val routeName = normalizedAudioRouteName(route.name)
+        routeName.isNotEmpty() && (routeName == outputName ||
+            (minOf(routeName.length, outputName.length) >= 5 &&
+                (routeName.contains(outputName) || outputName.contains(routeName))))
+    }?.let { return it }
+
+    val matchingRoutes = routes.filter { route -> route.matchesOutputType(device) }
+    val matchingOutputs = outputs.filter { output ->
+        output.type == device.type ||
+            (isBluetoothAudioOutput(output) && isBluetoothAudioOutput(device))
+    }
+    return matchingRoutes.singleOrNull().takeIf { matchingOutputs.size == 1 }
+}
+
+internal fun findOutputForSystemRoute(
+    route: MediaRouter.RouteInfo,
+    outputs: List<AudioDeviceInfo>,
+): AudioDeviceInfo? {
+    val localRouteTypes = setOf(
+        MediaRouter.RouteInfo.DEVICE_TYPE_BUILTIN_SPEAKER,
+        MediaRouter.RouteInfo.DEVICE_TYPE_SMARTPHONE,
+        MediaRouter.RouteInfo.DEVICE_TYPE_TABLET,
+        MediaRouter.RouteInfo.DEVICE_TYPE_TABLET_DOCKED,
+    )
+    if (route.isDefault || route.isDeviceSpeaker || route.deviceType in localRouteTypes) {
+        outputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }?.let { return it }
+    }
+
+    val routeName = normalizedAudioRouteName(route.name)
+    outputs.firstOrNull { output ->
+        val outputName = normalizedAudioRouteName(audioOutputName(output))
+        outputName == routeName || (minOf(outputName.length, routeName.length) >= 5 &&
+            (outputName.contains(routeName) || routeName.contains(outputName)))
+    }?.let { return it }
+
+    val matchingOutputs = outputs.filter(route::matchesOutputType)
+    return matchingOutputs.singleOrNull()
+}
+
+private fun normalizedAudioRouteName(name: String): String =
+    name.lowercase().filter(Char::isLetterOrDigit)
+
+private fun MediaRouter.RouteInfo.isExternalAudioRoute(): Boolean = when (deviceType) {
+    MediaRouter.RouteInfo.DEVICE_TYPE_BUILTIN_SPEAKER,
+    MediaRouter.RouteInfo.DEVICE_TYPE_SMARTPHONE,
+    MediaRouter.RouteInfo.DEVICE_TYPE_TABLET,
+    MediaRouter.RouteInfo.DEVICE_TYPE_TABLET_DOCKED -> false
+    MediaRouter.RouteInfo.DEVICE_TYPE_WIRED_HEADSET,
+    MediaRouter.RouteInfo.DEVICE_TYPE_WIRED_HEADPHONES,
+    MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH_A2DP,
+    MediaRouter.RouteInfo.DEVICE_TYPE_BLE_HEADSET,
+    MediaRouter.RouteInfo.DEVICE_TYPE_USB_ACCESSORY,
+    MediaRouter.RouteInfo.DEVICE_TYPE_USB_DEVICE,
+    MediaRouter.RouteInfo.DEVICE_TYPE_USB_HEADSET,
+    MediaRouter.RouteInfo.DEVICE_TYPE_HDMI,
+    MediaRouter.RouteInfo.DEVICE_TYPE_HDMI_ARC,
+    MediaRouter.RouteInfo.DEVICE_TYPE_HDMI_EARC,
+    MediaRouter.RouteInfo.DEVICE_TYPE_AUDIO_VIDEO_RECEIVER,
+    MediaRouter.RouteInfo.DEVICE_TYPE_REMOTE_SPEAKER,
+    MediaRouter.RouteInfo.DEVICE_TYPE_TV -> true
+    else -> !isDeviceSpeaker && !isDefault
+}
+
+private fun MediaRouter.RouteInfo.matchesOutputType(device: AudioDeviceInfo): Boolean = when (device.type) {
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> isDeviceSpeaker || deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_BUILTIN_SPEAKER
+    AudioDeviceInfo.TYPE_WIRED_HEADSET -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_WIRED_HEADSET
+    AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_WIRED_HEADPHONES
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH_A2DP
+    AudioDeviceInfo.TYPE_BLE_HEADSET -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_BLE_HEADSET ||
+        deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH_A2DP
+    AudioDeviceInfo.TYPE_BLE_SPEAKER, AudioDeviceInfo.TYPE_BLE_BROADCAST ->
+        deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH_A2DP ||
+            deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_REMOTE_SPEAKER
+    AudioDeviceInfo.TYPE_USB_DEVICE -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_USB_DEVICE
+    AudioDeviceInfo.TYPE_USB_ACCESSORY -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_USB_ACCESSORY
+    AudioDeviceInfo.TYPE_USB_HEADSET -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_USB_HEADSET
+    AudioDeviceInfo.TYPE_HDMI, AudioDeviceInfo.TYPE_HDMI_ARC, AudioDeviceInfo.TYPE_HDMI_EARC ->
+        deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_HDMI ||
+            deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_AUDIO_VIDEO_RECEIVER ||
+            deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_TV
+    AudioDeviceInfo.TYPE_DOCK -> deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_DOCK
+    AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_LINE_DIGITAL, AudioDeviceInfo.TYPE_AUX_LINE ->
+        deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_WIRED_HEADPHONES ||
+            deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_REMOTE_SPEAKER
+    else -> false
+}
+
+private fun audioOutputSortRank(device: AudioDeviceInfo): Int = when (device.type) {
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> 0
+    AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+    AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_ACCESSORY, AudioDeviceInfo.TYPE_USB_HEADSET -> 1
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> 2
+    AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER -> 3
+    else -> 4
+}
+
+private fun isBluetoothAudioOutput(device: AudioDeviceInfo): Boolean = device.type in setOf(
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+    AudioDeviceInfo.TYPE_BLE_HEADSET,
+    AudioDeviceInfo.TYPE_BLE_SPEAKER,
+    AudioDeviceInfo.TYPE_BLE_BROADCAST,
+)
+
+private fun audioOutputKind(device: AudioDeviceInfo): String {
+    val name = device.productName.toString().lowercase()
+    return when {
+        device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "phone"
+        device.type in setOf(AudioDeviceInfo.TYPE_HDMI, AudioDeviceInfo.TYPE_HDMI_ARC, AudioDeviceInfo.TYPE_HDMI_EARC) -> "tv"
+        listOf("tv", "soundbar", "speaker", "homepod", "echo").any { it in name } -> "speaker"
+        else -> "headphones"
+    }
+}
+
+internal fun audioOutputName(device: AudioDeviceInfo): String = when (device.type) {
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "This phone"
+    else -> device.productName.toString().takeIf(String::isNotBlank) ?: when (audioOutputKind(device)) {
+        "tv" -> "TV"
+        "speaker" -> "Speaker"
+        else -> "Headphones"
+    }
+}
+
+@Composable
+private fun AudioOutputPanel(
+    song: Song,
+    isPlaying: Boolean,
+    onSelectAudioDevice: (Int?) -> Unit,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    val router = remember(context) { MediaRouter.getInstance(context.applicationContext) }
+    val routeState = rememberSelectedAudioRoute(router)
+    val selectedRoute = routeState.selectedRoute
+    var outputs by remember(audioManager) { mutableStateOf(emptyList<AudioDeviceInfo>()) }
+    DisposableEffect(audioManager) {
+        fun refreshOutputs() {
+            val connectedOutputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .filter { it.type in supportedAudioOutputTypes }
+                .sortedWith(compareBy<AudioDeviceInfo> { audioOutputSortRank(it) }.thenBy { audioOutputName(it).lowercase() })
+            outputs = connectedOutputs.distinctBy { device ->
+                if (isBluetoothAudioOutput(device)) {
+                    "bluetooth:${audioOutputName(device).trim().lowercase().replace(Regex("\\s+"), " ")}"
+                } else {
+                    "device:${device.id}"
+                }
+            }
+        }
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = refreshOutputs()
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = refreshOutputs()
+        }
+        audioManager.registerAudioDeviceCallback(callback, android.os.Handler(android.os.Looper.getMainLooper()))
+        refreshOutputs()
+        onDispose { audioManager.unregisterAudioDeviceCallback(callback) }
+    }
+    val selectedDeviceId = remember(selectedRoute, outputs, routeState.revision) {
+        findOutputForSystemRoute(selectedRoute, outputs)?.id
+    }
     var visible by remember { mutableStateOf(false) }
+    var isVolumeAdjusting by remember { mutableStateOf(false) }
     val close by rememberUpdatedState(onClose)
     val view = LocalView.current
     val density = LocalDensity.current
     val dialogWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
     SideEffect {
-        dialogWindow?.setDimAmount(.28f)
-        if (android.os.Build.VERSION.SDK_INT >= 31) {
-            dialogWindow?.setBackgroundBlurRadius(with(density) { 8.dp.roundToPx() })
-        }
+        dialogWindow?.setDimAmount(.46f)
+        if (Build.VERSION.SDK_INT >= 31) dialogWindow?.setBackgroundBlurRadius(with(density) { 20.dp.roundToPx() })
     }
     LaunchedEffect(Unit) { visible = true }
     LaunchedEffect(visible) {
         if (!visible) {
-            delay(240)
+            delay(200)
             close()
         }
     }
-    Dialog(
-        onDismissRequest = { visible = false },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
+    Dialog(onDismissRequest = { visible = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize()) {
-            Box(
-                Modifier.fillMaxSize()
-                    .clickable { if (visible) visible = false },
-            )
+            Box(Modifier.fillMaxSize().clickable { if (visible) visible = false })
             AnimatedVisibility(
                 visible = visible,
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .statusBarsPadding().navigationBarsPadding()
-                    .padding(start = 18.dp, end = 18.dp, top = 72.dp, bottom = 20.dp),
-                enter = fadeIn(tween(220)) + slideInVertically(tween(360, easing = WavvMotionEasing)) { it / 5 },
-                exit = fadeOut(tween(180)) + slideOutVertically(tween(240, easing = WavvMotionEasing)) { it / 5 },
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
+                    .padding(start = 22.dp, end = 22.dp, bottom = 16.dp).widthIn(max = 360.dp),
+                enter = fadeIn(tween(180)) + scaleIn(tween(240, easing = WavvEaseInOut), initialScale = .94f),
+                exit = fadeOut(tween(140)) + scaleOut(tween(180, easing = WavvEaseInOut), targetScale = .97f),
             ) {
-                Box(
-                    Modifier.fillMaxWidth().widthIn(max = 440.dp).height(480.dp)
-                        .clip(RoundedCornerShape(32.dp))
-                        .background(Color(0xFF180C08))
-                        .border(1.dp, Color(0x47FF8238), RoundedCornerShape(32.dp))
-                        .shadow(26.dp, RoundedCornerShape(32.dp)),
-                ) {
+                val shape = RoundedCornerShape(27.dp)
+                Box(Modifier.fillMaxWidth().height(318.dp).shadow(26.dp, shape).clip(shape)) {
                     AlbumArt(
                         song,
-                        Modifier.fillMaxSize().blur(42.dp).graphicsLayer {
-                            scaleX = 1.25f
-                            scaleY = 1.25f
-                        },
+                        Modifier.fillMaxSize().blur(34.dp).graphicsLayer { scaleX = 1.18f; scaleY = 1.18f },
                         null,
                         0.dp,
                     )
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            Brush.verticalGradient(
-                                0f to Color(0x80260E05),
-                                .52f to Color(0xC70A0706),
-                                1f to Color(0xEB050507),
-                            ),
-                        ),
-                    )
-                    Column(Modifier.fillMaxSize().padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 18.dp)) {
-                        Box(
-                            Modifier.align(Alignment.CenterHorizontally).padding(bottom = 15.dp)
-                                .width(42.dp).height(5.dp).clip(CircleShape)
-                                .background(Color.White.copy(.28f))
-                                .clickable { if (visible) visible = false },
-                        )
+                    Box(Modifier.fillMaxSize().background(Color(0xE8171717)))
+                    Column(Modifier.fillMaxSize().padding(horizontal = 17.dp, vertical = 19.dp)) {
                         Row(
-                            Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, bottom = 16.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 1.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            AlbumArt(song, Modifier.size(58.dp), null, 12.dp)
+                            AlbumArt(song, Modifier.size(56.dp), null, 12.dp)
                             Column(Modifier.weight(1f)) {
-                                Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(song.artist, Modifier.padding(top = 3.dp), color = Color.White.copy(.62f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                OutputWaveform(isPlaying, Modifier.padding(top = 7.dp))
+                                Text(
+                                    song.title,
+                                    Modifier.fillMaxWidth().songMetadataMarquee(),
+                                    color = Color(0xFFF5F4F2),
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Clip,
+                                )
+                                Text(
+                                    song.artist,
+                                    Modifier.fillMaxWidth().padding(top = 4.dp).songMetadataMarquee(),
+                                    color = Color.White.copy(.68f),
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Clip,
+                                )
                             }
+                            OutputWaveform(isPlaying, Modifier.padding(top = 3.dp).align(Alignment.Top))
                         }
+                        Spacer(Modifier.height(18.dp))
                         Column(
-                            Modifier.weight(1f).fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(9.dp),
                         ) {
-                            outputs.forEach { route ->
-                                OutputRouteRow(route)
+                            outputs.forEach { device ->
+                                val route = remember(device.id, outputs, routeState.revision) {
+                                    findSystemRouteForOutput(router, device, outputs)
+                                }
+                                OutputRouteRow(
+                                    device = device,
+                                    route = route,
+                                    selected = device.id == selectedDeviceId,
+                                    routeRevision = routeState.revision,
+                                    isVolumeAdjusting = isVolumeAdjusting,
+                                    onVolumeAdjustingChanged = { isVolumeAdjusting = it },
+                                    onSelect = {
+                                        if (!isVolumeAdjusting) {
+                                            findSystemRouteForOutput(router, device, outputs)?.select()
+                                            onSelectAudioDevice(device.id)
+                                        }
+                                    },
+                                )
                             }
                             if (outputs.isEmpty()) {
-                                Text("No compatible audio outputs are currently available.", Modifier.padding(16.dp), color = Color.White.copy(.55f), fontSize = 13.sp)
+                                Text(
+                                    "No audio output devices are available.",
+                                    Modifier.fillMaxWidth().padding(vertical = 18.dp),
+                                    color = Color.White.copy(.62f),
+                                    fontSize = 13.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                )
                             }
                         }
                     }
@@ -3349,100 +3590,157 @@ private fun OutputWaveform(isPlaying: Boolean, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun OutputRouteRow(route: MediaRouter.RouteInfo) {
-    val selected = route.isSelected
-    val volumeMax = route.volumeMax
-    val volume = if (volumeMax > 0) (route.volume.toFloat() / volumeMax).coerceIn(0f, 1f) else 0f
-    val variableVolume = selected && route.volumeHandling == MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE && volumeMax > 0
-    val iconColor = if (selected && volume > .18f) Color(0xFF2D170F) else Color.White
-    val titleColor = if (selected && volume > .42f) Color(0xFF2D170F) else Color.White
-    val detailColor = if (selected && volume > .58f) Color(0xA62D170F) else Color.White.copy(.54f)
-    val checkColor = if (selected && volume > .86f) Color(0xFF2D170F) else Color.White
-    val kind = remember(route.id, route.name, route.description, route.isBluetooth) {
-        val label = "${route.name} ${route.description.orEmpty()}".lowercase()
-        when {
-            route.isBluetooth || "bluetooth" in label || "buds" in label -> "bluetooth"
-            "cast" in label || "tv" in label || "display" in label -> "cast"
-            "headphone" in label || "headset" in label || "wired" in label || "usb" in label -> "wired"
-            else -> "phone"
+private fun OutputRouteRow(
+    device: AudioDeviceInfo,
+    route: MediaRouter.RouteInfo?,
+    selected: Boolean,
+    routeRevision: Int,
+    isVolumeAdjusting: Boolean,
+    onVolumeAdjustingChanged: (Boolean) -> Unit,
+    onSelect: () -> Unit,
+) {
+    val volumeMax = route?.volumeMax?.coerceAtLeast(0) ?: 0
+    val routeVolume = route?.volume?.coerceIn(0, volumeMax) ?: 0
+    val routeFraction = if (volumeMax > 0) (routeVolume.toFloat() / volumeMax).coerceIn(0f, 1f) else 0f
+    val canAdjustVolume = selected &&
+        route?.volumeHandling == MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE && volumeMax > 0
+    var isAdjusting by remember(device.id) { mutableStateOf(false) }
+    var dragVolumeFraction by remember(device.id, route?.id) { mutableFloatStateOf(routeFraction) }
+    var lastRequestedVolume by remember(route?.id) { mutableIntStateOf(routeVolume) }
+    LaunchedEffect(route?.id, routeRevision, routeVolume, isAdjusting) {
+        if (!isAdjusting) {
+            lastRequestedVolume = routeVolume
+            dragVolumeFraction = routeFraction
         }
     }
-    val isBuiltInPhone = route.name.equals("Phone", ignoreCase = true) || route.name.equals("This phone", ignoreCase = true)
-    val outputName = if (isBuiltInPhone) "This phone" else route.name
-    val outputDescription = if (isBuiltInPhone && route.description.isNullOrBlank()) {
-        "Built-in speaker"
-    } else {
-        route.description?.takeIf(String::isNotBlank)
-            ?: if (route.isBluetooth) "Bluetooth audio" else "Audio output"
+    val volumeFraction by animateFloatAsState(
+        targetValue = if (isAdjusting) dragVolumeFraction else routeFraction,
+        animationSpec = tween(durationMillis = if (isAdjusting) 0 else 90, easing = LinearEasing),
+        label = "${device.id} output volume fill",
+    )
+    val kind = audioOutputKind(device)
+    val label = audioOutputName(device)
+    val setVolume: (Float) -> Unit = { fraction ->
+        dragVolumeFraction = fraction.coerceIn(0f, 1f)
+        val targetStep = (fraction.coerceIn(0f, 1f) * volumeMax).roundToInt().coerceIn(0, volumeMax)
+        if (canAdjustVolume && targetStep != lastRequestedVolume) {
+            route.requestSetVolume(targetStep)
+            lastRequestedVolume = targetStep
+        }
     }
-    val selectRoute = { if (route.isEnabled && !selected) route.select() }
-    Box(
-        Modifier.fillMaxWidth().heightIn(min = 66.dp).clip(CircleShape)
-            .background(if (selected) Color(0xA6A98450) else Color.White.copy(.09f))
-            .border(1.dp, if (selected) Color(0x4DFFE2B6) else Color.White.copy(.08f), CircleShape)
-            .drawBehind {
-                if (variableVolume && volume > 0f) {
-                    drawRoundRect(
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(Color(0xFFFFEDCC), Color(0xE6FFDaa5)),
-                            startX = 0f,
-                            endX = size.width,
-                        ),
-                        size = androidx.compose.ui.geometry.Size(size.width * volume, size.height),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
-                    )
+    val interactionModifier = if (canAdjustVolume) {
+        Modifier
+            .pointerInput(device.id, volumeMax) {
+                detectTapGestures {
+                    setVolume(it.x / size.width)
+                    isAdjusting = false
+                    onVolumeAdjustingChanged(false)
                 }
             }
-            .then(if (selected) Modifier.pointerInput(route.id, variableVolume, volumeMax) {
-                if (variableVolume) {
-                    detectDragGestures(
-                        onDragStart = { point ->
-                            val fraction = (point.x / size.width).coerceIn(0f, 1f)
-                            route.requestSetVolume((fraction * volumeMax).roundToInt())
-                        },
-                        onDrag = { change, _ ->
-                            change.consume()
-                            val fraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                            route.requestSetVolume((fraction * volumeMax).roundToInt())
-                        },
-                    )
+            .pointerInput(device.id, volumeMax) {
+                detectHorizontalDragGestures(
+                    onDragStart = { point ->
+                        isAdjusting = true
+                        onVolumeAdjustingChanged(true)
+                        setVolume(point.x / size.width)
+                    },
+                    onDragEnd = {
+                        isAdjusting = false
+                        onVolumeAdjustingChanged(false)
+                    },
+                    onDragCancel = {
+                        isAdjusting = false
+                        onVolumeAdjustingChanged(false)
+                    },
+                ) { change, _ ->
+                    setVolume(change.position.x / size.width)
+                    change.consume()
                 }
-            } else Modifier)
-            .clickable(enabled = route.isEnabled, role = Role.Button, onClick = selectRoute),
+            }
+            .semantics(mergeDescendants = true) {
+                contentDescription = label
+                stateDescription = "Volume ${(volumeFraction * 100).roundToInt()} percent"
+            }
+    } else if (!selected) {
+        Modifier.clickable(enabled = !isVolumeAdjusting, role = Role.Button, onClick = onSelect)
+    } else Modifier
+    val background = if (selected) Color.White.copy(.25f) else Color.White.copy(.09f)
+    val fill = if (selected) Color(0xFFECEBE8) else Color.White.copy(.26f)
+    BoxWithConstraints(
+        Modifier.fillMaxWidth().height(50.dp).clip(CircleShape)
+            .background(background).then(interactionModifier),
     ) {
+        val fillWidth = maxWidth * volumeFraction
+        val iconSize = 21.dp
+        val iconFillWidth = (fillWidth - 15.dp).coerceIn(0.dp, iconSize)
+        val iconFillPx = with(LocalDensity.current) { iconFillWidth.toPx() }
+        val textWidth = (maxWidth - 15.dp - iconSize - 10.dp - 15.dp).coerceAtLeast(0.dp)
+        val labelFillWidth = (fillWidth - 15.dp - iconSize - 10.dp).coerceIn(0.dp, textWidth)
+        val labelFillPx = with(LocalDensity.current) { labelFillWidth.toPx() }
+        Box(
+            Modifier.fillMaxHeight().width(fillWidth)
+                .background(fill),
+        )
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 66.dp).padding(horizontal = 17.dp, vertical = 10.dp),
+            Modifier.fillMaxSize().padding(horizontal = 15.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(13.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Box(Modifier.width(30.dp).height(38.dp), contentAlignment = Alignment.Center) {
-                when (kind) {
-                    "wired" -> OutputGlyph("wired", iconColor, Modifier.size(22.dp))
-                    "bluetooth" -> OutputGlyph("bluetooth", iconColor, Modifier.size(22.dp))
-                    "cast" -> OutputGlyph("cast", iconColor, Modifier.size(22.dp))
-                    else -> Image(
-                        androidx.compose.ui.res.painterResource(R.drawable.output_device),
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                        colorFilter = ColorFilter.tint(iconColor),
+            if (selected) {
+                Box(Modifier.size(iconSize)) {
+                    OutputGlyph(
+                        kind,
+                        Color(0xFF292929),
+                        Modifier.fillMaxSize().drawWithContent {
+                            drawContext.canvas.save()
+                            drawContext.canvas.clipRect(0f, 0f, iconFillPx, size.height)
+                            drawContent()
+                            drawContext.canvas.restore()
+                        },
+                    )
+                    OutputGlyph(
+                        kind,
+                        Color(0xFFF3F2F0),
+                        Modifier.fillMaxSize().drawWithContent {
+                            drawContext.canvas.save()
+                            drawContext.canvas.clipRect(iconFillPx, 0f, size.width, size.height)
+                            drawContent()
+                            drawContext.canvas.restore()
+                        },
                     )
                 }
-            }
-            Column(Modifier.weight(1f)) {
-                Text(outputName, color = titleColor, fontSize = 16.sp, fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    outputDescription,
-                    color = detailColor,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (selected) {
-                Icon(Icons.Default.Check, contentDescription = "Currently selected", tint = checkColor, modifier = Modifier.size(20.dp))
             } else {
-                Box(Modifier.size(9.dp).border(1.5.dp, Color.White.copy(.3f), CircleShape))
+                OutputGlyph(kind, Color(0xFFF3F2F0), Modifier.size(iconSize))
+            }
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                Text(
+                    label,
+                    Modifier.fillMaxWidth().songMetadataMarquee().drawWithContent {
+                        drawContext.canvas.save()
+                        drawContext.canvas.clipRect(0f, 0f, labelFillPx, size.height)
+                        drawContent()
+                        drawContext.canvas.restore()
+                    },
+                    color = Color(0xFF292929),
+                    fontSize = 14.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                )
+                Text(
+                    label,
+                    Modifier.fillMaxWidth().songMetadataMarquee().drawWithContent {
+                        drawContext.canvas.save()
+                        drawContext.canvas.clipRect(labelFillPx, 0f, size.width, size.height)
+                        drawContent()
+                        drawContext.canvas.restore()
+                    },
+                    color = Color(0xFFF3F2F0),
+                    fontSize = 14.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                )
             }
         }
     }
@@ -3455,6 +3753,44 @@ private fun OutputGlyph(kind: String, color: Color, modifier: Modifier = Modifie
         val sy = size.height / 24f
         val path = Path()
         when (kind) {
+            "headphones" -> {
+                path.moveTo(4f * sx, 13f * sy)
+                path.lineTo(4f * sx, 10f * sy)
+                path.cubicTo(4f * sx, 5.582f * sy, 7.582f * sx, 2f * sy, 12f * sx, 2f * sy)
+                path.cubicTo(16.418f * sx, 2f * sy, 20f * sx, 5.582f * sy, 20f * sx, 10f * sy)
+                drawPath(path, color, style = Stroke(width = 2.6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                drawRoundRect(color, Offset(2.5f * sx, 11f * sy), Size(5f * sx, 9f * sy), androidx.compose.ui.geometry.CornerRadius(2.4f * sx, 2.4f * sx))
+                drawRoundRect(color, Offset(16.5f * sx, 11f * sy), Size(5f * sx, 9f * sy), androidx.compose.ui.geometry.CornerRadius(2.4f * sx, 2.4f * sx))
+                return@Canvas
+            }
+            "speaker" -> {
+                val speakerBody = Color.White.copy(alpha = .15f)
+                drawRoundRect(
+                    speakerBody,
+                    Offset(3f * sx, .8f * sy),
+                    Size(18f * sx, 22.4f * sy),
+                    androidx.compose.ui.geometry.CornerRadius(4.2f * sx, 4.2f * sx),
+                )
+                drawCircle(color, 3.3f * sx, Offset(12f * sx, 7.2f * sy), style = Stroke(width = 2.2.dp.toPx()))
+                drawCircle(speakerBody, 2.1f * sx, Offset(12f * sx, 7.2f * sy))
+                drawCircle(color, 5.2f * sx, Offset(12f * sx, 16.2f * sy), style = Stroke(width = 2.6.dp.toPx()))
+                drawCircle(speakerBody, 3.2f * sx, Offset(12f * sx, 16.2f * sy))
+                return@Canvas
+            }
+            "tv" -> {
+                path.addRoundRect(RoundRect(Rect(2.5f * sx, 3.5f * sy, 21.5f * sx, 17.5f * sy), 2.5f * sx, 2.5f * sy))
+                path.moveTo(8f * sx, 21f * sy)
+                path.lineTo(16f * sx, 21f * sy)
+                path.moveTo(12f * sx, 17.5f * sy)
+                path.lineTo(12f * sx, 21f * sy)
+            }
+            "phone" -> {
+                path.addRoundRect(RoundRect(Rect(5f * sx, 1.5f * sy, 19f * sx, 22.5f * sy), 2.8f * sx, 2.8f * sy))
+                path.moveTo(9f * sx, 4.3f * sy)
+                path.lineTo(15f * sx, 4.3f * sy)
+                path.moveTo(11f * sx, 19.5f * sy)
+                path.lineTo(13f * sx, 19.5f * sy)
+            }
             "wired" -> {
                 path.moveTo(5f * sx, 13f * sy)
                 path.lineTo(5f * sx, 9f * sy)
