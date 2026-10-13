@@ -15,6 +15,7 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import java.io.BufferedOutputStream
 import java.io.Closeable
 import java.io.File
@@ -190,7 +191,10 @@ internal class UHQEnhancementWorker(
         val temporary = File(output.parentFile, "${output.name}.part")
         temporary.delete()
         return try {
-            UHQAacEnhancer(applicationContext).enhance(source, temporary)
+            setProgress(workDataOf(KEY_STAGE to "Starting", KEY_PROGRESS to 1))
+            UHQAacEnhancer(applicationContext).enhance(source, temporary) { stage, percent ->
+                setProgress(workDataOf(KEY_STAGE to stage, KEY_PROGRESS to percent))
+            }
             check(temporary.isFile && temporary.length() > WAV_HEADER_BYTES) { "UHQ produced no audio" }
             if (!UHQAacCache.trim(temporary.length(), output)) {
                 temporary.delete()
@@ -212,6 +216,8 @@ internal class UHQEnhancementWorker(
     companion object {
         const val INPUT_URI = "source_uri"
         const val INPUT_KEY = "cache_key"
+        const val KEY_PROGRESS = "uhq_progress"
+        const val KEY_STAGE = "uhq_stage"
         private const val TAG = "WavvUHQ"
     }
 }
@@ -308,15 +314,18 @@ private class StreamingStereoResampler(
     }
 }
 
-private class UHQAacEnhancer(private val context: Context) {
-    suspend fun enhance(source: Uri, output: File) {
+internal class UHQAacEnhancer(private val context: Context) {
+    suspend fun enhance(source: Uri, output: File, onProgress: suspend (stage: String, percent: Int) -> Unit) {
         val raw = File(context.cacheDir, "uhq-decoded-${System.nanoTime()}.pcm.part")
         val modelInput = File(context.cacheDir, "uhq-resampled-${System.nanoTime()}.pcm.part")
         try {
+            onProgress("Decoding AAC", 3)
             val decoded = decodeToFloatFile(source, raw)
+            onProgress("Preparing audio", 15)
             val inputFile = if (decoded.sampleRate == SAMPLE_RATE && decoded.channels == CHANNELS) raw else modelInput
             val sampleCount = if (inputFile === raw) decoded.frames else resampleToModelPcm(raw, modelInput, decoded)
             check(sampleCount >= FFT_SIZE) { "AAC is too short for UHQ" }
+            onProgress("Loading UHQ model", 20)
             val model = UHQAacModel.install(context)
             val options = OrtSession.SessionOptions()
             options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -330,7 +339,13 @@ private class UHQAacEnhancer(private val context: Context) {
             } finally {
                 options.close()
             }
-            session.use { enhanceTiles(inputFile, sampleCount, output, session) }
+            onProgress("Enhancing audio", 25)
+            session.use { session ->
+                enhanceTiles(inputFile, sampleCount, output, session) { completed, total ->
+                    onProgress("Enhancing audio", 25 + completed * 70 / total)
+                }
+            }
+            onProgress("Finalizing", 98)
         } finally {
             raw.delete()
             modelInput.delete()
@@ -519,7 +534,13 @@ private class UHQAacEnhancer(private val context: Context) {
 
     private data class DecodedAudio(val frames: Long, val sampleRate: Int, val channels: Int)
 
-    private suspend fun enhanceTiles(raw: File, sampleCount: Long, destination: File, session: OrtSession) =
+    private suspend fun enhanceTiles(
+        raw: File,
+        sampleCount: Long,
+        destination: File,
+        session: OrtSession,
+        onTileComplete: suspend (completed: Int, total: Int) -> Unit,
+    ) =
         withContext(Dispatchers.Default) {
             require(sampleCount <= Int.MAX_VALUE / CHANNELS) { "Audio is too long for this experimental enhancer" }
             val totalSamples = sampleCount.toInt()
@@ -562,6 +583,7 @@ private class UHQAacEnhancer(private val context: Context) {
                             writer.write(pendingTail, 0, crossfadeFrames)
                             writer.write(enhanced, crossfadeFrames, length)
                         }
+                        onTileComplete(tileIndex + 1, starts.size)
                     }
                     writer.finish()
                 }

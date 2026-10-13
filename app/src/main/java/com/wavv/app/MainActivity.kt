@@ -2237,7 +2237,15 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                             label = "expanded player track change",
                             modifier = Modifier.weight(1f),
                         ) { displayedSong ->
-                            TrackText(displayedSong, Modifier.fillMaxWidth(), 15.sp, subtitleSize = 12.sp, titleLetterSpacing = (-.3).sp, marquee = true)
+                            TrackText(
+                                displayedSong,
+                                Modifier.fillMaxWidth(),
+                                15.sp,
+                                subtitleSize = 12.sp,
+                                titleLetterSpacing = (-.3).sp,
+                                marquee = true,
+                                uhqEnhanced = state.isUHQEnhanced,
+                            )
                         }
                         FavouriteButton(liked, onLike)
                     }
@@ -2273,7 +2281,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                         label = "compact player track change",
                         modifier = Modifier.weight(1f),
                     ) { displayedSong ->
-                        TrackText(displayedSong, Modifier.fillMaxWidth(), 14.sp, marquee = true)
+                        TrackText(displayedSong, Modifier.fillMaxWidth(), 14.sp, marquee = true, uhqEnhanced = state.isUHQEnhanced)
                     }
                     Image(
                         androidx.compose.ui.res.painterResource(R.drawable.skip_prev),
@@ -2327,19 +2335,23 @@ private fun TrackText(
     titleColor: Color = Color.White,
     subtitleColor: Color = Color.White.copy(.5f),
     marquee: Boolean = false,
+    uhqEnhanced: Boolean = false,
 ) {
     Column(modifier) {
-        Text(
-            song.title,
-            modifier = if (marquee) Modifier.songMetadataMarquee() else Modifier,
-            color = titleColor,
-            fontSize = titleSize,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = titleLetterSpacing,
-            maxLines = 1,
-            softWrap = false,
-            overflow = if (marquee) TextOverflow.Clip else TextOverflow.Ellipsis,
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                song.title,
+                modifier = Modifier.weight(1f).then(if (marquee) Modifier.songMetadataMarquee() else Modifier),
+                color = titleColor,
+                fontSize = titleSize,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = titleLetterSpacing,
+                maxLines = 1,
+                softWrap = false,
+                overflow = if (marquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+            )
+            if (uhqEnhanced) UHQPlaybackBadge()
+        }
         Text(
             song.artist,
             modifier = Modifier.padding(top = 2.dp).then(if (marquee) Modifier.songMetadataMarquee() else Modifier),
@@ -2350,6 +2362,23 @@ private fun TrackText(
             overflow = if (marquee) TextOverflow.Clip else TextOverflow.Ellipsis,
         )
     }
+}
+
+@Composable
+private fun UHQPlaybackBadge() {
+    val shape = RoundedCornerShape(5.dp)
+    Text(
+        "UHQ",
+        Modifier.clip(shape)
+            .background(Color.White.copy(.12f))
+            .border(1.dp, Color.White.copy(.28f), shape)
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+        color = Color.White.copy(.88f),
+        fontSize = 9.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = .35.sp,
+        lineHeight = 11.sp,
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -2659,7 +2688,15 @@ private fun FullPlayer(
         ) {
             Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TrackText(song, Modifier.weight(1f).padding(end = 12.dp), 28.sp, 20.sp, (-.65).sp, marquee = true)
+                    TrackText(
+                        song,
+                        Modifier.weight(1f).padding(end = 12.dp),
+                        28.sp,
+                        20.sp,
+                        (-.65).sp,
+                        marquee = true,
+                        uhqEnhanced = state.isUHQEnhanced,
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
                         FavouriteButton(liked, onLike)
                         Box(Modifier.size(38.dp).clickable { showTrackOptions = true }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }

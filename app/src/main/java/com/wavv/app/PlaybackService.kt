@@ -306,6 +306,16 @@ class PlaybackService : MediaSessionService() {
                     val info = infos.firstOrNull { it.id == request.id }
                         ?: infos.lastOrNull { !it.state.isFinished }
                         ?: infos.lastOrNull()
+                    val progress = info?.progress
+                    val percent = progress?.getInt(UHQEnhancementWorker.KEY_PROGRESS, -1) ?: -1
+                    if (percent in 0..99) {
+                        PlaybackEffectStatus.updateUHQ(
+                            songIdLong,
+                            UhqPlaybackStatus.Preparing,
+                            progressPercent = percent,
+                            progressStage = progress?.getString(UHQEnhancementWorker.KEY_STAGE),
+                        )
+                    }
                     if (info?.state?.isFinished == true) {
                         if (info.state == WorkInfo.State.SUCCEEDED && destination.isFile) {
                             withContext(Dispatchers.Main.immediate) {

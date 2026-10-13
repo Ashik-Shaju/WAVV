@@ -73,6 +73,42 @@ class OfflineDiscoveryTest {
     }
 
     @Test
+    fun recognizedModelGenreIsAnExactFilterAndRemainingWordsStaySemantic() {
+        val analyzed = tracks.map { song ->
+            if (song.id == 2L) {
+                song.copy(genre = null, inferredGenres = listOf("Jazz"))
+            } else {
+                song
+            }
+        }
+        val intent = parseMusicQuery("bass songs in Jazz", analyzed)
+
+        assertEquals("bass", intent.semanticText)
+        assertEquals("Jazz", intent.genre)
+        assertEquals(listOf(2L), rankLocalSearch(analyzed, intent, emptyList()).map(Song::id))
+    }
+
+    @Test
+    fun semanticRankingDoesNotChangeWhenAnUnrelatedLowSimilarityTrackIsIndexed() {
+        val unrelated = tracks[0].copy(id = 11L, title = "Unrelated", genre = null, genres = emptyList())
+        val lexical = tracks[0].copy(id = 12L, title = "Happy", genre = null, genres = emptyList())
+        val newlyIndexed = tracks[0].copy(id = 13L, title = "Another track", genre = null, genres = emptyList())
+        val intent = MusicQueryIntent("happy")
+        val originalMatches = listOf(
+            SemanticMatch(unrelated.id, .30f),
+            SemanticMatch(lexical.id, .29f),
+        )
+        val originalOrder = rankLocalSearch(listOf(unrelated, lexical), intent, originalMatches).map(Song::id)
+        val expandedOrder = rankLocalSearch(
+            listOf(unrelated, lexical, newlyIndexed),
+            intent,
+            originalMatches + SemanticMatch(newlyIndexed.id, 0f),
+        ).take(2).map(Song::id)
+
+        assertEquals(originalOrder, expandedOrder)
+    }
+
+    @Test
     fun dclapOrderingIsCombinedWithMetadataAndFilteredBeforeResultLimit() {
         val semantic = listOf(
             SemanticMatch(songId = 3L, cosineSimilarity = .98f),

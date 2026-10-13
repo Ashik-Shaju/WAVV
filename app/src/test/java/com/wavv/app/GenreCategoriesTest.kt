@@ -25,6 +25,25 @@ class GenreCategoriesTest {
         assertEquals(listOf(rock), songsForGenre(listOf(rock, rockPop, pop), " rock "))
     }
 
+    @Test
+    fun confidentModelGenresJoinFileGenresWithoutPromotingOtherOrLowConfidenceTags() {
+        val rock = song(1, "Rock track", listOf("Rock"), hasArtwork = true)
+        val analyzed = rock.withMusicUnderstandingGenres(
+            listOf(
+                MusicTag("genre", "genre", "Electronic", "weak_uploader_tag", .8f, .5f),
+                MusicTag("genre", "genre", "rock", "weak_uploader_tag", .9f, .5f),
+                MusicTag("genre", "genre", "Jazz", "weak_uploader_tag", .4f, .5f),
+                MusicTag("instrument", "instrument", "Piano", "weak_uploader_tag", .99f, .5f),
+            ),
+        )
+
+        assertEquals(listOf("Rock", "Electronic"), analyzed.genreNames())
+        assertEquals(
+            listOf(GenreCategory("Electronic", analyzed), GenreCategory("Rock", analyzed)),
+            genreCategories(listOf(analyzed)),
+        )
+    }
+
     private fun song(id: Long, title: String, genres: List<String>, hasArtwork: Boolean) = Song(
         id = id,
         title = title,

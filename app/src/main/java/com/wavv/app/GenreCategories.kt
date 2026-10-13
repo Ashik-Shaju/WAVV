@@ -8,10 +8,19 @@ internal fun parseGenreMetadata(value: String?): List<String> =
     value?.trim()?.takeIf(String::isNotEmpty)?.let(::listOf).orEmpty()
 
 internal fun Song.genreNames(): List<String> =
-    (genres + listOfNotNull(genre))
+    (genres + inferredGenres + listOfNotNull(genre))
         .map { it.trim() }
         .filter(String::isNotEmpty)
         .distinctBy { it.lowercase(Locale.ROOT) }
+
+internal fun Song.withMusicUnderstandingGenres(tags: List<MusicTag>): Song = copy(
+    inferredGenres = tags.asSequence()
+        .filter { it.taxonomy.equals("genre", ignoreCase = true) && it.probability >= it.threshold }
+        .map { it.label.trim() }
+        .filter(String::isNotEmpty)
+        .distinctBy { it.lowercase(Locale.ROOT) }
+        .toList(),
+)
 
 internal fun genreCategories(songs: List<Song>): List<GenreCategory> {
     val categories = mutableMapOf<String, GenreCategory>()

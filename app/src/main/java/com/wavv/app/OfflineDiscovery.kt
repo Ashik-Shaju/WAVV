@@ -120,15 +120,13 @@ internal fun rankLocalSearch(
         .filter { it.cosineSimilarity.isFinite() }
         .associate { it.songId to it.cosineSimilarity.toDouble() }
     val semanticValues = candidates.mapNotNull { semantic[it.id] }
-    val minimum = semanticValues.minOrNull() ?: 0.0
-    val range = (semanticValues.maxOrNull() ?: minimum) - minimum
     val tokens = intent.semanticText.tokens()
     val lexical = candidates.associate { song -> song.id to lexicalScore(song, tokens, tagsBySong[song.id].orEmpty()) }
     val hasSemantic = semanticValues.isNotEmpty()
     val hasTextMatch = lexical.values.any { it > 0.0 }
     val scored = candidates.mapNotNull { song ->
         val lexicalScore = lexical.getValue(song.id)
-        val semanticScore = semantic[song.id]?.let { score -> if (range > 1e-9) (score - minimum) / range else 1.0 } ?: 0.0
+        val semanticScore = semantic[song.id]?.let { score -> ((score + 1.0) / 2.0).coerceIn(0.0, 1.0) } ?: 0.0
         if (
             !intent.hasMetadataFilters && intent.semanticText.isNotBlank() && hasSemantic &&
             song.id !in semantic && lexicalScore == 0.0

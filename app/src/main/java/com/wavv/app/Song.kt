@@ -24,6 +24,7 @@ data class Song(
     val discNumber: Int? = null,
     val languageTags: List<String> = emptyList(),
     val languageMetadataChecked: Boolean = false,
+    val inferredGenres: List<String> = emptyList(),
 )
 
 data class UserPlaylist(

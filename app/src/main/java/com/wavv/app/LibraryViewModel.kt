@@ -169,7 +169,7 @@ class LibraryViewModel(
                             else -> true
                         }
                         if (!hasIndexedCatalog || catalogChanged || analysisResultsChanged) {
-                            observeDiscovery((state.value as? LibraryUiState.Ready)?.songs.orEmpty())
+                            refreshMusicUnderstandingGenres()
                         }
                     }
                     WorkInfo.State.FAILED -> publishIndexError(
@@ -195,7 +195,9 @@ class LibraryViewModel(
 
     private suspend fun publishReady(startDiscovery: Boolean = true) {
         libraryStore.pruneListeningHistory()
-        val songs = libraryStore.getSongs()
+        val indexedSongs = libraryStore.getSongs()
+        val tagsBySong = libraryStore.musicTags(indexedSongs)
+        val songs = indexedSongs.map { it.withMusicUnderstandingGenres(tagsBySong[it.id].orEmpty()) }
         val currentFavorites = libraryStore.getFavoriteIds()
         favoriteIds.value = currentFavorites
         _state.value = LibraryUiState.Ready(
@@ -206,19 +208,29 @@ class LibraryViewModel(
             playlists = libraryStore.getPlaylists(),
         )
         if (startDiscovery) {
-            observeDiscovery(songs)
+            observeDiscovery(songs, tagsBySong)
         } else {
             discoveryJob?.cancel()
             discoveryJob = null
         }
     }
 
-    private fun observeDiscovery(songs: List<Song>) {
+    private suspend fun refreshMusicUnderstandingGenres() {
+        val currentSongs = (state.value as? LibraryUiState.Ready)?.songs.orEmpty()
+        if (currentSongs.isEmpty()) return
+        val tagsBySong = libraryStore.musicTags(currentSongs)
+        val songs = currentSongs.map { it.withMusicUnderstandingGenres(tagsBySong[it.id].orEmpty()) }
+        _state.update { current ->
+            if (current is LibraryUiState.Ready) current.copy(songs = songs) else current
+        }
+        observeDiscovery(songs, tagsBySong)
+    }
+
+    private fun observeDiscovery(songs: List<Song>, tagsBySong: Map<Long, List<MusicTag>>) {
         discoveryJob?.cancel()
         if (songs.isEmpty()) return
         discoveryJob = viewModelScope.launch(Dispatchers.IO) {
             val vectors = libraryStore.audioVectors(songs)
-            val tagsBySong = libraryStore.musicTags(songs)
             val cutoff = System.currentTimeMillis() - DISCOVERY_HISTORY_MS
             combine(favoriteIds, libraryStore.observeDiscoveryEvents(cutoff)) { favorites, events -> favorites to events }
                 .collectLatest { (favorites, events) ->
@@ -297,8 +309,8 @@ class LibraryViewModel(
         searchJob = viewModelScope.launch {
             try {
                 delay(SEARCH_DEBOUNCE_MS)
-                val intent = withContext(Dispatchers.Default) { parseMusicQuery(query, songs) }
-                val searchableSongs = if (intent.languageCode == null) songs else withContext(Dispatchers.IO) {
+                val catalogIntent = withContext(Dispatchers.Default) { parseMusicQuery(query, songs) }
+                val languageTaggedSongs = if (catalogIntent.languageCode == null) songs else withContext(Dispatchers.IO) {
                     songs.map { song ->
                         if (song.languageMetadataChecked || song.languageTags.isNotEmpty()) return@map song
                         try {
@@ -312,7 +324,11 @@ class LibraryViewModel(
                         }
                     }
                 }
-                val tagsBySong = withContext(Dispatchers.IO) { libraryStore.musicTags(searchableSongs) }
+                val tagsBySong = withContext(Dispatchers.IO) { libraryStore.musicTags(languageTaggedSongs) }
+                val searchableSongs = languageTaggedSongs.map { song ->
+                    song.withMusicUnderstandingGenres(tagsBySong[song.id].orEmpty())
+                }
+                val intent = withContext(Dispatchers.Default) { parseMusicQuery(query, searchableSongs) }
                 _state.update { current ->
                     if (current is LibraryUiState.Ready) current.copy(songs = searchableSongs) else current
                 }
@@ -335,10 +351,11 @@ class LibraryViewModel(
                             semanticLoading = false,
                             semanticSearchComplete = intent.semanticText.isNotBlank() && semanticMatches.isNotEmpty(),
                             searchError = null,
-                            searchNotice = if (semanticSearchFailed) {
-                                "Semantic matching is unavailable; showing local metadata results."
-                            } else {
-                                null
+                            searchNotice = when {
+                                semanticSearchFailed -> "Semantic matching is unavailable; showing local metadata results."
+                                searchableSongs.isNotEmpty() && intent.semanticText.isNotBlank() && semanticMatches.isEmpty() ->
+                                    "No current DCLAP audio embeddings are available; showing local metadata results."
+                                else -> null
                             },
                         )
                     } else state

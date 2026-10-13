@@ -12,6 +12,8 @@ internal enum class EqualizerPlaybackStatus { Disabled, Waiting, Applied, Unavai
 internal data class PlaybackEffectState(
     val uhqTrackId: Long? = null,
     val uhq: UhqPlaybackStatus = UhqPlaybackStatus.Disabled,
+    val uhqProgressPercent: Int? = null,
+    val uhqProgressStage: String? = null,
     val equalizer: EqualizerPlaybackStatus = EqualizerPlaybackStatus.Disabled,
 )
 
@@ -19,8 +21,20 @@ internal object PlaybackEffectStatus {
     private val mutableState = MutableStateFlow(PlaybackEffectState())
     val state: StateFlow<PlaybackEffectState> = mutableState.asStateFlow()
 
-    fun updateUHQ(trackId: Long?, status: UhqPlaybackStatus) {
-        mutableState.update { it.copy(uhqTrackId = trackId, uhq = status) }
+    fun updateUHQ(
+        trackId: Long?,
+        status: UhqPlaybackStatus,
+        progressPercent: Int? = null,
+        progressStage: String? = null,
+    ) {
+        mutableState.update {
+            it.copy(
+                uhqTrackId = trackId,
+                uhq = status,
+                uhqProgressPercent = progressPercent?.coerceIn(0, 99),
+                uhqProgressStage = progressStage,
+            )
+        }
     }
 
     fun updateEqualizer(status: EqualizerPlaybackStatus) {
@@ -38,7 +52,9 @@ internal fun uhqSettingLabel(enabled: Boolean, activeTrackId: Long?, state: Play
     else -> when (state.uhq) {
         UhqPlaybackStatus.Disabled -> "On"
         UhqPlaybackStatus.Waiting -> "On"
-        UhqPlaybackStatus.Preparing -> "Preparing"
+        UhqPlaybackStatus.Preparing -> state.uhqProgressPercent?.let { percent ->
+            "${state.uhqProgressStage ?: "Enhancing"} · $percent%"
+        } ?: "Preparing"
         UhqPlaybackStatus.Enhanced -> "Enhanced"
         UhqPlaybackStatus.Unsupported -> "Original"
         UhqPlaybackStatus.Failed -> "Failed · original"

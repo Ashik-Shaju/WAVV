@@ -18,6 +18,19 @@ class PlaybackEffectStatusTest {
     }
 
     @Test
+    fun uhqLabelShowsWorkerStageAndRealCompletedProgress() {
+        val state = PlaybackEffectState(
+            uhqTrackId = 7L,
+            uhq = UhqPlaybackStatus.Preparing,
+            uhqProgressPercent = 42,
+            uhqProgressStage = "Enhancing audio",
+        )
+
+        assertEquals("Enhancing audio · 42%", uhqSettingLabel(true, 7L, state))
+        assertEquals("Preparing", uhqSettingLabel(true, 7L, state.copy(uhqProgressPercent = null)))
+    }
+
+    @Test
     fun equalizerLabelDoesNotClaimAnUnsupportedEffectWasApplied() {
         assertEquals("Off", equalizerSettingLabel(false, "Bass", EqualizerPlaybackStatus.Applied))
         assertEquals("Waiting for playback", equalizerSettingLabel(true, "Bass", EqualizerPlaybackStatus.Waiting))
