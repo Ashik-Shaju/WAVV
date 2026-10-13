@@ -10,9 +10,10 @@ ExoPlayer uses the platform renderer factory with decoder fallback enabled, conf
 
 ## Queue behavior
 
-- Starting a track sets a queue with that track first, available personalized suggestions next, and remaining catalog tracks after them. Starting a smart mix uses that mix's tracks as the queue.
-- **Play next** inserts a track immediately after the current track. **Add to queue** appends it. The current track cannot be removed from the active queue.
-- Upcoming tracks can be moved or removed. Shuffle rearranges upcoming tracks without changing the current item or the already-played prefix. Turning shuffle off restores the managed queue order.
+- Starting a track directly leaves the upcoming queue empty. Starting from a playlist, mix, album, artist, genre, or other collection puts the remaining tracks from that source in the queue and shows the source name. The current track is displayed separately from upcoming tracks.
+- AutoPlay is on by default and uses the app's local personalized recommendations. It shows up to ten suggestions, separate from the queue. Suggestions can be reordered, played next, or appended to the queue. Turning AutoPlay off hides its suggestions and prevents it from adding a song when the queue ends; turning it back on restores the same remaining suggestion order. If the queue ends while AutoPlay is on, its first suggestion is appended and played.
+- **Play next** inserts a track immediately after the current track. **Add to queue** appends it after the existing session queue. A suggestion promoted to the queue is removed from AutoPlay.
+- Upcoming queue tracks can be moved or removed; AutoPlay suggestions can only be reordered within AutoPlay. Shuffle changes only the upcoming queue, leaves AutoPlay untouched, and reuses the previous shuffle order when enabled again. Turning shuffle off restores the managed queue order. The player retains the session timeline as songs play, with no fixed queue length.
 - Previous restarts the current track after it has played for more than three seconds; otherwise it goes to the previous queue item when one exists.
 - Repeat cycles through off, repeat queue, and repeat one.
 - Listening events are written after player state confirms playback, not merely when a play request is issued.

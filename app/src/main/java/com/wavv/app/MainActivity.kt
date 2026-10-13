@@ -2516,13 +2516,10 @@ private fun FullPlayer(
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
     var playlistSong by remember(song.id) { mutableStateOf<Song?>(null) }
-    var showNextSong by remember { mutableStateOf(false) }
-    var nudgeNextUp by remember { mutableStateOf(false) }
-    val nextUpNudgePx by animateFloatAsState(
-        targetValue = if (nudgeNextUp) -3f else 0f,
-        animationSpec = tween(420, easing = WavvEaseInOut),
-        label = "next up nudge",
-    )
+    var showNextTitle by remember(song.id) { mutableStateOf(false) }
+    val nextUpOffset = remember(song.id) { Animatable(0f) }
+    val nextUpLiftPx = with(LocalDensity.current) { 6.dp.toPx() }
+    var hasNudgedNextUp by remember(song.id) { mutableStateOf(false) }
     var playerDragOffset by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
     var artworkGestureStarted by remember(song.id) { mutableStateOf(false) }
@@ -2530,19 +2527,25 @@ private fun FullPlayer(
     var artworkCoordinates by remember(song.id) { mutableStateOf<LayoutCoordinates?>(null) }
     val gestureScope = rememberCoroutineScope()
     BackHandler(enabled = showLyrics) { showLyrics = false }
-    val nextTitle = state.queue.getOrNull(currentQueueIndex + 1)?.title ?: "Next Up"
+    val nextSong = state.queue.getOrNull(currentQueueIndex + 1)
+        ?.takeIf { it.id != song.id }
+        ?: state.autoplaySongs.firstOrNull()?.takeIf { state.autoplayEnabled && it.id != song.id }
+    val nextTitle = nextSong?.title
     LaunchedEffect(showQueue, nextTitle) {
-        while (isActive && !showQueue) {
-            delay(4_000)
-            showNextSong = !showNextSong
+        showNextTitle = false
+        if (!showQueue && nextTitle != null) {
+            while (isActive) {
+                delay(3_500)
+                showNextTitle = !showNextTitle
+            }
         }
     }
-    LaunchedEffect(showQueue) {
-        while (isActive && !showQueue) {
-            delay(2_600)
-            nudgeNextUp = true
-            delay(550)
-            nudgeNextUp = false
+    LaunchedEffect(showQueue, song.id) {
+        if (!showQueue && !hasNudgedNextUp) {
+            delay(1_500)
+            nextUpOffset.animateTo(-nextUpLiftPx, tween(1_100, easing = WavvEaseInOut))
+            nextUpOffset.animateTo(0f, tween(1_100, easing = WavvEaseInOut))
+            hasNudgedNextUp = true
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -2712,19 +2715,30 @@ private fun FullPlayer(
                     Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
                 }
             }
-            AnimatedContent(
-                targetState = showNextSong,
-                transitionSpec = { fadeIn(tween(220, easing = WavvEaseInOut)) togetherWith fadeOut(tween(180, easing = WavvEaseInOut)) },
-                label = "next up label",
-            ) { showSong ->
-                Text(
-                    if (showSong) nextTitle else "Next Up",
-                    Modifier.fillMaxWidth().clickable(onClick = onShowQueue).graphicsLayer { translationY = nextUpNudgePx }.padding(bottom = 4.dp),
-                    color = Color.White.copy(.45f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            Column(
+                Modifier.fillMaxWidth().clickable(onClick = onShowQueue),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                AnimatedContent(
+                    targetState = showNextTitle && nextTitle != null,
+                    transitionSpec = {
+                        fadeIn(tween(500, easing = WavvEaseInOut)) togetherWith
+                            fadeOut(tween(500, easing = WavvEaseInOut))
+                    },
+                    label = "next up and song title",
+                ) { showSongTitle ->
+                    Text(
+                        if (showSongTitle) nextTitle.orEmpty() else "Next Up",
+                        Modifier.fillMaxWidth()
+                            .graphicsLayer { translationY = nextUpOffset.value }
+                            .padding(top = 2.dp, bottom = 8.dp),
+                        color = Color.White.copy(.82f), fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         AnimatedVisibility(
