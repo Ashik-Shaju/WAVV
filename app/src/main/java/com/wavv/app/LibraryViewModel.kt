@@ -342,7 +342,13 @@ class LibraryViewModel(
                     emptyList()
                 }
                 val results = withContext(Dispatchers.Default) {
-                    rankLocalSearch(searchableSongs, intent, semanticMatches, tagsBySong)
+                    rankLocalSearch(
+                        searchableSongs,
+                        intent,
+                        semanticMatches,
+                        tagsBySong,
+                        preferenceOrder = (state.value as? LibraryUiState.Ready)?.personalizedRecommendations.orEmpty(),
+                    )
                 }
                 _state.update { state ->
                     if (state is LibraryUiState.Ready) {
@@ -398,6 +404,14 @@ class LibraryViewModel(
             favoriteIds.value = ids
             _state.update { state ->
                 if (state is LibraryUiState.Ready) state.copy(favoriteIds = ids) else state
+            }
+        }
+    }
+
+    fun recordQueueAction(songId: Long, action: String) {
+        viewModelScope.launch {
+            runStoreAction("Couldn't save this listening action.") {
+                libraryStore.recordEvent("queue_add", songId, sessionId, selectionSource = action)
             }
         }
     }

@@ -25,6 +25,12 @@ data class Song(
     val languageTags: List<String> = emptyList(),
     val languageMetadataChecked: Boolean = false,
     val inferredGenres: List<String> = emptyList(),
+    val author: String? = null,
+    val writer: String? = null,
+    val recordingDate: String? = null,
+    val isCompilation: Boolean? = null,
+    val bitrate: Int? = null,
+    val trackCount: Int? = null,
 )
 
 data class UserPlaylist(
@@ -38,4 +44,10 @@ data class PlaybackHistoryEntry(
     val id: Long,
     val song: Song,
     val playedAt: Long,
+)
+
+internal fun albumTrackOrder(songs: List<Song>): List<Song> = songs.sortedWith(
+    compareBy<Song> { it.discNumber ?: 1 }
+        .thenBy { it.trackNumber ?: Int.MAX_VALUE }
+        .thenBy { it.title.lowercase() },
 )

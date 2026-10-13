@@ -636,6 +636,7 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
     val source by libraryViewModel.source.collectAsStateWithLifecycle()
     val playbackState by playbackController.state.collectAsStateWithLifecycle()
     val currentSongs = (libraryState as? LibraryUiState.Ready)?.songs.orEmpty()
+    val currentRecommendations = (libraryState as? LibraryUiState.Ready)?.personalizedRecommendations
     val showUnavailable: (String) -> Unit = { message -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
 
     LaunchedEffect(libraryViewModel) {
@@ -644,6 +645,10 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
 
     LaunchedEffect(currentSongs) {
         playbackController.updateCatalog(currentSongs)
+    }
+
+    LaunchedEffect(currentRecommendations, playbackState.queue.map(Song::id)) {
+        currentRecommendations?.let(playbackController::updateAutoplayRecommendations)
     }
 
     LaunchedEffect(source, hasPermission) {
@@ -689,17 +694,29 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onUnavailable = showUnavailable,
                     onRepeatMode = playbackController::setRepeatMode,
                     onQueueMode = playbackController::setQueueMode,
-                    onPlayNext = { reportQueueAction(playbackController.playNext(it), showUnavailable) },
-                    onAddToQueue = { reportQueueAction(playbackController.addToQueue(it), showUnavailable) },
+                    onPlayNext = { song ->
+                        val result = playbackController.playNext(song)
+                        if (result == QueueActionResult.Added) libraryViewModel.recordQueueAction(song.id, "play_next")
+                        reportQueueAction(result, showUnavailable)
+                    },
+                    onAddToQueue = { song ->
+                        val result = playbackController.addToQueue(song)
+                        if (result == QueueActionResult.Added) libraryViewModel.recordQueueAction(song.id, "queue")
+                        reportQueueAction(result, showUnavailable)
+                    },
                     onRemoveQueueItem = playbackController::removeFromQueue,
                     onMoveQueueItem = playbackController::moveQueueItem,
                     onPlayQueuedSong = playbackController::playQueueSong,
                     onPlayAutoplaySong = playbackController::playAutoplaySong,
                     onPlayNextFromAutoplay = {
-                        reportQueueAction(playbackController.playNext(it, fromAutoplay = true), showUnavailable)
+                        val result = playbackController.playNext(it, fromAutoplay = true)
+                        if (result == QueueActionResult.Added) libraryViewModel.recordQueueAction(it.id, "autoplay_play_next")
+                        reportQueueAction(result, showUnavailable)
                     },
                     onAddAutoplayToQueue = {
-                        reportQueueAction(playbackController.addToQueue(it, fromAutoplay = true), showUnavailable)
+                        val result = playbackController.addToQueue(it, fromAutoplay = true)
+                        if (result == QueueActionResult.Added) libraryViewModel.recordQueueAction(it.id, "autoplay_queue")
+                        reportQueueAction(result, showUnavailable)
                     },
                     onRemoveAutoplaySong = playbackController::removeAutoplaySong,
                     onMoveAutoplayItem = playbackController::moveAutoplayItem,
@@ -1142,14 +1159,14 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         showPlayer = false
         showQueue = false
     }
-    val startPlayback: (Song) -> Unit = { song ->
+    val startPlayback: (Song, String) -> Unit = { song, selectionSource ->
         playerExpanded = true
         playerPositionInitialized = true
         onPlayWithRecommendations(
             song,
             listOf(song),
             personalizedRecommendations,
-            "manual",
+            selectionSource,
             null,
             null,
         )
@@ -1201,11 +1218,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         isPlaying = playbackState.isPlaying,
                         statusChips = homeStatusChips,
                         onChooseSource = onChooseSource,
-                        onPlay = startPlayback,
+                        onPlay = { song -> startPlayback(song, "home") },
                         onPlayFromContext = { song, contextQueue, sourceLabel ->
                             playerExpanded = true
                             playerPositionInitialized = true
-                            onPlayWithRecommendations(song, contextQueue, personalizedRecommendations, "genre", null, sourceLabel)
+                            onPlayWithRecommendations(song, contextQueue, personalizedRecommendations, "home_shelf", null, sourceLabel)
                         },
                         onPlayNext = onPlayNext,
                         onAddToQueue = onAddToQueue,
@@ -1216,7 +1233,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             showCreatePlaylist = true
                         },
                         onNavigateToAlbum = { song ->
-                            navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.artist))
+                            navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.albumArtist ?: song.artist))
                             tab = Tab.Library
                         },
                         onNavigateToArtist = { song ->
@@ -1224,6 +1241,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             tab = Tab.Library
                         },
                         recentSongs = recentlyPlayed,
+                        personalizedRecommendations = personalizedRecommendations,
                         playerExpanded = homePlayerExpanded,
                         stackIndex = homeStackIndex,
                         stackExpansionProgress = homeStackExpansionProgress,
@@ -1246,12 +1264,14 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         searchError = searchError,
                         searchNotice = searchNotice,
                         onQueryChange = onSearch,
-                        onPlay = startPlayback,
+                        onPlay = { song, sourceLabel -> startPlayback(song, sourceLabel) },
+                        personalizedRecommendations = personalizedRecommendations,
                         hasNowPlaying = activeSong != null,
                     )
                     Tab.Library -> LibraryScreen(
                         destination = libraryDestination,
                         songs = songs,
+                        personalizedRecommendations = personalizedRecommendations,
                         playbackHistory = playbackHistory,
                         historyVisible = libraryHistoryVisible,
                         onToggleHistory = { libraryHistoryVisible = !libraryHistoryVisible },
@@ -1468,7 +1488,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onArtworkDragCancel = { cancelArtworkDrag() },
                     onAddSongToPlaylist = onAddSongToPlaylist,
                     onCreatePlaylist = { songId -> createPlaylistSongId = songId; createPlaylistName = ""; showCreatePlaylist = true },
-                    onNavigateToAlbum = { song -> navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.artist)); tab = Tab.Library; closePlayer() },
+                    onNavigateToAlbum = { song -> navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.albumArtist ?: song.artist)); tab = Tab.Library; closePlayer() },
                     onNavigateToArtist = { song -> navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist)); tab = Tab.Library; closePlayer() },
                 )
             }

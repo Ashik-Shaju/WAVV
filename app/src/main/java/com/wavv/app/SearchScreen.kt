@@ -68,9 +68,10 @@ import androidx.compose.ui.unit.sp
 @Composable
 internal fun SearchScreen(
     songs: List<Song>,
-    onPlay: (Song) -> Unit,
+    onPlay: (Song, String) -> Unit,
     hasNowPlaying: Boolean,
     searchResults: List<Song>?,
+    personalizedRecommendations: List<Song> = emptyList(),
     semanticLoading: Boolean = false,
     semanticSearchComplete: Boolean = false,
     searchError: String? = null,
@@ -104,8 +105,10 @@ internal fun SearchScreen(
             imeBarOffsetPx.animateTo(0f, tween(280))
         }
     }
-    val genreSongs = remember(songs, selectedGenre) {
-        selectedGenre?.let { genre -> songsForGenre(songs, genre) }.orEmpty()
+    val genreSongs = remember(songs, selectedGenre, personalizedRecommendations) {
+        selectedGenre?.let { genre ->
+            recommendationOrderedSongs(songsForGenre(songs, genre), personalizedRecommendations)
+        }.orEmpty()
     }
     Column(Modifier.fillMaxSize()) {
         ScreenHeader("Search")
@@ -145,7 +148,7 @@ internal fun SearchScreen(
                         }
                     }
                     itemsIndexed(genreSongs, key = { _, song -> song.id }) { index, song ->
-                        SearchResultRow(song, onPlay)
+                        SearchResultRow(song) { onPlay(it, "genre") }
                         if (index != genreSongs.lastIndex) Hairline()
                     }
                 } else if (query.isNotBlank()) {
@@ -193,12 +196,12 @@ internal fun SearchScreen(
                         }
                     }
                     itemsIndexed(searchResults.orEmpty(), key = { _, song -> song.id }) { index, song ->
-                        SearchResultRow(song, onPlay)
+                        SearchResultRow(song) { onPlay(it, "search") }
                         if (index != searchResults.orEmpty().lastIndex) Hairline()
                     }
                 } else if (!focused) {
                     item {
-                        BrowseCategories(songs) { category ->
+                        BrowseCategories(songs, personalizedRecommendations) { category ->
                             selectedGenre = category
                             query = ""
                             focused = false
@@ -243,8 +246,8 @@ internal fun SearchResultRow(song: Song, onPlay: (Song) -> Unit) {
 }
 
 @Composable
-private fun BrowseCategories(songs: List<Song>, onChooseCategory: (String) -> Unit) {
-    val categories = remember(songs) { genreCategories(songs) }
+private fun BrowseCategories(songs: List<Song>, recommendations: List<Song>, onChooseCategory: (String) -> Unit) {
+    val categories = remember(songs, recommendations) { recommendationOrderedGenreCategories(songs, recommendations) }
     Column(
         Modifier.padding(horizontal = 16.dp).animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),

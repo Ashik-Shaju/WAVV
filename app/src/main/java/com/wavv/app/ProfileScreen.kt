@@ -132,7 +132,7 @@ internal fun YouScreen(
         .distinctBy { it.lowercase(Locale.ROOT) }
         .count()
     val albumCount = songs.asSequence()
-        .map { it.album.trim() }
+        .map { "${it.album.trim()}\u0000${(it.albumArtist ?: it.artist).trim()}" }
         .filter(String::isNotEmpty)
         .distinctBy { it.lowercase(Locale.ROOT) }
         .count()

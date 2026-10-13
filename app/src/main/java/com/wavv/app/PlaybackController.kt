@@ -73,6 +73,8 @@ class PlaybackController(context: Context) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private var autoplayCandidates: List<Song> = emptyList()
+    private val dismissedAutoplayIds = mutableSetOf<Long>()
+    private var autoplayManuallyOrdered = false
     private var playingFrom: String? = null
     private var lastShuffleOrder: List<Long>? = null
     private var advancingAutoplay = false
@@ -251,10 +253,15 @@ class PlaybackController(context: Context) {
         }
         managedQueue = sessionQueue
         lastShuffleOrder = null
-        autoplayCandidates = autoplayRecommendations.asSequence()
-            .filterNot { candidate -> candidate.id == song.id || sessionQueue.any { it.id == candidate.id } }
-            .distinctBy(Song::id)
-            .toList()
+        dismissedAutoplayIds.clear()
+        autoplayManuallyOrdered = false
+        autoplayCandidates = reconcileAutoplayRecommendations(
+            current = emptyList(),
+            ranked = autoplayRecommendations,
+            queuedIds = sessionQueue.mapTo(mutableSetOf(), Song::id) + song.id,
+            dismissedIds = dismissedAutoplayIds,
+            preserveManualOrder = false,
+        )
         this.playingFrom = playingFrom
         advancingAutoplay = false
         val startIndex = 0
@@ -448,14 +455,28 @@ class PlaybackController(context: Context) {
     }
 
     fun moveAutoplayItem(fromIndex: Int, toIndex: Int) {
-        if (fromIndex !in autoplayCandidates.indices || toIndex !in autoplayCandidates.indices) return
+        if (fromIndex !in autoplayCandidates.indices || toIndex !in autoplayCandidates.indices || fromIndex == toIndex) return
         autoplayCandidates = autoplayCandidates.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
+        autoplayManuallyOrdered = true
         updateAutoplayState()
     }
 
     fun removeAutoplaySong(song: Song) {
-        if (autoplayCandidates.none { it.id == song.id }) return
+        dismissedAutoplayIds += song.id
         autoplayCandidates = autoplayCandidates.filterNot { it.id == song.id }
+        updateAutoplayState()
+    }
+
+    fun updateAutoplayRecommendations(recommendations: List<Song>) {
+        val player = controller?.takeIf { it.mediaItemCount > 0 } ?: return
+        val queuedIds = readQueue(player).mapTo(mutableSetOf(), Song::id)
+        autoplayCandidates = reconcileAutoplayRecommendations(
+            current = autoplayCandidates,
+            ranked = recommendations,
+            queuedIds = queuedIds,
+            dismissedIds = dismissedAutoplayIds,
+            preserveManualOrder = autoplayManuallyOrdered,
+        )
         updateAutoplayState()
     }
 
@@ -551,7 +572,7 @@ class PlaybackController(context: Context) {
         autoplayCandidates = autoplayCandidates.drop(1)
         updateAutoplayState()
         val index = player.mediaItemCount
-        player.addMediaItem(mediaItem(nextSong, "autoplay_recommendation"))
+        player.addMediaItem(mediaItem(nextSong, "autoplay_auto"))
         managedQueue = managedQueue + nextSong
         playingFrom = "AutoPlay"
         _state.value = _state.value.copy(playingFrom = playingFrom)
@@ -602,6 +623,14 @@ class PlaybackController(context: Context) {
                 .setTitle(song.title)
                 .setArtist(song.artist)
                 .setAlbumTitle(song.album)
+                .setAlbumArtist(song.albumArtist)
+                .setComposer(song.composer)
+                .setWriter(song.writer)
+                .setGenre(song.fileGenreNames().takeIf(List<String>::isNotEmpty)?.joinToString(" / "))
+                .setRecordingYear(song.year)
+                .setTrackNumber(song.trackNumber)
+                .setDiscNumber(song.discNumber)
+                .setTotalTrackCount(song.trackCount)
                 .setExtras(Bundle().apply {
                     putString(MEDIA_EXTRA_SELECTION_SOURCE, selectionSource)
                     recommendationId?.let { putString(MEDIA_EXTRA_RECOMMENDATION_ID, it) }

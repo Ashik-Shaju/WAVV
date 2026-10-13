@@ -110,6 +110,13 @@ class MediaLibraryRepository(context: Context) {
             MediaStore.Audio.AudioColumns.ALBUM_ARTIST,
             MediaStore.Audio.AudioColumns.YEAR,
             MediaStore.Audio.AudioColumns.TRACK,
+            MediaStore.MediaColumns.AUTHOR,
+            MediaStore.MediaColumns.WRITER,
+            MediaStore.MediaColumns.COMPILATION,
+            MediaStore.MediaColumns.BITRATE,
+            MediaStore.MediaColumns.NUM_TRACKS,
+            MediaStore.MediaColumns.DISC_NUMBER,
+            MediaStore.Audio.AudioColumns.SAMPLERATE,
         )
         val selection = buildString {
             append("${MediaStore.Audio.Media.IS_MUSIC} != 0")
@@ -142,6 +149,13 @@ class MediaLibraryRepository(context: Context) {
                 val albumArtistColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.ALBUM_ARTIST)
                 val yearColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.YEAR)
                 val trackColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.TRACK)
+                val authorColumn = cursor.getColumnIndex(MediaStore.MediaColumns.AUTHOR)
+                val writerColumn = cursor.getColumnIndex(MediaStore.MediaColumns.WRITER)
+                val compilationColumn = cursor.getColumnIndex(MediaStore.MediaColumns.COMPILATION)
+                val bitrateColumn = cursor.getColumnIndex(MediaStore.MediaColumns.BITRATE)
+                val trackCountColumn = cursor.getColumnIndex(MediaStore.MediaColumns.NUM_TRACKS)
+                val discColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DISC_NUMBER)
+                val sampleRateColumn = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.SAMPLERATE)
                 val albumArtwork = mutableMapOf<Long, String?>()
                 var completed = 0
 
@@ -158,6 +172,7 @@ class MediaLibraryRepository(context: Context) {
                         (embedded.artworkUri ?: albumArtUri(albumId).takeIf { albumId > 0L }?.toString())
                             .also { albumArtwork[artworkKey] = it }
                     }
+                    val recordingDate = embedded.recordingDate
                     add(
                         Song(
                             id = id,
@@ -183,9 +198,18 @@ class MediaLibraryRepository(context: Context) {
                             genres = genres[id].orEmpty(),
                             composer = cursor.getStringOrNull(composerColumn)?.trim()?.ifBlank { null } ?: embedded.composer,
                             albumArtist = cursor.getStringOrNull(albumArtistColumn)?.trim()?.ifBlank { null } ?: embedded.albumArtist,
-                            year = cursor.getStringOrNull(yearColumn).toMetadataNumber() ?: embedded.year,
+                            year = cursor.getStringOrNull(yearColumn).toMetadataNumber()
+                                ?: embedded.year
+                                ?: recordingDate.recordingYear(),
                             trackNumber = cursor.getStringOrNull(trackColumn).toMetadataNumber() ?: embedded.trackNumber,
-                            discNumber = embedded.discNumber,
+                            discNumber = cursor.getStringOrNull(discColumn).toMetadataNumber() ?: embedded.discNumber,
+                            sampleRate = cursor.getStringOrNull(sampleRateColumn).toMetadataNumber() ?: embedded.sampleRate,
+                            author = cursor.getStringOrNull(authorColumn)?.trim()?.ifBlank { null } ?: embedded.author,
+                            writer = cursor.getStringOrNull(writerColumn)?.trim()?.ifBlank { null } ?: embedded.writer,
+                            recordingDate = recordingDate,
+                            isCompilation = cursor.getStringOrNull(compilationColumn).toMetadataBoolean() ?: embedded.isCompilation,
+                            bitrate = cursor.getStringOrNull(bitrateColumn).toMetadataNumber() ?: embedded.bitrate,
+                            trackCount = cursor.getStringOrNull(trackCountColumn).toMetadataNumber() ?: embedded.trackCount,
                         ),
                     )
                     completed += 1
@@ -242,6 +266,13 @@ class MediaLibraryRepository(context: Context) {
         val year: Int? = null,
         val trackNumber: Int? = null,
         val discNumber: Int? = null,
+        val sampleRate: Int? = null,
+        val author: String? = null,
+        val writer: String? = null,
+        val recordingDate: String? = null,
+        val isCompilation: Boolean? = null,
+        val bitrate: Int? = null,
+        val trackCount: Int? = null,
     )
 
     private fun extractEmbeddedAudioMetadata(mediaUri: Uri): EmbeddedAudioMetadata {
@@ -255,6 +286,15 @@ class MediaLibraryRepository(context: Context) {
                 year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR).toMetadataNumber(),
                 trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER).toMetadataNumber(),
                 discNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER).toMetadataNumber(),
+                sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE).toMetadataNumber()
+                } else null,
+                author = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR)?.trim()?.ifBlank { null },
+                writer = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_WRITER)?.trim()?.ifBlank { null },
+                recordingDate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)?.trim()?.ifBlank { null },
+                isCompilation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPILATION).toMetadataBoolean(),
+                bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE).toMetadataNumber(),
+                trackCount = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_NUM_TRACKS).toMetadataNumber(),
             )
         } catch (_: Exception) {
             EmbeddedAudioMetadata()
@@ -346,6 +386,12 @@ class MediaLibraryRepository(context: Context) {
         var year: Int? = null
         var trackNumber: Int? = null
         var discNumber: Int? = null
+        var author: String? = null
+        var writer: String? = null
+        var recordingDate: String? = null
+        var isCompilation: Boolean? = null
+        var bitrate: Int? = null
+        var trackCount: Int? = null
         val documentStats = indexedStats ?: try {
             documentStats(uri)
         } catch (error: CancellationException) {
@@ -365,7 +411,7 @@ class MediaLibraryRepository(context: Context) {
                 else -> container?.substringAfterLast('/')?.ifBlank { null }
             }
             sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE).toMetadataNumber()
             } else null
             title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orFallback(fallbackTitle)
             artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orFallback(artist)
@@ -376,6 +422,13 @@ class MediaLibraryRepository(context: Context) {
             year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR).toMetadataNumber()
             trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER).toMetadataNumber()
             discNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER).toMetadataNumber()
+            author = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR)?.trim()?.ifBlank { null }
+            writer = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_WRITER)?.trim()?.ifBlank { null }
+            recordingDate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)?.trim()?.ifBlank { null }
+            year = year ?: recordingDate.recordingYear()
+            isCompilation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPILATION).toMetadataBoolean()
+            bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE).toMetadataNumber()
+            trackCount = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_NUM_TRACKS).toMetadataNumber()
             durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             albumArtUri = runCatching { cacheEmbeddedArtwork(retriever.embeddedPicture) }.getOrNull()
             metadataSource = "embedded"
@@ -400,6 +453,12 @@ class MediaLibraryRepository(context: Context) {
                 year = year,
                 trackNumber = trackNumber,
                 discNumber = discNumber,
+                author = author,
+                writer = writer,
+                recordingDate = recordingDate,
+                isCompilation = isCompilation,
+                bitrate = bitrate,
+                trackCount = trackCount,
             )
         } catch (error: CancellationException) {
             throw error
@@ -427,6 +486,12 @@ class MediaLibraryRepository(context: Context) {
                 year = year,
                 trackNumber = trackNumber,
                 discNumber = discNumber,
+                author = author,
+                writer = writer,
+                recordingDate = recordingDate,
+                isCompilation = isCompilation,
+                bitrate = bitrate,
+                trackCount = trackCount,
             )
         } finally {
             retriever.release()
@@ -502,8 +567,6 @@ class MediaLibraryRepository(context: Context) {
 
     private fun String?.orFallback(fallback: String) = takeUnless { it.isNullOrBlank() } ?: fallback
 }
-
-private fun String?.toMetadataNumber(): Int? = this?.substringBefore('/')?.trim()?.toIntOrNull()
 
 internal fun pruneEmbeddedArtworkFiles(directory: File, referencedArtworkUris: Collection<String>): Int {
     if (!directory.isDirectory) return 0

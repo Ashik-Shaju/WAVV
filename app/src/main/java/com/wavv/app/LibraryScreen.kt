@@ -287,6 +287,7 @@ internal fun LibraryScreen(
     onToggleHistory: () -> Unit,
     hasNowPlaying: Boolean,
     favoriteIds: Set<Long>,
+    personalizedRecommendations: List<Song>,
     playlists: List<UserPlaylist>,
     layout: LibraryLayout,
     pinnedPlaylistIds: Set<Long>,
@@ -310,7 +311,9 @@ internal fun LibraryScreen(
     var sortMenu by remember { mutableStateOf(false) }
     var sortMode by rememberSaveable(destination.page) { mutableStateOf("Recently added") }
     val recent = remember(songs) { songs.sortedByDescending(Song::modifiedAt).take(6) }
-    val featuredSongs = songs.take(6)
+    val featuredSongs = remember(songs, personalizedRecommendations) {
+        recommendationOrderedSongs(songs, personalizedRecommendations).take(6)
+    }
     val playlist = playlists.firstOrNull { it.id == destination.itemId }
     val collectionSongs = remember(destination, songs, favoriteIds, playlists) {
         when (destination.page) {
@@ -318,7 +321,7 @@ internal fun LibraryScreen(
             LibraryPage.Songs -> songs
             LibraryPage.Playlist -> playlist?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
             LibraryPage.Artist -> songs.filter { it.artist == destination.title }
-            LibraryPage.Album -> songs.filter { it.album == destination.title && it.artist == destination.subtitle }
+            LibraryPage.Album -> songs.filter { it.album == destination.title && (it.albumArtist ?: it.artist) == destination.subtitle }
             else -> emptyList()
         }
     }
@@ -418,6 +421,16 @@ internal fun LibraryScreen(
             }
 
             LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums -> {
+                val libraryBrowseSongs = remember(songs, route.page, sortMode, personalizedRecommendations) {
+                    val alphabetic = when (route.page) {
+                        LibraryPage.Artists -> songs.sortedBy { it.artist.lowercase() }
+                        LibraryPage.Albums -> songs.sortedWith(compareBy<Song> { it.album.lowercase() }.thenBy { (it.albumArtist ?: it.artist).lowercase() })
+                        else -> songs
+                    }
+                    if (sortMode == "For You" && route.page != LibraryPage.Playlists) {
+                        recommendationOrderedSongs(alphabetic, personalizedRecommendations)
+                    } else alphabetic
+                }
                 val cards = when (route.page) {
                     LibraryPage.Playlists -> playlists.sortedWith(
                         compareByDescending<UserPlaylist> { it.id in pinnedPlaylistIds }.thenByDescending(UserPlaylist::updatedAt),
@@ -427,13 +440,11 @@ internal fun LibraryScreen(
                             songs.firstOrNull { song -> song.id in item.songIds },
                         ) { onNavigate(LibraryDestination(LibraryPage.Playlist, item.id, item.name)) }
                     }
-                    LibraryPage.Artists -> songs.groupBy(Song::artist).entries
-                        .sortedBy { it.key.lowercase() }
+                    LibraryPage.Artists -> libraryBrowseSongs.groupBy(Song::artist).entries
                         .map { (artist, tracks) -> LibraryCard(artist, artist, "${tracks.size} songs", tracks.firstOrNull()) {
                             onNavigate(LibraryDestination(LibraryPage.Artist, title = artist))
                         } }
-                    else -> songs.groupBy { it.album to it.artist }.entries
-                        .sortedBy { it.key.first.lowercase() }
+                    else -> libraryBrowseSongs.groupBy { it.album to (it.albumArtist ?: it.artist) }.entries
                         .map { (key, tracks) -> LibraryCard("${key.first}\u0000${key.second}", key.first, key.second, tracks.firstOrNull()) {
                             onNavigate(LibraryDestination(LibraryPage.Album, title = key.first, subtitle = key.second))
                         } }
@@ -447,11 +458,11 @@ internal fun LibraryScreen(
                         onBack = onBack,
                         onToggleLayout = onToggleLayout,
                         showAdd = route.page == LibraryPage.Playlists,
-                        showSort = route.page == LibraryPage.Playlists,
+                        showSort = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
                         onAdd = { onRequestCreatePlaylist(null) },
                         onSort = { sortMenu = true },
                     )
-                    val orderedCards = remember(cards, sortMode) {
+                    val orderedCards = remember(cards, sortMode, personalizedRecommendations) {
                         when (sortMode) {
                             "Title A–Z" -> cards.sortedBy { it.title.lowercase() }
                             "Artist or creator" -> cards.sortedBy { it.subtitle.lowercase() }
@@ -524,10 +535,11 @@ internal fun LibraryScreen(
                         LibraryPage.Songs -> songs
                         LibraryPage.Playlist -> playlists.firstOrNull { it.id == route.itemId }?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
                         LibraryPage.Artist -> songs.filter { it.artist == route.title }
-                        LibraryPage.Album -> songs.filter { it.album == route.title && it.artist == route.subtitle }
+                        LibraryPage.Album -> songs.filter { it.album == route.title && (it.albumArtist ?: it.artist) == route.subtitle }
                     },
                     playlists = playlists,
                     favoriteIds = favoriteIds,
+                    personalizedRecommendations = personalizedRecommendations,
                     sortMode = sortMode,
                     playAsText = route.page == LibraryPage.Liked || route.page == LibraryPage.Songs || route.page == LibraryPage.Playlist,
                     hasNowPlaying = hasNowPlaying,
@@ -546,7 +558,7 @@ internal fun LibraryScreen(
                     onRequestAddToPlaylist = { songForPlaylist = it },
                     onAddSongToPlaylist = onAddSongToPlaylist,
                     onRemoveSongFromPlaylist = { id -> playlist?.let { onRemoveSongFromPlaylist(it.id, id) } },
-                    onNavigateToAlbum = { item -> onNavigate(LibraryDestination(LibraryPage.Album, title = item.album, subtitle = item.artist)) },
+                    onNavigateToAlbum = { item -> onNavigate(LibraryDestination(LibraryPage.Album, title = item.album, subtitle = item.albumArtist ?: item.artist)) },
                     onNavigateToArtist = { item -> onNavigate(LibraryDestination(LibraryPage.Artist, title = item.artist)) },
                     onSort = { sortMenu = true },
                 )
@@ -560,7 +572,14 @@ internal fun LibraryScreen(
         WavvBottomSheet(onDismissRequest = { sortMenu = false }, maxHeight = 320.dp) { close ->
             Text("Sort by", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
             Spacer(Modifier.height(12.dp))
-            listOf("Recently added", "Title A–Z", "Artist or creator").forEach { mode ->
+            val sortModes = listOf("Recently added", "Title A–Z", "Artist or creator") +
+                (if (destination.page == LibraryPage.Album) listOf("Album order") else emptyList()) +
+                if (destination.page in setOf(LibraryPage.Liked, LibraryPage.Songs, LibraryPage.Artists, LibraryPage.Albums) && personalizedRecommendations.isNotEmpty()) {
+                    listOf("For You")
+                } else {
+                    emptyList()
+                }
+            sortModes.forEach { mode ->
                 val selected = sortMode == mode
                 Row(
                     Modifier.fillMaxWidth().clip(CircleShape)
@@ -837,6 +856,7 @@ private fun LibraryCollectionScreen(
     songs: List<Song>,
     playlists: List<UserPlaylist>,
     favoriteIds: Set<Long>,
+    personalizedRecommendations: List<Song>,
     sortMode: String,
     playAsText: Boolean,
     hasNowPlaying: Boolean,
@@ -862,10 +882,12 @@ private fun LibraryCollectionScreen(
     var featureOffset by remember(title, songs) { mutableStateOf(0) }
     var menuSong by remember { mutableStateOf<Song?>(null) }
     var addToPlaylist by remember { mutableStateOf(false) }
-    val displaySongs = remember(songs, sortMode) {
+    val displaySongs = remember(songs, sortMode, personalizedRecommendations) {
         when (sortMode) {
             "Title A–Z" -> songs.sortedBy { it.title.lowercase() }
             "Artist or creator" -> songs.sortedBy { it.artist.lowercase() }
+            "Album order" -> albumTrackOrder(songs)
+            "For You" -> recommendationOrderedSongs(songs, personalizedRecommendations)
             else -> songs
         }
     }

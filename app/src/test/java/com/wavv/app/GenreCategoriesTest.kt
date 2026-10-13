@@ -1,6 +1,7 @@
 package com.wavv.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class GenreCategoriesTest {
@@ -38,9 +39,46 @@ class GenreCategoriesTest {
         )
 
         assertEquals(listOf("Rock", "Electronic"), analyzed.genreNames())
+        assertEquals(listOf("Rock"), analyzed.fileGenreNames())
+        assertEquals(.8, analyzed.genreConfidence("Electronic", listOf(
+            MusicTag("genre", "genre", "Electronic", "model", .8f, .5f),
+        )), .0001)
+        assertEquals(1.0, analyzed.genreConfidence("Rock", emptyList()), .0)
+        assertEquals(0.0, analyzed.genreConfidence("Piano", listOf(
+            MusicTag("instrument", "instrument", "Piano", "model", .99f, .5f),
+        )), .0)
         assertEquals(
             listOf(GenreCategory("Electronic", analyzed), GenreCategory("Rock", analyzed)),
             genreCategories(listOf(analyzed)),
+        )
+    }
+
+    @Test
+    fun belowThresholdAndInvalidGenreScoresAreNotPromoted() {
+        val song = song(1, "Track", listOf("Rock"), hasArtwork = true).withMusicUnderstandingGenres(
+            listOf(
+                MusicTag("genre", "genre", "Jazz", "model", .49f, .5f),
+                MusicTag("genre", "genre", "Ambient", "model", Float.NaN, .5f),
+                MusicTag("genre", "genre", "Pop", "model", .9f, Float.NaN),
+            ),
+        )
+
+        assertEquals(listOf("Rock"), song.genreNames())
+        assertFalse(song.genreNames().any { it == "Jazz" || it == "Ambient" || it == "Pop" })
+    }
+
+    @Test
+    fun categoriesReflectCurrentTasteWithoutRemovingOtherGenres() {
+        val jazz = song(1, "Jazz", listOf("Jazz"), hasArtwork = true)
+        val pop = song(2, "Pop", listOf("Pop"), hasArtwork = true)
+        val rock = song(3, "Rock", listOf("Rock"), hasArtwork = true)
+
+        assertEquals(
+            listOf("Rock", "Jazz", "Pop"),
+            recommendationOrderedGenreCategories(
+                listOf(jazz, pop, rock),
+                listOf(rock, jazz),
+            ).map(GenreCategory::name),
         )
     }
 

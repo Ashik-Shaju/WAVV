@@ -376,21 +376,21 @@ internal fun HomeScreen(
     hasNowPlaying: Boolean,
     onExpandPlayer: () -> Unit,
     recentSongs: List<Song> = emptyList(),
+    personalizedRecommendations: List<Song> = emptyList(),
     smartMixes: List<SmartMix> = emptyList(),
     onPlayMix: (SmartMix) -> Unit = {},
     statusChips: List<HomeStatusChip> = emptyList(),
 ) {
     val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
-    val sections = remember(songs, favoriteIds, recentSongs, smartMixes) {
+    val sections = remember(songs, favoriteIds, recentSongs, personalizedRecommendations, smartMixes) {
         val recentlyAdded = orderedSongs
         val (primaryTitle, primarySongs) = primaryHomeShelf(recentSongs, recentlyAdded)
-        val likedSongs = songs.filter { it.id in favoriteIds }
-        val albums = songs.filter { it.album.isNotBlank() }
+        val likedSongs = recommendationOrderedSongs(songs.filter { it.id in favoriteIds }, personalizedRecommendations)
+        val songsForYou = recommendationOrderedSongs(songs.sortedBy { it.title.lowercase(Locale.ROOT) }, personalizedRecommendations)
+        val albums = recommendationOrderedSongs(songs.filter { it.album.isNotBlank() }.sortedBy { it.album.lowercase(Locale.ROOT) }, personalizedRecommendations)
             .distinctBy { it.album.trim().lowercase(Locale.ROOT) }
-            .sortedBy { it.album.lowercase(Locale.ROOT) }
-        val artists = songs.filter { it.artist.isNotBlank() }
+        val artists = recommendationOrderedSongs(songs.filter { it.artist.isNotBlank() }.sortedBy { it.artist.lowercase(Locale.ROOT) }, personalizedRecommendations)
             .distinctBy { it.artist.trim().lowercase(Locale.ROOT) }
-            .sortedBy { it.artist.lowercase(Locale.ROOT) }
         buildList {
             if (primarySongs.isNotEmpty()) {
                 add(HomeStackSection(primaryTitle, primarySongs.take(8).map { HomeStackEntry(it.title, it.artist, it) }))
@@ -412,7 +412,7 @@ internal fun HomeScreen(
                 add(HomeStackSection("Recently Added", recentlyAdded.take(8).map { HomeStackEntry(it.title, it.artist, it) }))
             }
             if (songs.isNotEmpty()) {
-                add(HomeStackSection("Songs", songs.sortedBy { it.title.lowercase(Locale.ROOT) }.take(8).map { HomeStackEntry(it.title, it.artist, it) }))
+                add(HomeStackSection("Songs", songsForYou.take(8).map { HomeStackEntry(it.title, it.artist, it) }))
             }
         }
     }

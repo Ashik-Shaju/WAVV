@@ -1,5 +1,8 @@
 package com.wavv.app
 
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.exp
@@ -104,6 +107,7 @@ internal fun rankLocalSearch(
     semanticMatches: List<SemanticMatch>,
     tagsBySong: Map<Long, List<MusicTag>> = emptyMap(),
     limit: Int = 50,
+    preferenceOrder: List<Song> = emptyList(),
 ): List<Song> {
     if (limit <= 0) return emptyList()
     val candidates = songs.distinctBy(Song::id).filter { song ->
@@ -124,6 +128,11 @@ internal fun rankLocalSearch(
     val lexical = candidates.associate { song -> song.id to lexicalScore(song, tokens, tagsBySong[song.id].orEmpty()) }
     val hasSemantic = semanticValues.isNotEmpty()
     val hasTextMatch = lexical.values.any { it > 0.0 }
+    val preferencePositions = preferenceOrder.asSequence()
+        .distinctBy(Song::id)
+        .take(SEARCH_PREFERENCE_LIMIT)
+        .mapIndexed { index, song -> song.id to index }
+        .toMap()
     val scored = candidates.mapNotNull { song ->
         val lexicalScore = lexical.getValue(song.id)
         val semanticScore = semantic[song.id]?.let { score -> ((score + 1.0) / 2.0).coerceIn(0.0, 1.0) } ?: 0.0
@@ -137,7 +146,9 @@ internal fun rankLocalSearch(
             intent.semanticText.isBlank() -> lexicalScore
             hasSemantic -> semanticScore * 0.72 + lexicalScore * 0.28
             else -> lexicalScore
-        }
+        } + preferencePositions[song.id]?.let { index ->
+            SEARCH_PREFERENCE_BOOST * (1.0 - index.toDouble() / SEARCH_PREFERENCE_LIMIT)
+        }.orZero()
         song to score
     }
     return scored.sortedWith(compareByDescending<Pair<Song, Double>> { it.second }.thenBy { it.first.title.lowercase(Locale.ROOT) }.thenBy { it.first.id })
@@ -154,6 +165,7 @@ internal fun buildPersonalizedDiscovery(
     currentSessionId: String,
     nowMs: Long,
     limit: Int = 30,
+    timeZone: ZoneId = ZoneId.systemDefault(),
 ): PersonalizedDiscovery {
     if (songs.isEmpty() || limit <= 0) return PersonalizedDiscovery()
     val catalog = songs.distinctBy(Song::id)
@@ -175,7 +187,8 @@ internal fun buildPersonalizedDiscovery(
     val longTermTags = mutableMapOf<String, Double>()
     val sessionTags = mutableMapOf<String, Double>()
     val recentPlays = mutableMapOf<Long, Long>()
-    val positiveByGenre = mutableMapOf<String, Int>()
+    val positiveByGenre = mutableMapOf<String, Double>()
+    val timeWeights = timeOfDayPreferenceWeights(usableEvents, nowMs, timeZone)
     val playCounts = usableEvents.asSequence()
         .filter { it.eventType == "play" || it.eventType == "replay" }
         .groupingBy(LocalListeningEvent::songId)
@@ -187,15 +200,15 @@ internal fun buildPersonalizedDiscovery(
         val inSession = event.sessionId == currentSessionId
         val baseWeight = when (event.eventType) {
             // Current favorites are the source of truth below; historical toggles must not resurrect an unfavorite.
-            "favorite", "unfavorite" -> 0.0
+            "favorite" -> 0.0
+            "unfavorite" -> -0.5
             "completion", "complete" -> 1.4 * (event.completionRatio ?: 1f).coerceIn(0f, 1f)
             "replay" -> 0.45
             "playlist_add" -> 0.3
             // Starting a song is useful immediate context, but weak long-term evidence.
-            "play" -> if (inSession) 0.55 else 0.12
-            // An early skip is only a small contextual signal, not a dislike.
-            "skip" -> if (event.skipPositionSeconds != null && event.skipPositionSeconds < EARLY_SKIP_SECONDS) -0.18 else -0.04
-            "unfavorite", "playlist_remove" -> -0.12
+            "play" -> playPreferenceWeight(event.selectionSource, inSession)
+            "queue_add" -> if (event.selectionSource?.startsWith("autoplay_") == true) 0.18 else 0.32
+            "skip" -> skipPreferenceWeight(event)
             else -> 0.0
         }
         if (baseWeight == 0.0) return@forEach
@@ -205,80 +218,128 @@ internal fun buildPersonalizedDiscovery(
         if (inSession) sessionWeights[event.songId] = (sessionWeights[event.songId] ?: 0.0) + baseWeight
         if (event.eventType in PLAY_EVENTS) recentPlays[event.songId] = maxOf(recentPlays[event.songId] ?: 0L, event.timestampMs)
         if (baseWeight > 0.0) {
-            tagsBySong[event.songId].orEmpty().asSequence()
-                .filter { it.probability >= it.threshold }
+            val tags = tagsBySong[event.songId].orEmpty()
+            tags.asSequence()
+                .filter { it.isAboveThreshold() && !it.isGenreTag() }
                 .forEach { tag ->
                     val key = tag.discoveryKey()
                     longTermTags[key] = (longTermTags[key] ?: 0.0) + longWeight * tag.probability
                     if (inSession) sessionTags[key] = (sessionTags[key] ?: 0.0) + baseWeight * tag.probability
                 }
             song.genreNames().forEach { genre ->
+                val confidence = song.genreConfidence(genre, tags)
+                if (confidence <= 0.0) return@forEach
                 val key = genre.normalized()
-                longTermGenres[key] = (longTermGenres[key] ?: 0.0) + longWeight
-                if (inSession) sessionGenres[key] = (sessionGenres[key] ?: 0.0) + baseWeight
-                positiveByGenre[key] = (positiveByGenre[key] ?: 0) + 1
+                longTermGenres[key] = (longTermGenres[key] ?: 0.0) + longWeight * confidence
+                if (inSession) sessionGenres[key] = (sessionGenres[key] ?: 0.0) + baseWeight * confidence
+                positiveByGenre[key] = (positiveByGenre[key] ?: 0.0) + confidence
             }
-            val artist = song.artist.takeUnless { it.equals("Unknown artist", true) }?.normalized()
-            if (artist != null) {
-                longTermArtists[artist] = (longTermArtists[artist] ?: 0.0) + longWeight
-                if (inSession) sessionArtists[artist] = (sessionArtists[artist] ?: 0.0) + baseWeight
+            song.creatorKeys().forEach { creator ->
+                longTermArtists[creator] = (longTermArtists[creator] ?: 0.0) + longWeight
+                if (inSession) sessionArtists[creator] = (sessionArtists[creator] ?: 0.0) + baseWeight
             }
         }
     }
     favoriteIds.forEach { id ->
         if (id !in songById) return@forEach
         val song = songById.getValue(id)
+        val tags = tagsBySong[id].orEmpty()
         longTermWeights[id] = (longTermWeights[id] ?: 0.0) + 2.8
         song.genreNames().forEach { genre ->
+            val confidence = song.genreConfidence(genre, tags)
+            if (confidence <= 0.0) return@forEach
             val key = genre.normalized()
-            longTermGenres[key] = (longTermGenres[key] ?: 0.0) + 2.8
-            positiveByGenre[key] = (positiveByGenre[key] ?: 0) + 1
+            longTermGenres[key] = (longTermGenres[key] ?: 0.0) + 2.8 * confidence
+            positiveByGenre[key] = (positiveByGenre[key] ?: 0.0) + confidence
         }
-        song.artist.takeUnless { it.equals("Unknown artist", true) }?.normalized()?.let { key ->
-            longTermArtists[key] = (longTermArtists[key] ?: 0.0) + 2.8
+        song.creatorKeys().forEach { creator ->
+            longTermArtists[creator] = (longTermArtists[creator] ?: 0.0) + 2.8
         }
-        tagsBySong[id].orEmpty().asSequence()
-            .filter { it.probability >= it.threshold }
+        tags.asSequence()
+            .filter { it.isAboveThreshold() && !it.isGenreTag() }
             .forEach { tag ->
                 val key = tag.discoveryKey()
                 longTermTags[key] = (longTermTags[key] ?: 0.0) + 2.8 * tag.probability
             }
     }
 
+    val timeGenres = mutableMapOf<String, Double>()
+    val timeArtists = mutableMapOf<String, Double>()
+    val timeTags = mutableMapOf<String, Double>()
+    timeWeights.forEach { (id, weight) ->
+        val song = songById[id] ?: return@forEach
+        val tags = tagsBySong[id].orEmpty()
+        song.genreNames().forEach { genre ->
+            val confidence = song.genreConfidence(genre, tags)
+            if (confidence <= 0.0) return@forEach
+            val key = genre.normalized()
+            timeGenres[key] = (timeGenres[key] ?: 0.0) + weight * confidence
+        }
+        song.creatorKeys().forEach { creator ->
+            timeArtists[creator] = (timeArtists[creator] ?: 0.0) + weight
+        }
+        tags.asSequence()
+            .filter { it.isAboveThreshold() && !it.isGenreTag() }
+            .forEach { tag ->
+                val key = tag.discoveryKey()
+                timeTags[key] = (timeTags[key] ?: 0.0) + weight * tag.probability
+            }
+    }
+
     val longVector = weightedVector(longTermWeights, audioVectors)
     val sessionVector = weightedVector(sessionWeights, audioVectors)
+    val timeVector = weightedVector(timeWeights, audioVectors)
     val longGenreMax = longTermGenres.values.maxOrNull() ?: 0.0
     val sessionGenreMax = sessionGenres.values.maxOrNull() ?: 0.0
     val longArtistMax = longTermArtists.values.maxOrNull() ?: 0.0
     val sessionArtistMax = sessionArtists.values.maxOrNull() ?: 0.0
     val longTagMax = longTermTags.values.maxOrNull() ?: 0.0
     val sessionTagMax = sessionTags.values.maxOrNull() ?: 0.0
+    val timeGenreMax = timeGenres.values.maxOrNull() ?: 0.0
+    val timeArtistMax = timeArtists.values.maxOrNull() ?: 0.0
+    val timeTagMax = timeTags.values.maxOrNull() ?: 0.0
     val ranked = catalog.mapNotNull { song ->
         val vector = audioVectors[song.id]?.takeIf { it.isValidVector() }
         val longContent = vector?.let { cosine(it, longVector) } ?: 0.0
         val sessionContent = vector?.let { cosine(it, sessionVector) } ?: 0.0
-        val genreScore = song.genreNames().maxOfOrNull { longTermGenres[it.normalized()].orZero().normalizedBy(longGenreMax) } ?: 0.0
-        val sessionGenreScore = song.genreNames().maxOfOrNull { sessionGenres[it.normalized()].orZero().normalizedBy(sessionGenreMax) } ?: 0.0
-        val artistKey = song.artist.normalized()
-        val artistScore = longArtistsScore(artistKey, longTermArtists, longArtistMax)
-        val sessionArtistScore = longArtistsScore(artistKey, sessionArtists, sessionArtistMax)
-        val tagScore = tagsBySong[song.id].orEmpty().asSequence()
-            .filter { it.probability >= it.threshold }
+        val timeContent = vector?.let { cosine(it, timeVector) } ?: 0.0
+        val tags = tagsBySong[song.id].orEmpty()
+        val genreScore = song.genreNames().maxOfOrNull {
+            longTermGenres[it.normalized()].orZero().normalizedBy(longGenreMax) * song.genreConfidence(it, tags)
+        } ?: 0.0
+        val sessionGenreScore = song.genreNames().maxOfOrNull {
+            sessionGenres[it.normalized()].orZero().normalizedBy(sessionGenreMax) * song.genreConfidence(it, tags)
+        } ?: 0.0
+        val creators = song.creatorKeys()
+        val artistScore = creators.maxOfOrNull { longArtistsScore(it, longTermArtists, longArtistMax) } ?: 0.0
+        val sessionArtistScore = creators.maxOfOrNull { longArtistsScore(it, sessionArtists, sessionArtistMax) } ?: 0.0
+        val tagScore = tags.asSequence()
+            .filter { it.isAboveThreshold() && !it.isGenreTag() }
             .maxOfOrNull { tag -> longTermTags[tag.discoveryKey()].orZero().normalizedBy(longTagMax) * tag.probability }
             ?: 0.0
-        val sessionTagScore = tagsBySong[song.id].orEmpty().asSequence()
-            .filter { it.probability >= it.threshold }
+        val sessionTagScore = tags.asSequence()
+            .filter { it.isAboveThreshold() && !it.isGenreTag() }
             .maxOfOrNull { tag -> sessionTags[tag.discoveryKey()].orZero().normalizedBy(sessionTagMax) * tag.probability }
+            ?: 0.0
+        val timeGenreScore = song.genreNames().maxOfOrNull {
+            timeGenres[it.normalized()].orZero().normalizedBy(timeGenreMax) * song.genreConfidence(it, tags)
+        } ?: 0.0
+        val timeArtistScore = creators.maxOfOrNull { longArtistsScore(it, timeArtists, timeArtistMax) } ?: 0.0
+        val timeTagScore = tags.asSequence()
+            .filter { it.isAboveThreshold() && !it.isGenreTag() }
+            .maxOfOrNull { tag -> timeTags[tag.discoveryKey()].orZero().normalizedBy(timeTagMax) * tag.probability }
             ?: 0.0
         val lastPlay = recentPlays[song.id]
         val daysSincePlay = lastPlay?.let { (nowMs - it).coerceAtLeast(0L) / DAY_MS }
         val repeatPenalty = if (daysSincePlay == null) 0.0 else (0.26 * exp(-daysSincePlay.toDouble() / 5.0))
         val score = longContent * .34 + genreScore * .17 + artistScore * .13 +
             sessionContent * .18 + sessionGenreScore * .08 + sessionArtistScore * .04 +
-            tagScore * .04 + sessionTagScore * .03 + (if (song.id in favoriteIds) .12 else 0.0) - repeatPenalty
+            tagScore * .04 + sessionTagScore * .03 + timeContent * .08 + timeGenreScore * .03 +
+            timeArtistScore * .01 + timeTagScore * .01 + (if (song.id in favoriteIds) .12 else 0.0) - repeatPenalty
         val hasContentEvidence = vector != null && (longVector.isNotEmpty() || sessionVector.isNotEmpty())
         val hasPreferenceEvidence = song.id in favoriteIds || hasContentEvidence || genreScore > 0.0 ||
-            sessionGenreScore > 0.0 || artistScore > 0.0 || sessionArtistScore > 0.0 || tagScore > 0.0 || sessionTagScore > 0.0
+            sessionGenreScore > 0.0 || artistScore > 0.0 || sessionArtistScore > 0.0 || tagScore > 0.0 ||
+            sessionTagScore > 0.0 || timeContent > 0.0 || timeGenreScore > 0.0 || timeArtistScore > 0.0 || timeTagScore > 0.0
         song.takeIf { hasPreferenceEvidence }?.let { it to score }
     }.sortedWith(compareByDescending<Pair<Song, Double>> { it.second }.thenBy { it.first.id })
 
@@ -299,8 +360,8 @@ internal fun buildPersonalizedDiscovery(
         )
         if (repeatSongs.size >= MIN_MIX_SIZE) add(SmartMix("on-repeat", "On repeat", "Tracks you keep coming back to", repeatSongs))
 
-        val favoriteGenre = positiveByGenre.entries.maxByOrNull(Map.Entry<String, Int>::value)
-            ?.takeIf { it.value >= 2 }
+        val favoriteGenre = positiveByGenre.entries.maxByOrNull(Map.Entry<String, Double>::value)
+            ?.takeIf { it.value >= 2.0 }
         favoriteGenre?.let { (genreKey, _) ->
             val genreName = catalog.flatMap(Song::genreNames).firstOrNull { it.normalized() == genreKey } ?: return@let
             val genreSongs = diverseOrder(ranked.filter { (song, _) -> song.genreNames().any { it.normalized() == genreKey } }, MIX_SIZE)
@@ -310,6 +371,98 @@ internal fun buildPersonalizedDiscovery(
         }
     }
     return PersonalizedDiscovery(recommendations, mixes)
+}
+
+internal fun timeOfDayPreferenceWeights(
+    events: List<LocalListeningEvent>,
+    nowMs: Long,
+    timeZone: ZoneId,
+): Map<Long, Double> {
+    val targetPeriod = dayPeriod(nowMs, timeZone)
+    val signals = events.mapNotNull { event ->
+        if (event.timestampMs > nowMs) return@mapNotNull null
+        if (dayPeriod(event.timestampMs, timeZone) != targetPeriod) return@mapNotNull null
+        val engagement = when (event.eventType) {
+            "completion", "complete" -> event.completionRatio ?: 0.0f
+            "replay" -> 0.65f
+            "skip" -> event.completionRatio?.takeIf { it >= .65f }
+                ?: if (event.completionRatio == null && event.listenSeconds >= LONG_LISTEN_SKIP_SECONDS) .65f else 0.0f
+            else -> 0.0f
+        }.coerceIn(0.0f, 1.0f)
+        if (engagement < .5f) return@mapNotNull null
+        val localDate = Instant.ofEpochMilli(event.timestampMs).atZone(timeZone).toLocalDate()
+        val decay = exp(-(nowMs - event.timestampMs).coerceAtLeast(0L).toDouble() / LONG_TERM_HALF_LIFE_MS)
+        Triple(event.songId to localDate, engagement.toDouble() * decay, event.songId)
+    }
+    if (signals.map { it.first.second }.distinct().size < MIN_TIME_PREFERENCE_DAYS ||
+        signals.map(Triple<Pair<Long, LocalDate>, Double, Long>::third).distinct().size < 2
+    ) return emptyMap()
+
+    return signals.groupBy { it.first }.mapValues { (_, sameSongDay) -> sameSongDay.maxOf { it.second } }
+        .entries.groupBy { it.key.first }
+        .mapValues { (_, sameSongSignals) -> sameSongSignals.sumOf { it.value } }
+}
+
+internal fun reconcileAutoplayRecommendations(
+    current: List<Song>,
+    ranked: List<Song>,
+    queuedIds: Set<Long>,
+    dismissedIds: Set<Long>,
+    preserveManualOrder: Boolean,
+    limit: Int = 30,
+): List<Song> {
+    if (limit <= 0) return emptyList()
+    val available = ranked.asSequence()
+        .filterNot { it.id in queuedIds || it.id in dismissedIds }
+        .distinctBy(Song::id)
+        .toList()
+    if (!preserveManualOrder) return available.take(limit)
+
+    val availableById = available.associateBy(Song::id)
+    val kept = current.asSequence()
+        .filterNot { it.id in queuedIds || it.id in dismissedIds }
+        .distinctBy(Song::id)
+        .mapNotNull { availableById[it.id] }
+        .toList()
+    val keptIds = kept.mapTo(mutableSetOf(), Song::id)
+    return (kept + available.filterNot { it.id in keptIds }).take(limit)
+}
+
+internal fun recommendationOrderedSongs(songs: List<Song>, recommendations: List<Song>): List<Song> {
+    val positions = recommendations.map(Song::id).distinct().withIndex().associate { it.value to it.index }
+    return songs.withIndex()
+        .sortedWith(compareBy<IndexedValue<Song>> { positions[it.value.id] ?: Int.MAX_VALUE }.thenBy { it.index })
+        .map(IndexedValue<Song>::value)
+}
+
+internal fun playPreferenceWeight(selectionSource: String?, inSession: Boolean): Double = when (selectionSource) {
+    "autoplay_auto" -> if (inSession) 0.08 else 0.025
+    "smart_mix", "autoplay_recommendation" -> if (inSession) 0.38 else 0.16
+    "manual", "home", "home_shelf", "search", "genre", "collection", "collection_shuffle" ->
+        if (inSession) 0.46 else 0.18
+    "queue" -> if (inSession) 0.32 else 0.12
+    else -> if (inSession) 0.28 else 0.08
+}
+
+private fun skipPreferenceWeight(event: LocalListeningEvent): Double {
+    val ratio = event.completionRatio ?: when {
+        event.listenSeconds >= LONG_LISTEN_SKIP_SECONDS -> .65f
+        event.skipPositionSeconds == null -> return -0.08
+        event.skipPositionSeconds < EARLY_SKIP_SECONDS -> 0.05f
+        else -> 0.3f
+    }
+    return when {
+        ratio >= .65f -> .12
+        ratio >= .2f -> -.04
+        else -> -.22
+    }
+}
+
+private fun dayPeriod(timestampMs: Long, timeZone: ZoneId): Int = when (Instant.ofEpochMilli(timestampMs).atZone(timeZone).hour) {
+    in 5..10 -> 0
+    in 11..16 -> 1
+    in 17..21 -> 2
+    else -> 3
 }
 
 internal enum class TrackTransition { INITIAL, AUTOMATIC, REPEAT, FORWARD_SKIP, PREVIOUS, QUEUE_CHANGE }
@@ -493,8 +646,17 @@ private fun lexicalScore(song: Song, tokens: List<String>, tags: List<MusicTag>)
         song.year?.toString() to .7,
         song.trackNumber?.toString() to .5,
         song.discNumber?.toString() to .4,
-    ) + song.genreNames().map { it to .8 } + song.languageTags.map { it to .6 } +
-        tags.filter { it.probability >= it.threshold }.map { "${it.label} ${it.taxonomy} ${it.task}" to it.probability.toDouble() }
+        song.author to .68,
+        song.writer to .68,
+        song.recordingDate to .45,
+        song.codec to .35,
+        song.container to .3,
+        song.bitrate?.toString() to .2,
+        song.sampleRate?.toString() to .2,
+        song.channels?.toString() to .2,
+        song.trackCount?.toString() to .1,
+    ) + song.fileGenreNames().map { it to .8 } + song.languageTags.map { it to .6 } +
+        tags.filter(MusicTag::isAboveThreshold).map { "${it.label} ${it.taxonomy} ${it.task}" to it.probability.toDouble() }
     val values = fields.mapNotNull { (value, weight) -> value?.lowercase(Locale.ROOT)?.let { it to weight } }
     val perToken = tokens.map { token ->
         values.maxOfOrNull { (value, weight) ->
@@ -562,6 +724,16 @@ private fun diverseOrder(ranked: List<Pair<Song, Double>>, limit: Int): List<Son
 }
 
 private fun longArtistsScore(key: String, weights: Map<String, Double>, maximum: Double) = weights[key].orZero().normalizedBy(maximum)
+private fun Song.creatorKeys(): List<String> = listOfNotNull(
+    artist.takeUnless { it.equals("Unknown artist", ignoreCase = true) },
+    albumArtist,
+    composer,
+    author,
+    writer,
+).map(String::normalized).filter(String::isNotBlank).distinct()
+private fun MusicTag.isAboveThreshold(): Boolean =
+    probability.isFinite() && probability in 0f..1f && threshold.isFinite() && threshold in 0f..1f && probability >= threshold
+private fun MusicTag.isGenreTag(): Boolean = taxonomy.equals("genre", ignoreCase = true)
 private fun Double?.orZero() = this ?: 0.0
 private fun Double.normalizedBy(maximum: Double) = if (maximum <= 0.0) 0.0 else (this / maximum).coerceIn(0.0, 1.0)
 private fun String.normalized() = trim().lowercase(Locale.ROOT)
@@ -611,11 +783,15 @@ private val iso3ToIso2: Map<String, String> = Locale.getAvailableLocales().asSeq
 private const val DAY_MS = 86_400_000L
 private const val LONG_TERM_HALF_LIFE_MS = 180.0 * DAY_MS
 private const val EARLY_SKIP_SECONDS = 20L
+private const val MIN_TIME_PREFERENCE_DAYS = 3
+private const val LONG_LISTEN_SKIP_SECONDS = 60L
 private const val REDISCOVER_AFTER_MS = 30L * DAY_MS
 private const val MIX_SIZE = 12
 private const val MIN_MIX_SIZE = 3
+private const val SEARCH_PREFERENCE_LIMIT = 20
+private const val SEARCH_PREFERENCE_BOOST = 0.035
 private val PLAY_EVENTS = setOf("play", "completion", "complete", "replay")
-private val TASTE_SIGNAL_EVENTS = setOf("play", "completion", "complete", "replay", "playlist_add")
+private val TASTE_SIGNAL_EVENTS = setOf("play", "completion", "complete", "replay", "playlist_add", "queue_add")
 private val LANGUAGE_METADATA_KEYS = setOf("tlan", "lang", "language", "languagecode", "txxxlanguage")
 private val LANGUAGE_COMMAND = Regex("(?i)\\b(?:in|language\\s*:)\\s*([\\p{L}-]+)\\b")
 private val YEAR = Regex("\\b((?:19|20)\\d{2})\\b")

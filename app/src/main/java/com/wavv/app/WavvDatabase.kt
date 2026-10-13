@@ -49,6 +49,12 @@ data class SongEntity(
     val discNumber: Int? = null,
     @ColumnInfo(defaultValue = "'[]'") val languageTagsJson: String = "[]",
     @ColumnInfo(defaultValue = "0") val languageMetadataChecked: Boolean = false,
+    val author: String? = null,
+    val writer: String? = null,
+    val recordingDate: String? = null,
+    val isCompilation: Boolean? = null,
+    val bitrate: Int? = null,
+    val trackCount: Int? = null,
 )
 
 @Entity(tableName = "song_user_state")
@@ -320,7 +326,7 @@ internal fun resolveCatalogUserState(
 
 @Database(
     entities = [SongEntity::class, SongUserStateEntity::class, ListeningEventEntity::class, PlaylistEntity::class, PlaylistItemEntity::class, AnalysisJobEntity::class, SongEmbeddingEntity::class, MusicUnderstandingResultEntity::class],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class WavvDatabase : RoomDatabase() {
@@ -340,7 +346,7 @@ abstract class WavvDatabase : RoomDatabase() {
                 context.applicationContext,
                 WavvDatabase::class.java,
                 "wavv.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9).build().also { instance = it }
         }
 
         internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -449,6 +455,17 @@ abstract class WavvDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE songs ADD COLUMN languageTagsJson TEXT NOT NULL DEFAULT '[]'")
                 db.execSQL("ALTER TABLE songs ADD COLUMN languageMetadataChecked INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_listening_events_timestamp ON listening_events(timestamp)")
+            }
+        }
+
+        internal val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN author TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN writer TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN recordingDate TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN isCompilation INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN bitrate INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN trackCount INTEGER")
             }
         }
     }
@@ -872,7 +889,7 @@ private fun Song.toEntity(isFavorite: Boolean) = SongEntity(
     channels = channels,
     metadataSource = metadataSource,
     genre = genre,
-    genresJson = org.json.JSONArray().apply { genreNames().forEach { put(it) } }.toString(),
+    genresJson = org.json.JSONArray().apply { fileGenreNames().forEach { put(it) } }.toString(),
     isFavorite = isFavorite,
     albumArtist = albumArtist,
     composer = composer,
@@ -881,6 +898,12 @@ private fun Song.toEntity(isFavorite: Boolean) = SongEntity(
     discNumber = discNumber,
     languageTagsJson = languageTags.toJsonArray(),
     languageMetadataChecked = languageMetadataChecked,
+    author = author,
+    writer = writer,
+    recordingDate = recordingDate,
+    isCompilation = isCompilation,
+    bitrate = bitrate,
+    trackCount = trackCount,
 )
 
 private fun SongEntity.toSong() = Song(
@@ -913,6 +936,12 @@ private fun SongEntity.toSong() = Song(
         List(languageTags.length()) { index -> languageTags.getString(index) }
     }.getOrDefault(emptyList()),
     languageMetadataChecked = languageMetadataChecked,
+    author = author,
+    writer = writer,
+    recordingDate = recordingDate,
+    isCompilation = isCompilation,
+    bitrate = bitrate,
+    trackCount = trackCount,
 )
 
 private fun List<String>.toJsonArray() = org.json.JSONArray().apply { forEach(::put) }.toString()
