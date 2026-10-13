@@ -474,6 +474,10 @@ class PlaybackController(context: Context) {
         refreshProgress()
     }
 
+    fun setCurrentTrackUHQ(songId: Long, enabled: Boolean) {
+        UHQPlaybackPreference.setTrackOverride(appContext, songId, enabled)
+    }
+
     fun refreshProgress() {
         val song = _state.value.song ?: return
         val currentController = controller ?: return

@@ -57,6 +57,9 @@ internal fun isUhqAudioWithinLimit(
 internal object UHQPlaybackPreference {
     private const val PREFERENCES = "playback_preferences"
     private const val ENABLED = "uhq_aac_enabled"
+    private const val TRACK_OVERRIDE = "uhq_track_override"
+
+    data class TrackOverride(val songId: Long, val enabled: Boolean)
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getBoolean(ENABLED, false)
@@ -65,8 +68,28 @@ internal object UHQPlaybackPreference {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, enabled).apply()
     }
 
+    fun trackOverride(context: Context): TrackOverride? {
+        val encoded = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString(TRACK_OVERRIDE, null) ?: return null
+        val parts = encoded.split(':', limit = 2)
+        val songId = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        val enabled = parts.getOrNull(1)?.toBooleanStrictOrNull() ?: return null
+        return TrackOverride(songId, enabled)
+    }
+
+    fun setTrackOverride(context: Context, songId: Long, enabled: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putString(TRACK_OVERRIDE, "$songId:$enabled")
+            .apply()
+    }
+
+    fun clearTrackOverride(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().remove(TRACK_OVERRIDE).apply()
+    }
+
     fun preferences(context: Context) = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     fun preferenceKey() = ENABLED
+    fun trackOverrideKey() = TRACK_OVERRIDE
 }
 
 internal object UHQAacCache {

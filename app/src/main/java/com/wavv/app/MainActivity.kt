@@ -133,6 +133,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -703,6 +704,7 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onRemoveAutoplaySong = playbackController::removeAutoplaySong,
                     onMoveAutoplayItem = playbackController::moveAutoplayItem,
                     onSetAutoplayEnabled = playbackController::setAutoplayEnabled,
+                    onSetTrackUHQ = playbackController::setCurrentTrackUHQ,
                     onCreatePlaylist = { name, songId, onComplete ->
                         libraryViewModel.createPlaylist(name, songId, onComplete)
                     },
@@ -786,6 +788,7 @@ internal data class WavvContentActions(
     val onRemoveAutoplaySong: (Song) -> Unit,
     val onMoveAutoplayItem: (Int, Int) -> Unit,
     val onSetAutoplayEnabled: (Boolean) -> Unit,
+    val onSetTrackUHQ: (Long, Boolean) -> Unit,
     val onCreatePlaylist: (String, Long?, (Boolean) -> Unit) -> Unit,
     val onRenamePlaylist: (Long, String, (Boolean) -> Unit) -> Unit,
     val onDeletePlaylist: (Long, (Boolean) -> Unit) -> Unit,
@@ -1430,6 +1433,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onRemoveAutoplaySong = onRemoveAutoplaySong,
                     onMoveAutoplayItem = onMoveAutoplayItem,
                     onSetAutoplayEnabled = onSetAutoplayEnabled,
+                    onSetTrackUHQ = actions.onSetTrackUHQ,
                     playlists = playlists,
                     artworkFlightActive = artworkFlight != null,
                     onArtworkFrameChange = { frame ->
@@ -2496,6 +2500,7 @@ private fun FullPlayer(
     onRemoveAutoplaySong: (Song) -> Unit,
     onMoveAutoplayItem: (Int, Int) -> Unit,
     onSetAutoplayEnabled: (Boolean) -> Unit,
+    onSetTrackUHQ: (Long, Boolean) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
     onMoveQueueItem: (Int, Int) -> Unit,
     onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
@@ -2512,6 +2517,12 @@ private fun FullPlayer(
     val latestOnArtworkDragStart by rememberUpdatedState(onArtworkDragStart)
     val latestOnArtworkDragProgress by rememberUpdatedState(onArtworkDragProgress)
     val latestOnArtworkDragCancel by rememberUpdatedState(onArtworkDragCancel)
+    val context = LocalContext.current
+    val appContext = remember(context) { context.applicationContext }
+    var audioDetails by remember(song.id, song.uri) { mutableStateOf<AudioQualityDetails?>(null) }
+    var showQualityDetails by remember(song.id) { mutableStateOf(false) }
+    var showQualitySettings by remember(song.id) { mutableStateOf(false) }
+    var uhqEnabledForSettings by remember(context) { mutableStateOf(UHQPlaybackPreference.isEnabled(context)) }
     var showLyrics by remember(song.id) { mutableStateOf(false) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
@@ -2525,6 +2536,11 @@ private fun FullPlayer(
     var artworkGestureStarted by remember(song.id) { mutableStateOf(false) }
     var currentArtworkFrame by remember(song.id) { mutableStateOf<PlayerArtworkFrame?>(null) }
     var artworkCoordinates by remember(song.id) { mutableStateOf<LayoutCoordinates?>(null) }
+    LaunchedEffect(song.id, song.uri) {
+        audioDetails = withContext(Dispatchers.IO) {
+            runCatching { readAudioQualityDetails(appContext, song) }.getOrNull()
+        }
+    }
     val gestureScope = rememberCoroutineScope()
     BackHandler(enabled = showLyrics) { showLyrics = false }
     val nextSong = state.queue.getOrNull(currentQueueIndex + 1)
@@ -2698,7 +2714,6 @@ private fun FullPlayer(
                         20.sp,
                         (-.65).sp,
                         marquee = true,
-                        uhqEnhanced = state.isUHQEnhanced,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
                         FavouriteButton(liked, onLike)
@@ -2706,6 +2721,13 @@ private fun FullPlayer(
                     }
                 }
                 FullPlayerTimeline(song, progressFlow, onSeek)
+            }
+            Box(Modifier.fillMaxWidth().height(28.dp), contentAlignment = Alignment.Center) {
+                val qualityLabel = when {
+                    state.isUHQEnhanced -> "UHQ"
+                    else -> audioDetails?.qualityName
+                }
+                if (qualityLabel != null) QualityStatusChip(qualityLabel) { showQualityDetails = true }
             }
             PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 48.dp)
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2800,7 +2822,51 @@ private fun FullPlayer(
                 SheetActionRow(Icons.Default.Add, "Add to playlist") { playlistSong = song; close() }
                 SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
                 SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
+                if (state.isUHQEnhanced || audioDetails?.uhqEligible == true) {
+                    SheetActionRow(
+                        Icons.Default.GraphicEq,
+                        if (state.isUHQEnhanced) "Play original" else "Upgrade quality · UHQ",
+                    ) {
+                        close()
+                        onSetTrackUHQ(song.id, !state.isUHQEnhanced)
+                    }
+                }
             }
+        }
+        if (showQualityDetails) {
+            AudioQualityInfoDialog(
+                details = audioDetails,
+                uhqActive = state.isUHQEnhanced,
+                onDismiss = { showQualityDetails = false },
+                onOpenSettings = {
+                    uhqEnabledForSettings = UHQPlaybackPreference.isEnabled(context)
+                    showQualityDetails = false
+                    showQualitySettings = true
+                },
+            )
+        }
+        if (showQualitySettings) {
+            AlertDialog(
+                onDismissRequest = { showQualitySettings = false },
+                title = { Text("Audio quality settings") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("UHQ AAC enhancement", fontWeight = FontWeight.SemiBold)
+                        Text("When enabled, eligible AAC tracks use their cached UHQ version automatically.", color = Color.White.copy(.68f))
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(if (uhqEnabledForSettings) "On" else "Off")
+                            Switch(
+                                checked = uhqEnabledForSettings,
+                                onCheckedChange = { enabled ->
+                                    uhqEnabledForSettings = enabled
+                                    UHQPlaybackPreference.setEnabled(context, enabled)
+                                },
+                            )
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showQualitySettings = false }) { Text("Done") } },
+            )
         }
         playlistSong?.let { selectedSong ->
             AlertDialog(
@@ -2826,6 +2892,138 @@ private fun FullPlayer(
             )
         }
         }
+    }
+}
+
+@Composable
+private fun QualityStatusChip(label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.offset(y = (-17).dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(Brush.horizontalGradient(listOf(Color.White.copy(.105f), Color(0xFFB6D5FF).copy(.14f), Color.White.copy(.08f))))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        QualityWaveLogo(18.dp)
+        Text(label, color = Color.White.copy(.96f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+@Composable
+private fun QualityWaveLogo(logoSize: Dp) {
+    Canvas(Modifier.size(logoSize)) {
+        val canvasSize = this.size
+        val center = Offset(canvasSize.width / 2f, canvasSize.height / 2f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(Color(0xFFE4F0FF).copy(.42f), Color(0xFFB6D5FF).copy(.14f), Color.Transparent),
+                center = center,
+                radius = canvasSize.minDimension * .72f,
+            ),
+        )
+        val strokeWidth = canvasSize.minDimension * .075f
+        for (wave in 0..2) {
+            val path = Path()
+            val yCenter = canvasSize.height * (.38f + wave * .12f)
+            for (point in 0..24) {
+                val x = canvasSize.width * (.11f + point / 24f * .78f)
+                val angle = point / 24f * Math.PI * 2.3f + wave * .82f
+                val y = yCenter + kotlin.math.sin(angle).toFloat() * canvasSize.height * .11f
+                if (point == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, Color.White.copy(.95f - wave * .12f), style = Stroke(strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        }
+    }
+}
+
+@Composable
+private fun AudioQualityInfoDialog(
+    details: AudioQualityDetails?,
+    uhqActive: Boolean,
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    var showStats by remember(details) { mutableStateOf(false) }
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val dialogWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+    SideEffect {
+        dialogWindow?.setDimAmount(.32f)
+        if (Build.VERSION.SDK_INT >= 31) {
+            dialogWindow?.setBackgroundBlurRadius(with(density) { 22.dp.roundToPx() })
+        }
+    }
+    val title = if (uhqActive) "UHQ" else details?.qualityName ?: "Audio quality"
+    val subtitle = when {
+        uhqActive -> "16-bit/44.1 kHz PCM output"
+        details == null -> "Reading audio details…"
+        else -> details.formattedSourceSpec()
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(color = Color(0xF2171717), shape = RoundedCornerShape(26.dp), tonalElevation = 0.dp) {
+            Column(
+                Modifier.fillMaxWidth().widthIn(max = 380.dp).heightIn(max = 620.dp)
+                    .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                QualityWaveLogo(58.dp)
+                Spacer(Modifier.height(14.dp))
+                Text(title, color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(subtitle, color = Color.White.copy(.76f), fontSize = 15.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                if (uhqActive) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "UHQ is Wavv’s AAC enhancement. It processes the source for this player; it does not add detail or make the original file higher resolution.",
+                        color = Color.White.copy(.62f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    QualityDetailRow("Codec", if (uhqActive) "AAC → PCM" else details?.format ?: "Not reported")
+                    QualityDetailRow("Bit depth", if (uhqActive) "16-bit output" else details?.bitDepth?.let { "$it-bit" } ?: "Not reported")
+                    QualityDetailRow("Sample rate", if (uhqActive) "44.1 kHz output" else details?.sampleRateHz?.let(::formatSampleRate) ?: "Not reported")
+                    QualityDetailRow(
+                        "Bitrate",
+                        details?.let { it.formattedBitrate() + if (it.bitrateIsEstimated) " (estimated)" else "" } ?: "Not reported",
+                    )
+                    QualityDetailRow("Channels", if (uhqActive) "Stereo output" else details?.channels?.let { if (it == 2) "Stereo" else if (it == 1) "Mono" else "$it channels" } ?: "Not reported")
+                }
+                Spacer(Modifier.height(14.dp))
+                TextButton(onClick = { showStats = !showStats }) {
+                    Text(if (showStats) "Hide stats for nerds" else "Stats for nerds", color = Color.White.copy(.8f))
+                }
+                AnimatedVisibility(visible = showStats, enter = fadeIn(tween(180)), exit = fadeOut(tween(140))) {
+                    Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        QualityDetailRow("Source MIME", details?.mimeType ?: "Not reported")
+                        QualityDetailRow("Container", details?.container ?: "Not reported")
+                        QualityDetailRow("Source file", details?.fileSizeBytes?.takeIf { it > 0 }?.let {
+                            android.text.format.Formatter.formatShortFileSize(LocalContext.current, it)
+                        } ?: "Not reported")
+                        QualityDetailRow("Duration", details?.durationMs?.takeIf { it > 0 }?.let(::formatTime) ?: "Not reported")
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(.12f)))
+                TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
+                    Text("Audio Quality Settings", color = Color.White.copy(.92f), fontSize = 15.sp)
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text("Done", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualityDetailRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White.copy(.58f), fontSize = 12.sp)
+        Spacer(Modifier.width(12.dp))
+        Text(value, color = Color.White.copy(.91f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 

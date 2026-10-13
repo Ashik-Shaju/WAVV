@@ -42,6 +42,7 @@ object PlaybackPlayerFactory {
     fun create(context: Context): ExoPlayer = ExoPlayer.Builder(
         context.applicationContext,
         DefaultRenderersFactory(context.applicationContext)
+            .setEnableAudioFloatOutput(true)
             .setEnableDecoderFallback(true),
     )
         .setAudioAttributes(
@@ -75,10 +76,10 @@ class PlaybackService : MediaSessionService() {
     private val applyEqualizer = Runnable { syncEqualizer() }
     private var uhqPreferences: SharedPreferences? = null
     private val uhqPreferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == UHQPlaybackPreference.preferenceKey()) {
+        if (key == UHQPlaybackPreference.preferenceKey() || key == UHQPlaybackPreference.trackOverrideKey()) {
             feedbackHandler.post {
                 player?.currentMediaItem?.let { item ->
-                    if (UHQPlaybackPreference.isEnabled(this)) updateUHQ(item, force = true)
+                    if (shouldEnhanceTrack(item.mediaId)) updateUHQ(item, force = true)
                     else disableUHQ(item)
                 }
             }
@@ -243,8 +244,17 @@ class PlaybackService : MediaSessionService() {
         )
         previousSongId = id
         previousItemIndex = index
-        if (UHQPlaybackPreference.isEnabled(this)) updateUHQ(item)
+        val override = UHQPlaybackPreference.trackOverride(this)
+        if (override != null && override.songId != id) UHQPlaybackPreference.clearTrackOverride(this)
+        if (shouldEnhanceTrack(item.mediaId)) updateUHQ(item)
         else disableUHQ(item)
+    }
+
+    private fun shouldEnhanceTrack(songId: String): Boolean {
+        val id = songId.toLongOrNull()
+        val override = UHQPlaybackPreference.trackOverride(this)
+        return if (id != null && override?.songId == id) override.enabled
+        else UHQPlaybackPreference.isEnabled(this)
     }
 
     private fun updateUHQ(item: MediaItem, force: Boolean = false) {
@@ -274,13 +284,13 @@ class PlaybackService : MediaSessionService() {
                     PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Unsupported)
                     return@launch
                 }
-                if (!UHQPlaybackPreference.isEnabled(this@PlaybackService)) return@launch
+                if (!shouldEnhanceTrack(songId)) return@launch
                 val destination = UHQAacCache.file(this@PlaybackService, key)
                 if (destination.isFile && destination.length() > 44L) {
                     destination.setLastModified(System.currentTimeMillis())
                     withContext(Dispatchers.Main.immediate) {
                         val current = player?.currentMediaItem
-                        if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
+                        if (shouldEnhanceTrack(songId) && current?.mediaId == songId) {
                             routeToEnhanced(current, source, destination)
                             PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Enhanced)
                         }
@@ -320,7 +330,7 @@ class PlaybackService : MediaSessionService() {
                         if (info.state == WorkInfo.State.SUCCEEDED && destination.isFile) {
                             withContext(Dispatchers.Main.immediate) {
                                 val current = player?.currentMediaItem
-                                if (UHQPlaybackPreference.isEnabled(this@PlaybackService) && current?.mediaId == songId) {
+                                if (shouldEnhanceTrack(songId) && current?.mediaId == songId) {
                                     routeToEnhanced(current, source, destination)
                                     PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Enhanced)
                                 }
@@ -336,7 +346,7 @@ class PlaybackService : MediaSessionService() {
                 throw cancelled
             } catch (error: Exception) {
                 val currentTrackMatches = player?.currentMediaItem?.mediaId == songId
-                if (currentTrackMatches && UHQPlaybackPreference.isEnabled(this@PlaybackService)) {
+                if (currentTrackMatches && shouldEnhanceTrack(songId)) {
                     PlaybackEffectStatus.updateUHQ(songIdLong, UhqPlaybackStatus.Failed)
                 }
                 Log.w(TAG, "UHQ enhancement could not be completed", error)
