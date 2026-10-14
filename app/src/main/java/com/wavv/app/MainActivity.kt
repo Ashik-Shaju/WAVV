@@ -3246,7 +3246,7 @@ internal fun NowPlayingAmbientBackdrop(song: Song, isPlaying: Boolean) {
         label = "album ambient pulse",
     )
     val backdropAlpha by animateFloatAsState(
-        targetValue = if (isPlaying) 1f else .5f,
+        targetValue = if (isPlaying) .9f else .5f,
         animationSpec = tween(550, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)),
         label = "album backdrop opacity",
     )
