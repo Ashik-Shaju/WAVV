@@ -2,7 +2,6 @@ package com.wavv.app
 
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.net.Uri
 import java.io.Closeable
@@ -33,7 +32,7 @@ internal class MusicUnderstandingModel(context: Context) : Closeable {
     private val melFilterBank = bundle.melFilterBank()
     private val preprocessor = MusicUnderstandingPreprocessor(melFilterBank)
     private val tagger = MusicTagger(bundle.featureMean, bundle.featureScale, bundle.heads)
-    private val runtime = createSession(bundle.backbone)
+    private val runtime = OrtSessionRuntime.create(bundle.backbone, preferXnnpack = true)
 
     suspend fun analyze(uri: Uri): MusicAnalysis = withContext(Dispatchers.Default) {
         val probabilities = MeanProbabilityPool(bundle.heads.size)
@@ -98,56 +97,12 @@ internal class MusicUnderstandingModel(context: Context) : Closeable {
 
     override fun close() = runtime.close()
 
-    private fun createSession(model: File): MusicUnderstandingSession {
-        fun configure(options: OrtSession.SessionOptions, useXnnpack: Boolean) {
-            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-            options.setInterOpNumThreads(1)
-            options.setIntraOpNumThreads(1)
-            options.setMemoryPatternOptimization(true)
-            options.setCPUArenaAllocator(true)
-            options.addConfigEntry("session.intra_op.allow_spinning", "0")
-            if (useXnnpack) {
-                options.addXnnpack(mapOf("intra_op_num_threads" to Runtime.getRuntime().availableProcessors().coerceIn(1, 4).toString()))
-            }
-        }
-
-        val xnnpackOptions = OrtSession.SessionOptions()
-        try {
-            configure(xnnpackOptions, useXnnpack = true)
-            return MusicUnderstandingSession(environment.createSession(model.absolutePath, xnnpackOptions), xnnpackOptions)
-        } catch (xnnpackError: Exception) {
-            runCatching { xnnpackOptions.close() }
-            val cpuOptions = OrtSession.SessionOptions()
-            try {
-                configure(cpuOptions, useXnnpack = false)
-                return MusicUnderstandingSession(environment.createSession(model.absolutePath, cpuOptions), cpuOptions)
-            } catch (cpuError: Exception) {
-                runCatching { cpuOptions.close() }
-                cpuError.addSuppressed(xnnpackError)
-                throw cpuError
-            }
-        }
-    }
-
     private companion object {
         const val INPUT_NAME = "log_mel"
         const val OUTPUT_NAME = "pooled_feature"
         const val FEATURE_DIMENSION = 384
         const val MEL_BINS = 128
         const val FRAME_COUNT = 1_000
-    }
-}
-
-private class MusicUnderstandingSession(
-    val session: OrtSession,
-    private val options: OrtSession.SessionOptions,
-) : Closeable {
-    override fun close() {
-        try {
-            session.close()
-        } finally {
-            options.close()
-        }
     }
 }
 

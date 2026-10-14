@@ -21,7 +21,7 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`; install
 
 ## Tests
 
-Run unit tests with `.\gradlew.bat :app:testDebugUnitTest`. Run Android instrumentation tests on a connected emulator or device with `.\gradlew.bat :app:connectedDebugAndroidTest`. The DCLAP device-library smoke test is skipped unless audio-library access is granted and at least one local audio file is available.
+Run unit tests with `.\gradlew.bat :app:testDebugUnitTest`. Run Android instrumentation tests on a connected emulator or device with `.\gradlew.bat :app:connectedDebugAndroidTest`. The suite includes an AAC enhancer test using generated audio; its optional local-library case is skipped unless audio-library access is granted and a supported AAC track is available in `Music/`. The DCLAP device-library smoke test also needs audio-library access and at least one local audio file.
 
 ## Redistribution
 

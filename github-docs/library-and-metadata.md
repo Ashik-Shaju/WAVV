@@ -12,7 +12,7 @@ For all-device scans, Wavv asks Android for audio entries marked as music. File 
 
 ## Metadata fields
 
-Wavv reads available title, artist, album, duration, MIME/container information, and selected optional fields such as genre, album artist, composer, year, track, and disc number. It combines Android media-provider values with metadata retrievable from the file. When fields are absent, fallback display values are used only for basic title/artist/album presentation; missing genres, language, or model tags are not fabricated.
+Wavv reads available title, artist, album, duration, and MIME/container information. Optional catalog fields include genres, album artist, composer, year and recording date, track/disc numbers and track count, author, writer, compilation status, bitrate, and sample rate. Android media-provider values are preferred where exposed, with supported embedded metadata filling gaps. Availability varies by file, container, Android version, and document provider. Missing genres, language, or model tags are not fabricated.
 
 Language metadata is checked lazily when a language search is requested. Wavv recognizes explicit media-track language and supported embedded language fields. Unknown and unrecognized values remain unknown.
 

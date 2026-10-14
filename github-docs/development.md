@@ -12,8 +12,9 @@ Wavv is an Android application written in Kotlin with Jetpack Compose. Build pre
 | Persistence | `WavvDatabase.kt` | Room entities, DAOs, migrations, and catalog operations |
 | Playback | `PlaybackController.kt`, `PlaybackService.kt` | Media3 controller, queue operations, service-owned ExoPlayer and session |
 | Search and personalization | `OfflineDiscovery.kt`, `SongSearch.kt` | Query parsing, local ranking, mixes, observed-playback reducer |
+| Metadata and genre views | `AudioMetadata.kt`, `MediaLibraryRepository.kt`, `GenreCategories.kt` | Read and persist supported file fields; keep file genres separate from inferred genres |
 | Model inference | `Dclap.kt`, `DclapIndexing.kt`, `MusicUnderstanding.kt`, `MusicUnderstandingRuntime.kt` | On-device embeddings, tag estimates, caching and worker progress |
-| Experimental playback enhancement | `UHQEnhancement.kt` | AAC decoding, ONNX enhancement, private cache, and playback source switching |
+| Playback quality and enhancement | `AudioQualityDetails.kt`, `UHQEnhancement.kt` | Source format details, AAC decoding, ONNX enhancement, private cache, and playback source switching |
 | Embedded file content | `EmbeddedLanguageMetadata.kt`, `Lyrics.kt` | Supported language fields and lyrics read from selected files |
 
 ## Test levels
@@ -24,11 +25,11 @@ Run the commands in the root README for these checks:
 | --- | --- | --- |
 | `:app:assembleDebug` | Kotlin/Compose compilation and debug packaging | Permission flow, playback, device codecs, output routes, or device performance |
 | `:app:testDebugUnitTest` | Deterministic JVM logic such as query parsing, ranking, queue rules, metadata parsing, and reducers | Android framework behavior, Room on-device behavior, actual audio, or visual parity |
-| `:app:connectedDebugAndroidTest` | Bundled DCLAP and Music Understanding inference and Room persistence | Compatibility with every device, codec, audio route, or Android release |
+| `:app:connectedDebugAndroidTest` | Bundled DCLAP and Music Understanding inference, Room persistence, and the UHQ AAC enhancement path | Compatibility with every device, codec, audio route, or Android release; UHQ playback-service cache switching |
 
-Relevant local test classes include `OfflineDiscoveryTest`, `PlaybackQueueTest`, `PlaybackFeedbackReducerTest`, `LibraryBackendTest`, `LyricsTest`, and `DclapTest`. Instrumentation tests live under `app/src/androidTest/`; their presence is not evidence that they passed. Run them on an emulator or device and report the exact result before making a runtime claim.
+Relevant local test classes include `OfflineDiscoveryTest`, `PlaybackQueueTest`, `PlaybackFeedbackReducerTest`, `LibraryBackendTest`, `LyricsTest`, and `DclapTest`. `UHQEnhancementEndToEndTest` encodes a short AAC fixture on-device, runs the bundled enhancer, and checks WAV output and progress; its second case needs media permission and a supported AAC file in `Music/`. These tests are present in source, but their presence is not evidence that they passed. Run them on an emulator or device and report the exact result before making a runtime claim.
 
-The current tree has no Compose UI test or UHQ AAC end-to-end playback test. `UHQResourceLimitsTest` checks the supported decoder MIME and temporary-audio size boundaries; it does not validate AAC decoding, DSP output, cache switching, or device performance.
+The current tree has no Compose UI test or test of the full `PlaybackService` cache-switching flow. `UHQResourceLimitsTest` checks supported MIME and temporary-audio size boundaries. The AAC enhancer instrumentation test exercises decoding, model inference, and WAV output, but not playback-service switching or device performance.
 
 ## Practical change boundaries
 

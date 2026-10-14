@@ -18,8 +18,8 @@ Indexing fills the library from the selected source; it does not move or rewrite
 
 - **Home** shows library-driven shelves, such as recent tracks and available mixes. A mix appears only when local listening or favorite signals are sufficient; a new or sparse library may have no recommendations yet.
 - **Search** matches titles and metadata and can use local audio-text similarity for descriptive queries. Category cards are built from actual genre tags and tracks with artwork. If your files lack those tags or art, the app does not invent them.
-- **Library** organizes songs, albums, artists, favorites, and user-created playlists. Playlist changes require an explicit action.
-- **You** shows local library counts, analysis progress, the selected source, notification and listening-history controls, Equalizer settings, and the optional UHQ AAC setting. The Theme row reports the current dark appearance; it is not a theme switch. Storage Used estimates the total size of the indexed audio files, not Wavv's app storage.
+- **Library** organizes songs, albums, artists, favorites, and user-created playlists. When recommendations are available, Songs, Liked Songs, Artists, and Albums can use the **For You** sort. Playlist changes require an explicit action.
+- **You** shows local library counts, analysis progress, the selected source, notification and listening-history controls, Equalizer settings, and the optional UHQ AAC setting. The UHQ row shows the current track's enhancement state and progress while processing. The Theme row reports the current dark appearance; it is not a theme switch. Storage Used estimates the total size of the indexed audio files, not Wavv's app storage.
 
 ## Search honestly
 
@@ -30,6 +30,8 @@ Language filtering is stricter: Wavv matches recognized language metadata explic
 ## Play and manage a queue
 
 Tap a track to start playback. The mini-player opens the full player; use its transport buttons and seek bar to control playback. The queue can show upcoming tracks, play a track next, add tracks, reorder or remove upcoming tracks, shuffle upcoming items, and repeat the current item or queue. Repeat behavior is controlled by the player UI.
+
+The full player may show a source-quality label. Tap it to view technical details that Android can read from the file; metadata-based labels do not certify mastering or audible quality. See [Playback](playback.md) for details.
 
 The output panel lists compatible Android audio routes currently reported to Wavv. The operating system, device, selected route, and installed decoder determine actual format and output support. See [Playback](playback.md) for the boundary.
 
