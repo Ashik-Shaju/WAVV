@@ -32,12 +32,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInHorizontally
@@ -79,9 +82,11 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -167,6 +172,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -215,6 +222,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
@@ -287,6 +295,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -335,6 +344,8 @@ internal enum class Tab { Home, Search, Library, You }
 private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
 
 private enum class PlayerArtworkFlightDirection { Opening, Closing }
+
+private enum class ArtworkFlightDestination { MiniPlayer, FullPlayer, Lyrics }
 
 private data class PlayerArtworkFrame(
     val bounds: Rect,
@@ -1003,6 +1014,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var artworkFlight by remember { mutableStateOf<PlayerArtworkFlight?>(null) }
     var artworkFlightTracksFinger by remember { mutableStateOf(false) }
     var artworkFlightAwaitingTarget by remember { mutableStateOf(false) }
+    var artworkFlightDestination by remember { mutableStateOf(ArtworkFlightDestination.FullPlayer) }
+    var artworkFlightOwnedByLyrics by remember { mutableStateOf(false) }
     var artworkFlightSequence by remember { mutableStateOf(0L) }
     val gestureArtworkProgress = remember { mutableFloatStateOf(0f) }
     val artworkFlightProgress = remember { Animatable(0f) }
@@ -1085,6 +1098,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val openPlayer: () -> Unit = {
         val song = activeSong
         val source = miniPlayerArtworkFrame
+        artworkFlightDestination = ArtworkFlightDestination.FullPlayer
+        artworkFlightOwnedByLyrics = false
         if (song != null && source != null && source.bounds.width > 0f && source.bounds.height > 0f) {
             // Freeze the artwork at the live mini-player bounds until the full-player target is measured.
             val openingFlight = newArtworkFlight(song, PlayerArtworkFlightDirection.Opening, source, source)
@@ -1101,6 +1116,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     fun beginArtworkDrag(source: PlayerArtworkFrame) {
         val song = activeSong ?: return
         val destination = miniPlayerArtworkFrame ?: return
+        artworkFlightDestination = ArtworkFlightDestination.MiniPlayer
+        artworkFlightOwnedByLyrics = false
         val openingFlight = artworkFlight?.takeIf { it.direction == PlayerArtworkFlightDirection.Opening }
         val visibleSource = openingFlight?.let { flight ->
             val rawProgress = if (artworkFlightAwaitingTarget) 0f else artworkFlightProgress.value.coerceIn(0f, 1f)
@@ -1140,12 +1157,69 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             artworkFlightProgress.animateTo(1f, tween(480, easing = WavvMotionEasing))
             if (artworkFlight?.id == flight.id) {
                 artworkFlight = null
+                artworkFlightOwnedByLyrics = false
                 gestureArtworkProgress.floatValue = 0f
             }
         }
     }
+    fun retargetArtworkFlight(flight: PlayerArtworkFlight, frame: PlayerArtworkFrame): PlayerArtworkFlight {
+        val rawProgress = artworkFlightProgress.value.coerceIn(0f, 1f)
+        val currentProgress = normalizedArtworkFlightProgress(flight, rawProgress)
+        val currentFrame = interpolateArtworkFrame(flight.from, flight.to, currentProgress)
+        val targetDisplacement = maxOf(
+            kotlin.math.abs(frame.bounds.left - flight.to.bounds.left),
+            kotlin.math.abs(frame.bounds.top - flight.to.bounds.top),
+            kotlin.math.abs(frame.bounds.right - flight.to.bounds.right),
+            kotlin.math.abs(frame.bounds.bottom - flight.to.bounds.bottom),
+        )
+        return if (targetDisplacement > artworkRetargetThresholdPx && rawProgress < .98f) {
+            // Rebase from the visible frame when a layout change moves the target substantially.
+            flight.copy(from = currentFrame, to = frame, progressOrigin = rawProgress)
+        } else {
+            flight.copy(to = frame)
+        }
+    }
+    fun openLyricsArtworkFlight(sourceFrame: PlayerArtworkFrame?) {
+        val song = activeSong ?: return
+        val source = sourceFrame ?: fullPlayerArtworkFrame
+        artworkFlightDestination = ArtworkFlightDestination.Lyrics
+        artworkFlightOwnedByLyrics = true
+        if (source != null && source.bounds.width > 0f && source.bounds.height > 0f) {
+            artworkFlight = newArtworkFlight(song, PlayerArtworkFlightDirection.Opening, source, source)
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = true
+            gestureArtworkProgress.floatValue = 0f
+        } else {
+            artworkFlight = null
+            artworkFlightAwaitingTarget = false
+            artworkFlightOwnedByLyrics = false
+        }
+    }
+    fun closeLyricsArtworkFlight(sourceFrame: PlayerArtworkFrame?) {
+        val song = activeSong ?: return
+        val source = sourceFrame
+        val destination = fullPlayerArtworkFrame
+        artworkFlightDestination = ArtworkFlightDestination.FullPlayer
+        artworkFlightOwnedByLyrics = true
+        if (source != null && destination != null &&
+            source.bounds.width > 0f && source.bounds.height > 0f &&
+            destination.bounds.width > 0f && destination.bounds.height > 0f
+        ) {
+            val flight = newArtworkFlight(song, PlayerArtworkFlightDirection.Closing, source, destination)
+            artworkFlight = flight
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = false
+            animateArtworkFlight(flight)
+        } else {
+            artworkFlight = null
+            artworkFlightAwaitingTarget = false
+            artworkFlightOwnedByLyrics = false
+        }
+    }
     fun closePlayer(sourceFrame: PlayerArtworkFrame? = null) {
         if (showPlayer && activeSong != null) {
+            artworkFlightDestination = ArtworkFlightDestination.MiniPlayer
+            artworkFlightOwnedByLyrics = false
             val destination = miniPlayerArtworkFrame
             val currentFlight = artworkFlight
             if (artworkFlightTracksFinger && currentFlight != null) {
@@ -1402,25 +1476,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     miniPlayerArtworkFrame = frame
                     val flight = artworkFlight
                     if (flight?.direction == PlayerArtworkFlightDirection.Closing &&
+                        artworkFlightDestination == ArtworkFlightDestination.MiniPlayer &&
                         !artworkFlightTracksFinger && !artworkFlightAwaitingTarget && flight.to != frame
                     ) {
-                        val rawProgress = artworkFlightProgress.value.coerceIn(0f, 1f)
-                        val currentProgress = normalizedArtworkFlightProgress(flight, rawProgress)
-                        val currentFrame = interpolateArtworkFrame(flight.from, flight.to, currentProgress)
-                        val targetDisplacement = maxOf(
-                            kotlin.math.abs(frame.bounds.left - flight.to.bounds.left),
-                            kotlin.math.abs(frame.bounds.top - flight.to.bounds.top),
-                            kotlin.math.abs(frame.bounds.right - flight.to.bounds.right),
-                            kotlin.math.abs(frame.bounds.bottom - flight.to.bounds.bottom),
-                        )
-                        artworkFlight = if (targetDisplacement > artworkRetargetThresholdPx && rawProgress < .98f) {
-                            // A tab or stack-position jump can move the live target by a screenful.
-                            // Rebase at the rendered frame so the artwork never teleports with it.
-                            flight.copy(from = currentFrame, to = frame, progressOrigin = rawProgress)
-                        } else {
-                            // Follow small layout motion continuously while the mini-player animates.
-                            flight.copy(to = frame)
-                        }
+                        artworkFlight = retargetArtworkFlight(flight, frame)
                     }
                 },
             )
@@ -1497,30 +1556,42 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onSetTrackUHQ = actions.onSetTrackUHQ,
                     playlists = playlists,
                     artworkFlightActive = artworkFlight != null,
+                    lyricsArtworkFlightActive = artworkFlightOwnedByLyrics,
+                    onOpenLyricsArtwork = { frame -> openLyricsArtworkFlight(frame) },
+                    onCloseLyricsArtwork = { frame -> closeLyricsArtworkFlight(frame) },
                     onArtworkFrameChange = { frame ->
                         fullPlayerArtworkFrame = frame
                         val flight = artworkFlight
-                        if (flight?.direction == PlayerArtworkFlightDirection.Opening) {
+                        if (flight?.direction == PlayerArtworkFlightDirection.Opening &&
+                            artworkFlightDestination == ArtworkFlightDestination.FullPlayer
+                        ) {
                             if (artworkFlightAwaitingTarget) {
                                 // Use the measured, settled full-player artwork bounds as the destination.
                                 val openingFlight = flight.copy(to = frame)
                                 artworkFlight = openingFlight
                                 animateArtworkFlight(openingFlight)
                             } else if (!artworkFlightTracksFinger && flight.to != frame) {
-                                val rawProgress = artworkFlightProgress.value.coerceIn(0f, 1f)
-                                val currentProgress = normalizedArtworkFlightProgress(flight, rawProgress)
-                                val currentFrame = interpolateArtworkFrame(flight.from, flight.to, currentProgress)
-                                val targetDisplacement = maxOf(
-                                    kotlin.math.abs(frame.bounds.left - flight.to.bounds.left),
-                                    kotlin.math.abs(frame.bounds.top - flight.to.bounds.top),
-                                    kotlin.math.abs(frame.bounds.right - flight.to.bounds.right),
-                                    kotlin.math.abs(frame.bounds.bottom - flight.to.bounds.bottom),
-                                )
-                                artworkFlight = if (targetDisplacement > artworkRetargetThresholdPx && rawProgress < .98f) {
-                                    flight.copy(from = currentFrame, to = frame, progressOrigin = rawProgress)
-                                } else {
-                                    flight.copy(to = frame)
-                                }
+                                artworkFlight = retargetArtworkFlight(flight, frame)
+                            }
+                        } else if (flight?.direction == PlayerArtworkFlightDirection.Closing &&
+                            artworkFlightDestination == ArtworkFlightDestination.FullPlayer &&
+                            !artworkFlightTracksFinger && !artworkFlightAwaitingTarget && flight.to != frame
+                        ) {
+                            artworkFlight = retargetArtworkFlight(flight, frame)
+                        }
+                    },
+                    onLyricsArtworkFrameChange = { frame ->
+                        val flight = artworkFlight
+                        if (artworkFlightOwnedByLyrics &&
+                            artworkFlightDestination == ArtworkFlightDestination.Lyrics &&
+                            flight?.direction == PlayerArtworkFlightDirection.Opening
+                        ) {
+                            if (artworkFlightAwaitingTarget) {
+                                val openingFlight = flight.copy(to = frame)
+                                artworkFlight = openingFlight
+                                animateArtworkFlight(openingFlight)
+                            } else if (!artworkFlightTracksFinger && flight.to != frame) {
+                                artworkFlight = flight.copy(to = frame)
                             }
                         }
                     },
@@ -2584,7 +2655,11 @@ private fun FullPlayer(
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
     artworkFlightActive: Boolean,
+    lyricsArtworkFlightActive: Boolean,
+    onOpenLyricsArtwork: (PlayerArtworkFrame?) -> Unit,
+    onCloseLyricsArtwork: (PlayerArtworkFrame?) -> Unit,
     onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onLyricsArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
     onArtworkDragStart: (PlayerArtworkFrame) -> Unit,
     onArtworkDragProgress: (Float) -> Unit,
     onArtworkDragCancel: () -> Unit,
@@ -2593,13 +2668,18 @@ private fun FullPlayer(
     val latestOnArtworkDragStart by rememberUpdatedState(onArtworkDragStart)
     val latestOnArtworkDragProgress by rememberUpdatedState(onArtworkDragProgress)
     val latestOnArtworkDragCancel by rememberUpdatedState(onArtworkDragCancel)
+    val latestOnCloseLyricsArtwork by rememberUpdatedState(onCloseLyricsArtwork)
     val context = LocalContext.current
     val appContext = remember(context) { context.applicationContext }
     var audioDetails by remember(song.id, song.uri) { mutableStateOf<AudioQualityDetails?>(null) }
     var showQualityDetails by remember(song.id) { mutableStateOf(false) }
     var showQualitySettings by remember(song.id) { mutableStateOf(false) }
     var uhqEnabledForSettings by remember(context) { mutableStateOf(UHQPlaybackPreference.isEnabled(context)) }
-    var showLyrics by remember(song.id) { mutableStateOf(false) }
+    // Keep the lyrics page open as the player advances to the next queued track.
+    var showLyrics by remember { mutableStateOf(false) }
+    var importedLyrics by remember(song.id) { mutableStateOf<List<LyricLine>?>(null) }
+    var lyricsOffsetMs by remember(song.id) { mutableStateOf(0L) }
+    var currentLyricsArtworkFrame by remember(song.id) { mutableStateOf<PlayerArtworkFrame?>(null) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
     var playlistSong by remember(song.id) { mutableStateOf<Song?>(null) }
@@ -2612,13 +2692,19 @@ private fun FullPlayer(
     var artworkGestureStarted by remember(song.id) { mutableStateOf(false) }
     var currentArtworkFrame by remember(song.id) { mutableStateOf<PlayerArtworkFrame?>(null) }
     var artworkCoordinates by remember(song.id) { mutableStateOf<LayoutCoordinates?>(null) }
+    val closeLyricsPage: () -> Unit = {
+        if (showLyrics) {
+            showLyrics = false
+            latestOnCloseLyricsArtwork(currentLyricsArtworkFrame)
+        }
+    }
     LaunchedEffect(song.id, song.uri) {
         audioDetails = withContext(Dispatchers.IO) {
             runCatching { readAudioQualityDetails(appContext, song) }.getOrNull()
         }
     }
     val gestureScope = rememberCoroutineScope()
-    BackHandler(enabled = showLyrics) { showLyrics = false }
+    BackHandler(enabled = showLyrics, onBack = closeLyricsPage)
     val nextSong = state.queue.getOrNull(currentQueueIndex + 1)
         ?.takeIf { it.id != song.id }
         ?: state.autoplaySongs.firstOrNull()?.takeIf { state.autoplayEnabled && it.id != song.id }
@@ -2644,6 +2730,7 @@ private fun FullPlayer(
         val playerMaxWidth = maxWidth
         val density = LocalDensity.current
         val playerHeightPx = with(density) { maxHeight.toPx() }
+        val lyricsTopSwipeZonePx = with(density) { 220.dp.toPx() }
         val targetArtworkSize = if (state.isPlaying) playerMaxWidth else minOf(playerMaxWidth * .76f, 320.dp)
         val artworkSize by animateDpAsState(targetArtworkSize, tween(620, easing = WavvMotionEasing), label = "player artwork size")
         val artworkTop by animateDpAsState(if (state.isPlaying) 56.dp else 76.dp, tween(620, easing = WavvMotionEasing), label = "player artwork position")
@@ -2699,18 +2786,20 @@ private fun FullPlayer(
                     alpha = 1f - (playerDragOffset / (playerHeightPx * .18f)).coerceIn(0f, 1f)
                 }
                 .background(Color.Black)
-                .pointerInput(song.id, showQueue, isDismissing, playerHeightPx) {
+                .pointerInput(song.id, showQueue, showLyrics, isDismissing, playerHeightPx) {
             var total = 0f
+            var dragStartY = 0f
             var downwardDragStarted = false
             detectVerticalDragGestures(
-                onDragStart = {
+                onDragStart = { offset ->
                     total = 0f
+                    dragStartY = offset.y
                     downwardDragStarted = false
                 },
                 onVerticalDrag = { _, amount ->
                     total += amount
                     if (amount > 0f) downwardDragStarted = true
-                    if (!showQueue && !isDismissing) {
+                    if (!showQueue && !showLyrics && !isDismissing) {
                         val nextOffset = (playerDragOffset + amount).coerceAtLeast(0f)
                         if (nextOffset > 0f && !artworkGestureStarted) {
                             val measuredFrame = currentArtworkFrame
@@ -2731,7 +2820,9 @@ private fun FullPlayer(
                     }
                 },
                 onDragEnd = {
-                    if (showQueue && total > 80) {
+                    if (showLyrics) {
+                        if (total > 84 && downwardDragStarted && dragStartY <= lyricsTopSwipeZonePx) closeLyricsPage()
+                    } else if (showQueue && total > 80) {
                         onHideQueue()
                     } else if (!showQueue && playerDragOffset > 100f) {
                         dismissPlayer()
@@ -2741,7 +2832,7 @@ private fun FullPlayer(
                         settlePlayer()
                     }
                 },
-                onDragCancel = { if (!isDismissing) settlePlayer() },
+                onDragCancel = { if (!showLyrics && !isDismissing) settlePlayer() },
             )
         },
         ) {
@@ -2807,7 +2898,10 @@ private fun FullPlayer(
             }
             PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 48.dp)
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { showLyrics = true }) { Image(androidx.compose.ui.res.painterResource(R.drawable.song_lyrics), "Lyrics", Modifier.size(24.dp).alpha(.7f), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)) }
+                IconButton(onClick = {
+                    onOpenLyricsArtwork(currentArtworkFrame)
+                    showLyrics = true
+                }) { Image(androidx.compose.ui.res.painterResource(R.drawable.song_lyrics), "Lyrics", Modifier.size(24.dp).alpha(.7f), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)) }
                 AudioOutputButton(audioOutputState, onClick = { showOutputs = true })
                 IconButton(onClick = onCycleLoop) {
                     Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
@@ -2876,10 +2970,30 @@ private fun FullPlayer(
         }
         AnimatedVisibility(
             visible = showLyrics,
-            enter = fadeIn(tween(180)) + slideInVertically(tween(460, easing = WavvMotionEasing)) { it },
-            exit = fadeOut(tween(160)) + slideOutVertically(tween(420, easing = WavvMotionEasing)) { it },
+            enter = fadeIn(tween(280, easing = WavvMotionEasing)) +
+                slideInVertically(tween(420, easing = WavvMotionEasing)) { it / 9 } +
+                scaleIn(tween(420, easing = WavvMotionEasing), initialScale = .975f),
+            exit = fadeOut(tween(180, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) +
+                slideOutVertically(tween(360, easing = WavvMotionEasing)) { it / 7 } +
+                scaleOut(tween(360, easing = WavvMotionEasing), targetScale = .985f),
         ) {
-            LyricsPanel(song, progressFlow, onSeek, { showLyrics = false })
+            LyricsPanel(
+                song = song,
+                progressFlow = progressFlow,
+                isPlaying = state.isPlaying,
+                onSeek = onSeek,
+                onToggle = onToggle,
+                lyricOffsetMs = lyricsOffsetMs,
+                onOffsetChange = { lyricsOffsetMs = it },
+                importedLyrics = importedLyrics,
+                onImportedLyrics = { importedLyrics = it },
+                lyricsArtworkFlightActive = lyricsArtworkFlightActive,
+                onArtworkFrameChange = { frame ->
+                    currentLyricsArtworkFrame = frame
+                    onLyricsArtworkFrameChange(frame)
+                },
+                onClose = closeLyricsPage,
+            )
         }
         if (showOutputs) AudioOutputPanel(
             song = song,
@@ -3187,22 +3301,64 @@ private fun Modifier.radialArtworkGlowMask(): Modifier =
     }
 
 @Composable
-private fun FullPlayerTimeline(song: Song, progressFlow: StateFlow<PlaybackProgress>, onSeek: (Long) -> Unit) {
+private fun FullPlayerTimeline(
+    song: Song,
+    progressFlow: StateFlow<PlaybackProgress>,
+    onSeek: (Long) -> Unit,
+    onScrubPosition: (Long?) -> Unit = {},
+) {
     val progress by progressFlow.collectAsStateWithLifecycle()
     val duration = max(progress.durationMs, song.durationMs).coerceAtLeast(1L)
-    val position = progress.positionMs.coerceIn(0L, duration)
+    var dragPositionMs by remember(song.id) { mutableStateOf<Long?>(null) }
+    val position = (dragPositionMs ?: progress.positionMs).coerceIn(0L, duration)
+    val latestOnSeek by rememberUpdatedState(onSeek)
+    val latestOnScrubPosition by rememberUpdatedState(onScrubPosition)
     Column {
         Box(
             Modifier.fillMaxWidth().padding(top = 16.dp).height(6.dp).clip(RoundedCornerShape(3.dp))
                 .background(Color.White.copy(.2f))
                 .pointerInput(duration) {
-                    detectTapGestures { point -> onSeek((point.x / size.width * duration).toLong().coerceIn(0L, duration)) }
+                    detectTapGestures { point ->
+                        latestOnSeek((point.x / size.width * duration).toLong().coerceIn(0L, duration))
+                    }
                 }
                 .pointerInput(duration) {
-                    detectDragGestures { change, _ ->
-                        onSeek((change.position.x / size.width * duration).toLong().coerceIn(0L, duration))
-                        change.consume()
-                    }
+                    var lastPreviewDispatchMs = 0L
+                    var pendingPositionMs: Long? = null
+                    fun positionAt(x: Float): Long =
+                        (x / size.width * duration).toLong().coerceIn(0L, duration)
+
+                    detectDragGestures(
+                        onDragStart = { point ->
+                            pendingPositionMs = positionAt(point.x)
+                            dragPositionMs = pendingPositionMs
+                            latestOnScrubPosition(pendingPositionMs)
+                            lastPreviewDispatchMs = System.nanoTime() / 1_000_000L
+                        },
+                        onDrag = { change, _ ->
+                            val nextPositionMs = positionAt(change.position.x)
+                            pendingPositionMs = nextPositionMs
+                            dragPositionMs = nextPositionMs
+                            val nowMs = System.nanoTime() / 1_000_000L
+                            // Keep the slider and lyric preview responsive without repeatedly
+                            // seeking the decoder while the user is still dragging.
+                            if (nowMs - lastPreviewDispatchMs >= 50L) {
+                                latestOnScrubPosition(nextPositionMs)
+                                lastPreviewDispatchMs = nowMs
+                            }
+                            change.consume()
+                        },
+                        onDragEnd = {
+                            pendingPositionMs?.let(latestOnSeek)
+                            dragPositionMs = null
+                            latestOnScrubPosition(null)
+                        },
+                        onDragCancel = {
+                            pendingPositionMs?.let(latestOnSeek)
+                            dragPositionMs = null
+                            latestOnScrubPosition(null)
+                        },
+                    )
                 },
         ) {
             Box(Modifier.fillMaxWidth(position.toFloat() / duration).fillMaxHeight().background(Color.White.copy(.8f)))
@@ -4523,9 +4679,25 @@ private fun QueuePanel(
 private fun QueueMode.next() = if (this == QueueMode.Off) QueueMode.Shuffle else QueueMode.Off
 
 @Composable
-private fun LyricsPanel(song: Song, progressFlow: StateFlow<PlaybackProgress>, onSeek: (Long) -> Unit, onClose: () -> Unit) {
+private fun LyricsPanel(
+    song: Song,
+    progressFlow: StateFlow<PlaybackProgress>,
+    isPlaying: Boolean,
+    onSeek: (Long) -> Unit,
+    onToggle: () -> Unit,
+    lyricOffsetMs: Long,
+    onOffsetChange: (Long) -> Unit,
+    importedLyrics: List<LyricLine>?,
+    onImportedLyrics: (List<LyricLine>) -> Unit,
+    lyricsArtworkFlightActive: Boolean,
+    onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onClose: () -> Unit,
+) {
     val context = LocalContext.current
-    val lyricLines by produceState<List<LyricLine>?>(initialValue = null, song.uri) {
+    val density = LocalDensity.current
+    val importScope = rememberCoroutineScope()
+    val embeddedLyrics by produceState<List<LyricLine>?>(initialValue = null, song.uri) {
+        value = null
         value = try {
             loadEmbeddedLyrics(context.applicationContext, song.uri)
         } catch (error: CancellationException) {
@@ -4534,70 +4706,710 @@ private fun LyricsPanel(song: Song, progressFlow: StateFlow<PlaybackProgress>, o
             emptyList()
         }
     }
-    val lyricsState = rememberLazyListState()
-    val progress by progressFlow.collectAsStateWithLifecycle()
-    val activeLyricIndex = lyricLines?.indexOfLast { it.timeMs?.let { time -> time <= progress.positionMs } == true } ?: -1
-    LaunchedEffect(activeLyricIndex) {
-        if (activeLyricIndex >= 0) lyricsState.animateScrollToItem(activeLyricIndex)
+    val sourceLyrics = importedLyrics ?: embeddedLyrics
+    val lyricLines = remember(sourceLyrics, lyricOffsetMs) {
+        sourceLyrics?.map { line ->
+            line.copy(
+                timeMs = line.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                words = line.words.map { word ->
+                    word.copy(timeMs = word.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) })
+                },
+            )
+        }
     }
-    Box(Modifier.fillMaxSize().background(WavvBackground)) {
-        AlbumArt(song, Modifier.fillMaxSize().scale(1.2f).blur(56.dp).alpha(.36f), null, 0.dp)
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xE65D0D1E), Color(0xF0100812), Color(0xFA050508)))))
-        Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(Modifier.weight(1f)) {
-                    Text("LYRICS", color = Color.White.copy(.55f), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
-                    Text(song.title, Modifier.padding(top = 5.dp), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artist, Modifier.padding(top = 2.dp), color = Color.White.copy(.6f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val scrubPositionMs = remember(song.id) { mutableStateOf<Long?>(null) }
+    var showOptions by remember(song.id) { mutableStateOf(false) }
+    var showOffsetDialog by remember(song.id) { mutableStateOf(false) }
+    var importError by remember(song.id) { mutableStateOf(false) }
+    var isImporting by remember(song.id) { mutableStateOf(false) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            importScope.launch {
+                isImporting = true
+                val loaded = runCatching { loadLyricsDocument(context.applicationContext, uri) }.getOrDefault(emptyList())
+                if (loaded.isNotEmpty()) {
+                    onImportedLyrics(loaded)
+                    onOffsetChange(0L)
+                    importError = false
+                } else {
+                    importError = true
                 }
-                IconButton(onClick = onClose, modifier = Modifier.clip(CircleShape).background(Color.White.copy(.1f))) {
-                    Icon(Icons.Default.Close, contentDescription = "Close lyrics", tint = Color.White)
+                isImporting = false
+            }
+        }
+    }
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black)
+            // The lyrics page is a full-screen surface, including transparent space around
+            // its controls; blank-area taps must not reach Now Playing underneath.
+            .clickable(interactionSource = null, indication = null, onClick = {}),
+    ) {
+        // Match the output picker: blurred cover art under the same deep graphite veil.
+        AlbumArt(song, Modifier.fillMaxSize().scale(1.18f).blur(34.dp), null, 0.dp)
+        Box(Modifier.fillMaxSize().background(Color(0xE8171717)))
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    0f to Color.Black.copy(.06f),
+                    .58f to Color.Black.copy(.20f),
+                    1f to Color.Black.copy(.58f),
+                ),
+            ),
+        )
+        Column(
+            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+                .padding(start = 22.dp, end = 22.dp, top = 14.dp, bottom = 12.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                val thumbnailShape = RoundedCornerShape(12.dp)
+                AlbumArt(
+                    song,
+                    Modifier.size(56.dp).shadow(8.dp, thumbnailShape).clip(thumbnailShape)
+                        .onGloballyPositioned { coordinates ->
+                            onArtworkFrameChange(
+                                PlayerArtworkFrame(
+                                    bounds = coordinates.boundsInRoot(),
+                                    cornerRadiusPx = with(density) { 12.dp.toPx() },
+                                    shadowElevationPx = with(density) { 8.dp.toPx() },
+                                ),
+                            )
+                        }
+                        .alpha(if (lyricsArtworkFlightActive) 0f else 1f),
+                    song.title,
+                    12.dp,
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("LYRICS", color = Color.White.copy(.48f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                    Text(
+                        song.title,
+                        Modifier.fillMaxWidth().songMetadataMarquee(),
+                        color = Color(0xFFF5F4F2),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip,
+                    )
+                    Text(
+                        song.artist,
+                        Modifier.fillMaxWidth().songMetadataMarquee(),
+                        color = Color.White.copy(.65f),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip,
+                    )
+                }
+                IconButton(onClick = onClose, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(.08f))) {
+                    Icon(Icons.Default.Close, contentDescription = "Return to Now Playing", tint = Color.White.copy(.9f), modifier = Modifier.size(20.dp))
                 }
             }
-            when {
-                lyricLines == null -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = WavvPink, strokeWidth = 2.dp)
+
+            LyricsScrollArea(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                songId = song.id,
+                songDurationMs = song.durationMs,
+                lyricLines = lyricLines,
+                progressFlow = progressFlow,
+                isPlaying = isPlaying,
+                scrubPositionMs = scrubPositionMs,
+                onSeek = onSeek,
+                onImport = { filePicker.launch(arrayOf("text/*", "application/octet-stream", "application/x-subrip")) },
+                importError = importError,
+            )
+
+            Column(Modifier.fillMaxWidth()) {
+                Box(Modifier.fillMaxWidth().height(48.dp)) {
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { showOptions = !showOptions },
+                            modifier = Modifier.size(46.dp).clip(CircleShape)
+                                .background(Color.White.copy(if (showOptions) .16f else .10f)),
+                        ) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Lyrics options", tint = Color.White.copy(.87f), modifier = Modifier.size(24.dp))
+                        }
+                        if (isImporting) {
+                            Text("Reading lyrics…", Modifier.padding(start = 8.dp), color = Color.White.copy(.55f), fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        IconButton(
+                            onClick = onToggle,
+                            modifier = Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(.12f)),
+                        ) {
+                            Icon(
+                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color(0xFFF5F4F2),
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    }
+                    LyricsOptionsMenu(
+                        song = song,
+                        visible = showOptions,
+                        onImport = {
+                            showOptions = false
+                            filePicker.launch(arrayOf("text/*", "application/octet-stream", "application/x-subrip"))
+                        },
+                        onAdjustOffset = {
+                            showOptions = false
+                            showOffsetDialog = true
+                        },
+                        onDismiss = { showOptions = false },
+                    )
                 }
-                lyricLines.isNullOrEmpty() -> Column(
-                    Modifier.fillMaxWidth().weight(1f),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White.copy(.25f), modifier = Modifier.size(42.dp))
-                    Text("No readable embedded lyrics", Modifier.fillMaxWidth().padding(top = 16.dp), color = Color.White.copy(.78f), fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    Text("This track has no supported lyrics tag.", Modifier.fillMaxWidth().padding(top = 8.dp), color = Color.White.copy(.48f), fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    state = lyricsState,
-                    contentPadding = PaddingValues(vertical = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    itemsIndexed(lyricLines.orEmpty()) { index, line ->
-                        Text(
-                            text = line.text,
-                            modifier = Modifier.fillMaxWidth()
-                                .clickable(enabled = line.timeMs != null) { line.timeMs?.let(onSeek) }
-                                .padding(horizontal = 4.dp),
-                            color = if (index == activeLyricIndex) Color.White else Color.White.copy(.52f),
-                            fontSize = if (index == activeLyricIndex) 24.sp else 19.sp,
-                            lineHeight = if (index == activeLyricIndex) 32.sp else 27.sp,
-                            fontWeight = if (index == activeLyricIndex) FontWeight.Bold else FontWeight.Medium,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                Spacer(Modifier.height(2.dp))
+                FullPlayerTimeline(song, progressFlow, onSeek) { position -> scrubPositionMs.value = position }
+            }
+        }
+    }
+    if (showOffsetDialog) {
+        LyricsOffsetDialog(
+            offsetMs = lyricOffsetMs,
+            onOffsetChange = onOffsetChange,
+            onDismiss = { showOffsetDialog = false },
+        )
+    }
+}
+
+@Composable
+private fun LyricsScrollArea(
+    modifier: Modifier,
+    songId: Long,
+    songDurationMs: Long,
+    lyricLines: List<LyricLine>?,
+    progressFlow: StateFlow<PlaybackProgress>,
+    isPlaying: Boolean,
+    scrubPositionMs: State<Long?>,
+    onSeek: (Long) -> Unit,
+    onImport: () -> Unit,
+    importError: Boolean,
+) {
+    val progress by progressFlow.collectAsStateWithLifecycle()
+    val durationMs = max(progress.durationMs, songDurationMs).coerceAtLeast(0L)
+    val scrubPosition by scrubPositionMs
+    val currentPositionMs = scrubPosition ?: progress.positionMs
+    val lyricsState = rememberLazyListState()
+    val lyricsTopInsetPx = with(LocalDensity.current) { 78.dp.roundToPx() }
+    val lyricItemPlacementSpec = remember {
+        tween<IntOffset>(durationMillis = 820, easing = WavvMotionEasing)
+    }
+    var lastObservedPositionMs by remember(songId) { mutableStateOf(currentPositionMs) }
+    var playbackReachedEnd by remember(songId) { mutableStateOf(false) }
+    val activeLyricIndex = remember(lyricLines, currentPositionMs) {
+        findActiveLyricIndex(lyricLines.orEmpty(), currentPositionMs)
+    }
+    val activeLyricListIndex = if (activeLyricIndex >= 0) activeLyricIndex * 2 + 1 else -1
+    val activeLyricTime = lyricLines?.getOrNull(activeLyricIndex)?.timeMs
+    val indicesByTime = remember(lyricLines) {
+        lyricLines.orEmpty().mapIndexedNotNull { index, line -> line.timeMs?.let { it to index } }
+            .groupBy(keySelector = { it.first }, valueTransform = { it.second })
+            .mapValues { (_, indices) -> indices.toSet() }
+    }
+    val activeLyricIndices = indicesByTime[activeLyricTime].orEmpty()
+    val isScrubbing = scrubPosition != null
+    val hasSynchronizedLyrics = remember(lyricLines) {
+        hasUsableLyricsTimeline(lyricLines.orEmpty())
+    }
+    val waitingWindow = lyricsWaitingWindow(
+        lines = lyricLines.orEmpty(),
+        activeLyricIndex = activeLyricIndex,
+        durationMs = durationMs,
+        hasUsableTimeline = hasSynchronizedLyrics,
+    )
+    val waitingProgress = waitingWindow?.progressAt(currentPositionMs) ?: 0f
+    val isLyricsWaiting = waitingWindow?.contains(currentPositionMs) == true
+
+    LaunchedEffect(songId, currentPositionMs) {
+        val previousPositionMs = lastObservedPositionMs
+        val returnedToStart = currentPositionMs <= 1_500L &&
+            (currentPositionMs == 0L && previousPositionMs > 0L || previousPositionMs - currentPositionMs >= 1_500L)
+        lastObservedPositionMs = currentPositionMs
+        if (returnedToStart && !lyricLines.isNullOrEmpty()) {
+            // Item zero is the top of the lyric timeline, including tracks whose first
+            // timed line starts after 0:00 and therefore has no active line at restart.
+            lyricsState.scrollToItem(0)
+        }
+    }
+
+    LaunchedEffect(isPlaying, progress.positionMs, durationMs, isScrubbing) {
+        val endThresholdMs = (durationMs - 1_000L).coerceAtLeast(0L)
+        when {
+            !isPlaying && durationMs > 0L && progress.positionMs >= endThresholdMs -> playbackReachedEnd = true
+            !isPlaying && (durationMs <= 0L || progress.positionMs < endThresholdMs) -> playbackReachedEnd = false
+            isPlaying && playbackReachedEnd && !isScrubbing && progress.positionMs <= 1_500L -> {
+                // Return to the top of the timeline, even when the first lyric is later.
+                if (!lyricLines.isNullOrEmpty()) lyricsState.scrollToItem(0)
+                playbackReachedEnd = false
+            }
+        }
+    }
+
+    LaunchedEffect(activeLyricTime, activeLyricIndex, isScrubbing) {
+        if (activeLyricIndex >= 0) {
+            // During scrubbing, jump directly so a stream of seek updates does not keep
+            // cancelling and restarting list animations. Resume smooth following on release.
+            if (isScrubbing) {
+                lyricsState.scrollToItem(activeLyricListIndex)
+            } else {
+                val target = lyricsState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeLyricListIndex }
+                if (target == null) {
+                    lyricsState.animateScrollToItem(activeLyricListIndex)
+                } else {
+                    // For the usual next-line transition, animate the measured distance
+                    // with a long ease-out so the lyric drifts into place instead of snapping.
+                    val distance = target.offset - lyricsTopInsetPx
+                    if (abs(distance) > 1) {
+                        lyricsState.animateScrollBy(
+                            value = distance.toFloat(),
+                            animationSpec = tween(durationMillis = 820, easing = WavvMotionEasing),
                         )
                     }
                 }
             }
-            PlayerProgress(
-                progressFlow = progressFlow,
-                song = song,
-                onSeek = onSeek,
-                accentColor = WavvPink,
-                sliderHeight = 20.dp,
+        }
+    }
+
+    Box(modifier) {
+        when {
+            lyricLines == null -> LyricsLoadingState()
+            lyricLines.isEmpty() -> Column(
+                Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White.copy(.35f), modifier = Modifier.size(40.dp))
+                Text(
+                    "No lyrics loaded yet",
+                    Modifier.padding(top = 14.dp),
+                    color = Color.White.copy(.92f),
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Text(
+                    "Import a timed .lrc file or a plain text lyric sheet.",
+                    Modifier.padding(top = 7.dp),
+                    color = Color.White.copy(.58f),
+                    fontSize = 14.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                TextButton(onClick = onImport, modifier = Modifier.padding(top = 8.dp)) {
+                    Text("Import lyrics", color = Color(0xFFE7E5E2), fontWeight = FontWeight.SemiBold)
+                }
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize()
+                    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0f to Color.Transparent,
+                                .16f to Color.Black,
+                                .84f to Color.Black,
+                                1f to Color.Transparent,
+                                startY = 0f,
+                                endY = size.height,
+                            ),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    },
+                state = lyricsState,
+                contentPadding = PaddingValues(top = 78.dp, bottom = 72.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                val displayLyrics = lyricLines.orEmpty()
+                items(
+                    count = 1 + displayLyrics.size * 2,
+                    key = { listIndex ->
+                        when {
+                            listIndex == 0 -> "lyrics-intro-wait"
+                            listIndex % 2 == 1 -> {
+                                val lineIndex = (listIndex - 1) / 2
+                                "${displayLyrics[lineIndex].timeMs ?: "plain"}-$lineIndex"
+                            }
+                            else -> "lyrics-wait-${listIndex / 2 - 1}"
+                        }
+                    },
+                ) { index ->
+                    when {
+                        index == 0 -> LyricsWaitingSlot(
+                            modifier = Modifier.animateItem(placementSpec = lyricItemPlacementSpec),
+                            visible = isLyricsWaiting && activeLyricIndex < 0,
+                            progress = waitingProgress,
+                        )
+                        index % 2 == 1 -> {
+                            val lineIndex = (index - 1) / 2
+                            val line = displayLyrics[lineIndex]
+                            LyricsLineContent(
+                                modifier = Modifier.animateItem(placementSpec = lyricItemPlacementSpec)
+                                    .fillMaxWidth().padding(bottom = 25.dp),
+                                line = line,
+                                active = !isLyricsWaiting && lineIndex in activeLyricIndices,
+                                positionMs = if (lineIndex in activeLyricIndices) currentPositionMs else 0L,
+                                onClick = { line.timeMs?.let(onSeek) },
+                            )
+                        }
+                        else -> {
+                            val afterLineIndex = index / 2 - 1
+                            LyricsWaitingSlot(
+                                modifier = Modifier.animateItem(placementSpec = lyricItemPlacementSpec),
+                                visible = isLyricsWaiting && afterLineIndex == activeLyricIndex,
+                                progress = waitingProgress,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (importError) {
+            Text(
+                "Couldn’t read that lyrics file. Try an LRC or text file.",
+                Modifier.align(Alignment.BottomCenter).padding(horizontal = 18.dp, vertical = 12.dp),
+                color = Color.White.copy(.72f),
+                fontSize = 12.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
+        }
+    }
+}
+
+private fun findActiveLyricIndex(lines: List<LyricLine>, positionMs: Long): Int {
+    var low = 0
+    var high = lines.size
+    while (low < high) {
+        val middle = (low + high) ushr 1
+        val lineTime = lines[middle].timeMs
+        if (lineTime != null && lineTime <= positionMs) low = middle + 1 else high = middle
+    }
+    return low - 1
+}
+
+@Composable
+private fun LyricsLineContent(
+    modifier: Modifier,
+    line: LyricLine,
+    active: Boolean,
+    positionMs: Long,
+    onClick: () -> Unit,
+) {
+    val textAlign = when (line.vocalSide) {
+        -1 -> androidx.compose.ui.text.style.TextAlign.Start
+        1 -> androidx.compose.ui.text.style.TextAlign.End
+        else -> androidx.compose.ui.text.style.TextAlign.Center
+    }
+    val boxAlignment = when (line.vocalSide) {
+        -1 -> Alignment.CenterStart
+        1 -> Alignment.CenterEnd
+        else -> Alignment.Center
+    }
+    val textColor by animateColorAsState(
+        targetValue = if (active) Color(0xFFF7F5F2) else Color.White.copy(.48f),
+        animationSpec = tween(340, easing = WavvMotionEasing),
+        label = "lyrics line color",
+    )
+    val lineScale by animateFloatAsState(
+        targetValue = if (active) 1f else .985f,
+        animationSpec = tween(360, easing = WavvMotionEasing),
+        label = "lyrics line scale",
+    )
+    val lineAlpha by animateFloatAsState(
+        targetValue = if (active) 1f else .62f,
+        animationSpec = tween(340, easing = WavvMotionEasing),
+        label = "lyrics line alpha",
+    )
+    val density = LocalDensity.current
+    val lineStyle = LocalTextStyle.current.copy(
+        shadow = Shadow(
+            color = Color(0xFFFFF7E8).copy(alpha = if (active) .10f else 0f),
+            blurRadius = with(density) { if (active) 3.dp.toPx() else 0f },
+        ),
+    )
+    val currentWordIndex = if (active) {
+        line.words.indexOfLast { it.timeMs?.let { time -> time <= positionMs } == true }
+    } else -1
+    val annotatedText = remember(line, active, currentWordIndex) {
+        if (line.words.isEmpty()) {
+            AnnotatedString(line.text)
+        } else {
+            buildAnnotatedString {
+                line.words.forEachIndexed { index, word ->
+                    val color = when {
+                        !active -> Color.White.copy(.46f)
+                        index == currentWordIndex -> Color(0xFFFFFFFF)
+                        index < currentWordIndex -> Color.White.copy(.78f)
+                        else -> Color.White.copy(.52f)
+                    }
+                    withStyle(SpanStyle(color = color, fontWeight = if (index == currentWordIndex && active) FontWeight.Bold else FontWeight.SemiBold)) {
+                        append(word.text)
+                    }
+                }
+            }
+        }
+    }
+    Box(modifier) {
+        Column(
+            Modifier.align(boxAlignment).fillMaxWidth(if (line.vocalSide == null) .94f else .88f)
+                .animateContentSize(tween(360, easing = WavvMotionEasing))
+                .graphicsLayer { scaleX = lineScale; scaleY = lineScale; alpha = lineAlpha }
+                .clickable(enabled = line.timeMs != null, onClick = onClick),
+            horizontalAlignment = when (line.vocalSide) {
+                -1 -> Alignment.Start
+                1 -> Alignment.End
+                else -> Alignment.CenterHorizontally
+            },
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                annotatedText,
+                Modifier.fillMaxWidth(),
+                color = textColor,
+                fontSize = if (active) 28.sp else 22.sp,
+                lineHeight = if (active) 36.sp else 30.sp,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                textAlign = textAlign,
+                style = lineStyle,
+            )
+            line.backgroundText?.takeIf(String::isNotBlank)?.let { backing ->
+                Text(
+                    backing,
+                    Modifier.fillMaxWidth(),
+                    color = Color.White.copy(if (active) .65f else .36f),
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = textAlign,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LyricsWaitingSlot(visible: Boolean, progress: Float, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        modifier = modifier,
+        visible = visible,
+        enter = fadeIn(tween(200, easing = WavvMotionEasing)) +
+            expandVertically(expandFrom = Alignment.Top, animationSpec = tween(300, easing = WavvMotionEasing)),
+        exit = fadeOut(tween(120, easing = WavvMotionEasing)) +
+            shrinkVertically(shrinkTowards = Alignment.Top, animationSpec = tween(220, easing = WavvMotionEasing)),
+    ) {
+        Box(
+            Modifier.fillMaxWidth().height(48.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            LyricsWaitingIndicator(progress = progress)
+        }
+    }
+}
+
+@Composable
+private fun LyricsWaitingIndicator(progress: Float, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.height(36.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(3) { index ->
+            val dotProgress by animateFloatAsState(
+                targetValue = (progress * 3f - index).coerceIn(0f, 1f),
+                animationSpec = tween(durationMillis = 240, easing = LinearEasing),
+                label = "lyrics wait dot progress $index",
+            )
+            Box(
+                Modifier.size(12.dp)
+                    .graphicsLayer { alpha = .34f + .66f * dotProgress }
+                    .background(Color(0xFFF5F4F2), CircleShape),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsLoadingState() {
+    val transition = rememberInfiniteTransition(label = "lyrics loading shimmer")
+    val shimmer by transition.animateFloat(
+        initialValue = .22f,
+        targetValue = .62f,
+        animationSpec = infiniteRepeatable(tween(900, easing = WavvEaseInOut), RepeatMode.Reverse),
+        label = "lyrics loading shimmer alpha",
+    )
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 28.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        repeat(3) { index ->
+            Box(
+                Modifier.padding(vertical = 9.dp).fillMaxWidth(if (index == 1) .78f else .56f).height(if (index == 1) 17.dp else 13.dp)
+                    .clip(CircleShape).background(Color.White.copy(if (index == 1) shimmer else shimmer * .6f)),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsOptionsMenu(
+    song: Song,
+    visible: Boolean,
+    onImport: () -> Unit,
+    onAdjustOffset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var popupMounted by remember { mutableStateOf(visible) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            popupMounted = true
+        } else if (popupMounted) {
+            delay(220)
+            popupMounted = false
+        }
+    }
+
+    if (popupMounted) {
+        // Keep the menu fully above the 3-dot control so the popup never covers its anchor.
+        val popupOffset = with(LocalDensity.current) { IntOffset(0, (-58).dp.roundToPx()) }
+        Popup(
+            alignment = Alignment.BottomStart,
+            offset = popupOffset,
+            onDismissRequest = onDismiss,
+            properties = PopupProperties(focusable = true),
+        ) {
+            AnimatedVisibility(
+                visible = visible,
+                enter = fadeIn(tween(150)) + scaleIn(tween(190, easing = WavvMotionEasing), initialScale = .94f) +
+                    slideInVertically(tween(190, easing = WavvMotionEasing)) { it / 7 },
+                exit = fadeOut(tween(120)) + scaleOut(tween(150, easing = WavvMotionEasing), targetScale = .96f) +
+                    slideOutVertically(tween(150, easing = WavvMotionEasing)) { it / 9 },
+            ) {
+                val shape = RoundedCornerShape(18.dp)
+                Box(Modifier.widthIn(min = 220.dp, max = 260.dp).shadow(20.dp, shape).clip(shape)) {
+                    AlbumArt(song, Modifier.matchParentSize().scale(1.18f).blur(26.dp), null, 0.dp)
+                    Box(
+                        Modifier.matchParentSize().background(
+                            Brush.verticalGradient(listOf(Color(0xEB121316), Color(0xF2090A0C))),
+                        ),
+                    )
+                    Column(Modifier.padding(vertical = 5.dp)) {
+                        LyricsMenuItem(Icons.Default.Folder, "Import lyrics", onClick = onImport)
+                        LyricsMenuItem(Icons.Default.Tune, "Lyrics offset", onClick = onAdjustOffset)
+                        LyricsMenuItem(Icons.Default.MusicNote, "Lyrics provider", enabled = false, onClick = {})
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LyricsMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().height(46.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = Color.White.copy(if (enabled) .78f else .32f), modifier = Modifier.size(18.dp))
+        Text(label, color = Color.White.copy(if (enabled) .91f else .42f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun LyricsOffsetDialog(offsetMs: Long, onOffsetChange: (Long) -> Unit, onDismiss: () -> Unit) {
+    val density = LocalDensity.current
+    val dialogWindow = (LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+    SideEffect {
+        dialogWindow?.setDimAmount(.42f)
+        if (Build.VERSION.SDK_INT >= 31) dialogWindow?.setBackgroundBlurRadius(with(density) { 24.dp.roundToPx() })
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().clickable { onDismiss() })
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
+                    .clip(RoundedCornerShape(topStart = 34.dp, topEnd = 34.dp))
+                    .background(Color(0xFF121212))
+                    .clickable(interactionSource = null, indication = null, onClick = {})
+                    .padding(start = 28.dp, end = 28.dp, top = 24.dp, bottom = 20.dp),
+            ) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.width(88.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(.28f)))
+                }
+                Text(
+                    "Lyrics offset",
+                    Modifier.padding(top = 34.dp),
+                    color = Color(0xFFF5F4F2),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Positive values show lyrics later",
+                    Modifier.padding(top = 4.dp),
+                    color = Color.White.copy(.56f),
+                    fontSize = 17.sp,
+                )
+                Column(
+                    Modifier.fillMaxWidth().padding(top = 28.dp)
+                        .clip(RoundedCornerShape(30.dp))
+                        .background(Color.White.copy(.075f))
+                        .padding(horizontal = 20.dp, vertical = 26.dp),
+                ) {
+                    Text(
+                        String.format(Locale.US, "%+.1f s", offsetMs / 1_000f),
+                        Modifier.fillMaxWidth().padding(bottom = 26.dp),
+                        color = Color(0xFFF5F4F2),
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { onOffsetChange((offsetMs - 500L).coerceAtLeast(-30_000L)) },
+                            modifier = Modifier.size(44.dp),
+                        ) {
+                            Text("−", color = Color.White.copy(.88f), fontSize = 32.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Slider(
+                            modifier = Modifier.weight(1f),
+                            value = offsetMs.toFloat(),
+                            onValueChange = { onOffsetChange(it.roundToInt().toLong()) },
+                            valueRange = -30_000f..30_000f,
+                            steps = 119,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFFF5F4F2),
+                                activeTrackColor = Color(0xFFF5F4F2),
+                                inactiveTrackColor = Color.White.copy(.24f),
+                            ),
+                        )
+                        IconButton(
+                            onClick = { onOffsetChange((offsetMs + 500L).coerceAtMost(30_000L)) },
+                            modifier = Modifier.size(44.dp),
+                        ) {
+                            Text("+", color = Color.White.copy(.88f), fontSize = 30.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = { onOffsetChange(0L) },
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 46.dp),
+                ) {
+                    Text("Reset", color = Color.White.copy(.54f), fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                }
+            }
         }
     }
 }
