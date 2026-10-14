@@ -1,7 +1,13 @@
 package com.wavv.app
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.DocumentsContract.Document
 import android.util.Log
 import android.util.Xml
 import androidx.annotation.OptIn
@@ -14,11 +20,24 @@ import androidx.media3.extractor.metadata.id3.TextInformationFrame
 import androidx.media3.extractor.metadata.vorbis.VorbisComment
 import androidx.media3.inspector.MetadataRetriever
 import java.io.StringReader
+import java.io.File
+import java.text.Normalizer
 import java.nio.charset.Charset
+import java.util.ArrayDeque
+import java.util.Locale
 import org.xmlpull.v1.XmlPullParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.ensureActive
 
 internal data class LyricWord(val timeMs: Long?, val text: String)
 
@@ -69,8 +88,25 @@ internal suspend fun loadEmbeddedLyrics(context: Context, uri: String): List<Lyr
     }
 }
 
+internal object EmbeddedLyricsCache {
+    private val cache = object : LinkedHashMap<String, List<LyricLine>>(16, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<LyricLine>>?): Boolean = size > 16
+    }
+    private val mutex = Mutex()
+
+    suspend fun load(context: Context, uri: String): List<LyricLine> = mutex.withLock {
+        synchronized(cache) { cache[uri] } ?: loadEmbeddedLyrics(context, uri).also { lines ->
+            synchronized(cache) { cache[uri] = lines }
+        }
+    }
+}
+
 internal suspend fun loadLyricsDocument(context: Context, uri: Uri): List<LyricLine> = withContext(Dispatchers.IO) {
-    val input = context.contentResolver.openInputStream(uri) ?: return@withContext emptyList()
+    val input = if (uri.scheme == "file") {
+        uri.path?.let(::File)?.inputStream()
+    } else {
+        context.contentResolver.openInputStream(uri)
+    } ?: return@withContext emptyList()
     val text = input.bufferedReader(Charsets.UTF_8).use { reader ->
         buildString {
             val buffer = CharArray(8_192)
@@ -82,6 +118,293 @@ internal suspend fun loadLyricsDocument(context: Context, uri: Uri): List<LyricL
         }
     }.trimStart('\uFEFF')
     parseTtmlLyrics(text) ?: parseLyrics(listOf(text))
+}
+
+internal object LyricsSourcePreferences {
+    private const val PREFERENCES = "lyrics_source_preferences"
+
+    fun useEmbeddedLyrics(context: Context, songId: Long): Boolean =
+        preferences(context).getBoolean("embedded_$songId", true)
+
+    fun setUseEmbeddedLyrics(context: Context, songId: Long, enabled: Boolean) {
+        preferences(context).edit().putBoolean("embedded_$songId", enabled).apply()
+    }
+
+    fun importedDocumentUri(context: Context, songId: Long): Uri? =
+        preferences(context).getString("document_$songId", null)
+            ?.let { stored -> runCatching { Uri.parse(stored) }.getOrNull() }
+
+    fun rememberImportedDocument(context: Context, songId: Long, uri: Uri) {
+        preferences(context).edit().putString("document_$songId", uri.toString()).apply()
+    }
+
+    fun clearImportedDocument(context: Context, songId: Long) {
+        preferences(context).edit().remove("document_$songId").apply()
+    }
+
+    fun automaticDocumentUri(context: Context, songId: Long): Uri? =
+        preferences(context).getString("automatic_document_$songId", null)
+            ?.let { stored -> runCatching { Uri.parse(stored) }.getOrNull() }
+
+    fun rememberAutomaticDocument(context: Context, songId: Long, uri: Uri) {
+        preferences(context).edit().putString("automatic_document_$songId", uri.toString()).apply()
+    }
+
+    fun clearAutomaticDocument(context: Context, songId: Long) {
+        preferences(context).edit().remove("automatic_document_$songId").apply()
+    }
+
+    private fun preferences(context: Context) =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+}
+
+internal object AutomaticLyricsSearchPreference {
+    private const val PREFERENCES = "lyrics_source_preferences"
+    private const val ENABLED = "automatically_check_for_lyrics"
+    private val enabledState = MutableStateFlow(false)
+    @Volatile private var initialized = false
+
+    fun state(context: Context): kotlinx.coroutines.flow.StateFlow<Boolean> {
+        if (!initialized) synchronized(this) {
+            if (!initialized) {
+                enabledState.value = context.applicationContext
+                    .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+                    .getBoolean(ENABLED, false)
+                initialized = true
+            }
+        }
+        return enabledState
+    }
+
+    fun isEnabled(context: Context): Boolean = state(context).value
+
+    fun setEnabled(context: Context, enabled: Boolean) {
+        context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putBoolean(ENABLED, enabled).apply()
+        state(context)
+        enabledState.value = enabled
+    }
+}
+
+/** Searches only an explicitly accessible lyrics scope, and only once per track per day. */
+internal object AutomaticLyricsFinder {
+    private const val CHECK_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1_000L
+    private const val MAX_DOCUMENTS = 12_000
+    private const val MAX_DEPTH = 24
+    private const val MAX_DOWNLOADS_FILES = 12_000
+    private const val MAX_DOWNLOADS_DEPTH = 16
+    private val scanMutex = Mutex()
+    private val automaticUris = MutableStateFlow<Map<Long, String?>>(emptyMap())
+
+    fun uriFlow(songId: Long): Flow<String?> = automaticUris
+        .map { it[songId] }
+        .distinctUntilChanged()
+
+    suspend fun findIfNeeded(context: Context, song: Song, source: LibrarySource?) = scanMutex.withLock {
+        val appContext = context.applicationContext
+        if (!AutomaticLyricsSearchPreference.isEnabled(appContext)) return@withLock
+        val manuallyAttachedUri = LyricsSourcePreferences.importedDocumentUri(appContext, song.id)
+        if (manuallyAttachedUri != null) {
+            val manualLyrics = try {
+                loadLyricsDocument(appContext, manuallyAttachedUri)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (manualLyrics.isNotEmpty()) return@withLock
+            LyricsSourcePreferences.clearImportedDocument(appContext, song.id)
+        }
+
+        val cachedUri = LyricsSourcePreferences.automaticDocumentUri(appContext, song.id)
+        if (cachedUri != null) {
+            val cachedLyrics = try {
+                loadLyricsDocument(appContext, cachedUri)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (cachedLyrics.isNotEmpty()) {
+                publish(song.id, cachedUri)
+                return@withLock
+            }
+            LyricsSourcePreferences.clearAutomaticDocument(appContext, song.id)
+            publish(song.id, null)
+            appContext.getSharedPreferences("lyrics_source_preferences", Context.MODE_PRIVATE)
+                .edit().remove("automatic_checked_${song.id}").apply()
+        }
+
+        val preferences = appContext.getSharedPreferences("lyrics_source_preferences", Context.MODE_PRIVATE)
+        val roots = accessibleLyricsRoots(appContext, source)
+        val scopeKey = roots.joinToString("|") { it.cacheKey }
+        val checkedAt = preferences.getLong("automatic_checked_${song.id}", 0L)
+        val previousScope = preferences.getString("automatic_scope_${song.id}", null)
+        if (previousScope == scopeKey && System.currentTimeMillis() - checkedAt < CHECK_RETRY_INTERVAL_MS) return@withLock
+
+        val embedded = try {
+            EmbeddedLyricsCache.load(appContext, song.uri)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (embedded.isNotEmpty()) {
+            preferences.edit()
+                .putLong("automatic_checked_${song.id}", System.currentTimeMillis())
+                .putString("automatic_scope_${song.id}", scopeKey)
+                .apply()
+            return@withLock
+        }
+
+        val match = withContext(Dispatchers.IO) { findMatchingDocument(appContext, roots, song) }
+        preferences.edit()
+            .putLong("automatic_checked_${song.id}", System.currentTimeMillis())
+            .putString("automatic_scope_${song.id}", scopeKey)
+            .apply()
+        if (match != null) {
+            LyricsSourcePreferences.rememberAutomaticDocument(appContext, song.id, match)
+            publish(song.id, match)
+        }
+    }
+
+    private fun publish(songId: Long, uri: Uri?) {
+        automaticUris.value = automaticUris.value + (songId to uri?.toString())
+    }
+
+    private fun accessibleLyricsRoots(context: Context, source: LibrarySource?): List<AutoLyricsRoot> = when (source) {
+        is LibrarySource.Folder -> listOf(AutoLyricsRoot.Tree(source.uri))
+        is LibrarySource.Folders -> source.uris.distinct().map(AutoLyricsRoot::Tree)
+        LibrarySource.AllDevice -> if (hasWholeStorageAccess(context)) {
+            @Suppress("DEPRECATION")
+            val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            listOf(AutoLyricsRoot.Filesystem(downloads))
+        } else emptyList()
+        is LibrarySource.Files, null -> emptyList()
+    }
+
+    private fun hasWholeStorageAccess(context: Context): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> Environment.isExternalStorageManager()
+        Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> Environment.isExternalStorageLegacy() &&
+            context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
+            context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        else -> true
+    }
+
+    private suspend fun findMatchingDocument(context: Context, roots: List<AutoLyricsRoot>, song: Song): Uri? {
+        if (roots.isEmpty()) return null
+        val title = normalizedLyricsName(song.title)
+        if (title.isBlank()) return null
+        val artistTokens = song.artist.split(Regex("(?i)\\b(?:feat(?:uring)?|ft|with)\\b|[,;&]"))
+            .map(::normalizedLyricsName)
+            .filter { it.length >= 3 }
+        val matches = mutableListOf<MatchedLyrics>()
+        var visitedDocuments = 0
+
+        fun consider(name: String, uri: Uri) {
+            val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (extension != "ttml" && extension != "lrc") return
+            val base = normalizedLyricsName(name.substringBeforeLast('.', name))
+            if (base.isBlank() || !base.contains(title)) return
+            val includesArtist = artistTokens.any(base::contains)
+            if (base != title && !includesArtist) return
+            matches += MatchedLyrics(
+                uri = uri,
+                isTtml = extension == "ttml",
+                matchQuality = if (includesArtist) 2 else 1,
+            )
+        }
+
+        roots.forEach { root ->
+            coroutineContext.ensureActive()
+            when (root) {
+                is AutoLyricsRoot.Tree -> {
+                    val treeUri = runCatching { Uri.parse(root.uri) }.getOrNull() ?: return@forEach
+                    val rootDocumentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return@forEach
+                    val pending = ArrayDeque<Pair<String, Int>>()
+                    pending.add(rootDocumentId to 0)
+                    val visitedIds = mutableSetOf<String>()
+                    while (pending.isNotEmpty() && visitedDocuments < MAX_DOCUMENTS) {
+                        coroutineContext.ensureActive()
+                        val (parentId, depth) = pending.removeFirst()
+                        if (!visitedIds.add(parentId)) continue
+                        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+                        val cursor = try {
+                            context.contentResolver.query(
+                                childrenUri,
+                                arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE),
+                                null,
+                                null,
+                                null,
+                            )
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            null
+                        } ?: continue
+                        cursor.use {
+                            val idColumn = cursor.getColumnIndex(Document.COLUMN_DOCUMENT_ID)
+                            val nameColumn = cursor.getColumnIndex(Document.COLUMN_DISPLAY_NAME)
+                            val mimeColumn = cursor.getColumnIndex(Document.COLUMN_MIME_TYPE)
+                            while (cursor.moveToNext() && visitedDocuments < MAX_DOCUMENTS) {
+                                coroutineContext.ensureActive()
+                                visitedDocuments += 1
+                                val id = cursor.getString(idColumn) ?: continue
+                                val name = cursor.getString(nameColumn).orEmpty()
+                                val mime = cursor.getString(mimeColumn).orEmpty()
+                                if (mime == Document.MIME_TYPE_DIR) {
+                                    if (depth < MAX_DEPTH) pending.add(id to depth + 1)
+                                } else if (name.endsWith(".ttml", true) || name.endsWith(".lrc", true)) {
+                                    consider(name, DocumentsContract.buildDocumentUriUsingTree(treeUri, id))
+                                }
+                            }
+                        }
+                    }
+                }
+                is AutoLyricsRoot.Filesystem -> {
+                    val downloads = root.file
+                    val canonicalRoot = runCatching { downloads.canonicalFile }.getOrNull() ?: return@forEach
+                    val pending = ArrayDeque<Pair<File, Int>>()
+                    pending.add(downloads to 0)
+                    while (pending.isNotEmpty() && visitedDocuments < MAX_DOWNLOADS_FILES) {
+                        coroutineContext.ensureActive()
+                        val (directory, depth) = pending.removeFirst()
+                        val files = runCatching { directory.listFiles()?.sortedBy { it.name.lowercase(Locale.ROOT) } }.getOrNull().orEmpty()
+                        for (file in files) {
+                            coroutineContext.ensureActive()
+                            visitedDocuments += 1
+                            if (visitedDocuments >= MAX_DOWNLOADS_FILES) break
+                            val canonical = runCatching { file.canonicalFile }.getOrNull() ?: continue
+                            if (!canonical.toPath().startsWith(canonicalRoot.toPath())) continue
+                            if (canonical.isDirectory) {
+                                if (depth < MAX_DOWNLOADS_DEPTH && !canonical.name.startsWith('.')) pending.add(canonical to depth + 1)
+                            } else if (canonical.name.endsWith(".ttml", true) || canonical.name.endsWith(".lrc", true)) {
+                                consider(canonical.name, Uri.fromFile(canonical))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return matches.maxWithOrNull(
+            compareBy<MatchedLyrics> { if (it.isTtml) 1 else 0 }
+                .thenBy(MatchedLyrics::matchQuality),
+        )?.uri
+    }
+
+    private fun normalizedLyricsName(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
+        .filterNot { Character.getType(it) == Character.NON_SPACING_MARK.toInt() }
+        .lowercase(Locale.ROOT)
+        .filter(Char::isLetterOrDigit)
+
+    private sealed interface AutoLyricsRoot {
+        val cacheKey: String
+        data class Tree(val uri: String) : AutoLyricsRoot { override val cacheKey = "tree:$uri" }
+        data class Filesystem(val file: File) : AutoLyricsRoot { override val cacheKey = "downloads:${file.absolutePath}" }
+    }
+
+    private data class MatchedLyrics(val uri: Uri, val isTtml: Boolean, val matchQuality: Int)
 }
 
 private data class TtmlTimingFrame(
@@ -219,7 +542,12 @@ private fun parseTtmlLyrics(source: String): List<LyricLine>? {
                                 )
                             } else if (frame.name == "span" && paragraph != null) {
                                 val role = parser.attributeValue("role")?.substringAfterLast(':')?.lowercase().orEmpty()
-                                val background = isTtmlBackgroundRole(role)
+                                // TTML providers wrap timed backing-vocal spans in an untimed
+                                // role-marked span (for example <span role="x-bg"><span
+                                // begin="...">(ad-lib)</span></span>). Inherit that role
+                                // so the timed words become a separate, synchronized vocal row.
+                                val background = isTtmlBackgroundRole(role) ||
+                                    paragraph.spans.lastOrNull()?.isBackground == true
                                 val isSequentialWordCue = parent?.timeContainer == "seq" &&
                                     (parent.sequentialCursorMs != null || isFirstSequentialChild)
                                 val wordTime = frame.beginMs.takeIf {
@@ -316,6 +644,7 @@ private fun parseTtmlLyrics(source: String): List<LyricLine>? {
         }
         if (!isTtml) null else {
             val withBackgroundCues = attachStandaloneBackgroundCues(lines)
+                .map(::removeTtmlBackgroundBrackets)
             val ordered = if (withBackgroundCues.all { it.timeMs != null }) {
                 withBackgroundCues.sortedBy { it.timeMs }
             } else {
@@ -555,6 +884,64 @@ private fun trimTimedWords(words: List<LyricWord>): List<LyricWord> {
         if (lastText.isEmpty()) result.removeAt(lastIndex) else result[lastIndex] = result[lastIndex].copy(text = lastText)
     }
     return result
+}
+
+/** Removes only the enclosing punctuation used to mark TTML backing-vocal cues. */
+private fun removeTtmlBackgroundBrackets(line: LyricLine): LyricLine {
+    fun strip(text: String, words: List<LyricWord>): Pair<String, List<LyricWord>> {
+        val trimmed = text.trim()
+        val opening = trimmed.firstOrNull()
+        val closing = when (opening) {
+            '(' -> ')'
+            '[' -> ']'
+            '{' -> '}'
+            else -> null
+        }
+        if (closing == null || trimmed.lastOrNull() != closing || trimmed.length < 2) {
+            return text to words
+        }
+
+        val cleanedWords = words.toMutableList()
+        val firstIndex = cleanedWords.indexOfFirst { it.text.isNotBlank() }
+        val lastIndex = cleanedWords.indexOfLast { it.text.isNotBlank() }
+        if (firstIndex >= 0) {
+            val firstText = cleanedWords[firstIndex].text
+            val firstCharacter = firstText.indexOfFirst { !it.isWhitespace() }
+            if (firstCharacter >= 0 && firstText[firstCharacter] == opening) {
+                cleanedWords[firstIndex] = cleanedWords[firstIndex].copy(
+                    text = firstText.removeRange(firstCharacter, firstCharacter + 1),
+                )
+            }
+        }
+        if (lastIndex >= 0) {
+            val lastText = cleanedWords[lastIndex].text
+            val lastCharacter = lastText.indexOfLast { !it.isWhitespace() }
+            if (lastCharacter >= 0 && lastText[lastCharacter] == closing) {
+                cleanedWords[lastIndex] = cleanedWords[lastIndex].copy(
+                    text = lastText.removeRange(lastCharacter, lastCharacter + 1),
+                )
+            }
+        }
+        return trimmed.substring(1, trimmed.lastIndex).trim() to cleanedWords
+    }
+
+    if (line.isBackgroundCue) {
+        val (text, words) = strip(line.text, line.words)
+        return line.copy(text = text, words = words)
+    }
+
+    val (backgroundText, backgroundWords) = line.backgroundText?.let { text ->
+        strip(text, line.backgroundWords)
+    } ?: (null to line.backgroundWords)
+    val backgroundCues = line.backgroundCues.map { cue ->
+        val (text, words) = strip(cue.text, cue.words)
+        cue.copy(text = text, words = words)
+    }
+    return line.copy(
+        backgroundText = backgroundText,
+        backgroundWords = backgroundWords,
+        backgroundCues = backgroundCues,
+    )
 }
 
 private fun ttmlFrameRate(parser: XmlPullParser): Double {

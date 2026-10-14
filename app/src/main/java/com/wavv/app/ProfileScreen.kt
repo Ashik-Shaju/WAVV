@@ -80,7 +80,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.max
 import java.util.Locale
 
-internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Equalizer, Standby }
+internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Equalizer, Standby, AutomaticLyrics }
 
 internal data class ProfileSetting(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -125,6 +125,7 @@ internal fun YouScreen(
     activeTrackId: Long?,
 ) {
     val context = LocalContext.current
+    val automaticLyricsSearchEnabled by AutomaticLyricsSearchPreference.state(context).collectAsStateWithLifecycle()
     val trackCount = songs.size
     val artistCount = songs.asSequence()
         .map { it.artist.trim() }
@@ -171,6 +172,13 @@ internal fun YouScreen(
         ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", uhqPlaybackLabel, "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
         ProfileSetting(Icons.Default.Equalizer, "Equalizer", equalizerPlaybackLabel, "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
         ProfileSetting(Icons.Default.LibraryMusic, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
+        ProfileSetting(
+            Icons.Default.LibraryMusic,
+            "Automatically check for lyrics",
+            if (automaticLyricsSearchEnabled) "On" else "Off",
+            "When a track starts playing without embedded lyrics, look for a matching .ttml or .lrc file. Wavv searches selected music folders, or Downloads only when Android grants all-files access.",
+            ProfileSettingContent.AutomaticLyrics,
+        ),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
         ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. Open Android app settings to manage permissions. No in-app support contact is configured."),
@@ -230,6 +238,7 @@ internal fun YouScreen(
                 ProfileSettingContent.UHQ -> uhqPlaybackLabel
                 ProfileSettingContent.Equalizer -> equalizerPlaybackLabel
                 ProfileSettingContent.Standby -> if (standbyEnabledState) "On" else "Off"
+                ProfileSettingContent.AutomaticLyrics -> if (automaticLyricsSearchEnabled) "On" else "Off"
                 else -> setting.value
             }
             val sheetHeight = when (setting.content) {
@@ -411,6 +420,27 @@ internal fun YouScreen(
                                 fontSize = 13.sp,
                                 lineHeight = 18.sp,
                                 modifier = Modifier.padding(horizontal = 2.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                    ProfileSettingContent.AutomaticLyrics -> {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Automatically check for lyrics", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "Checks only when a track starts playing and has no embedded lyrics. Matching files are remembered for that track; TTML is preferred over LRC.",
+                                    color = Color.White.copy(.52f),
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp,
+                                )
+                            }
+                            Switch(
+                                checked = automaticLyricsSearchEnabled,
+                                onCheckedChange = { enabled -> AutomaticLyricsSearchPreference.setEnabled(context, enabled) },
                             )
                         }
                     }

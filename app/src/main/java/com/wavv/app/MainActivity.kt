@@ -101,6 +101,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
@@ -654,6 +655,16 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
     val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
     val source by libraryViewModel.source.collectAsStateWithLifecycle()
     val playbackState by playbackController.state.collectAsStateWithLifecycle()
+    val automaticLyricsSearchEnabled by AutomaticLyricsSearchPreference.state(context).collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var lyricsSearchRefreshToken by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) lyricsSearchRefreshToken += 1
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val currentSongs = (libraryState as? LibraryUiState.Ready)?.songs.orEmpty()
     val currentRecommendations = (libraryState as? LibraryUiState.Ready)?.personalizedRecommendations
     val showUnavailable: (String) -> Unit = { message -> Toast.makeText(context, message, Toast.LENGTH_SHORT).show() }
@@ -668,6 +679,13 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
 
     LaunchedEffect(currentRecommendations, playbackState.queue.map(Song::id)) {
         currentRecommendations?.let(playbackController::updateAutoplayRecommendations)
+    }
+
+    LaunchedEffect(playbackState.song?.id, playbackState.isPlaying, source, automaticLyricsSearchEnabled, lyricsSearchRefreshToken) {
+        val song = playbackState.song
+        if (automaticLyricsSearchEnabled && playbackState.isPlaying && song != null) {
+            AutomaticLyricsFinder.findIfNeeded(context.applicationContext, song, source)
+        }
     }
 
     LaunchedEffect(source, hasPermission) {
@@ -2988,12 +3006,10 @@ private fun FullPlayer(
         }
         AnimatedVisibility(
             visible = showLyrics,
-            enter = fadeIn(tween(280, easing = WavvMotionEasing)) +
-                slideInVertically(tween(420, easing = WavvMotionEasing)) { it / 9 } +
-                scaleIn(tween(420, easing = WavvMotionEasing), initialScale = .975f),
+            enter = fadeIn(tween(240, easing = WavvMotionEasing)) +
+                slideInVertically(tween(340, easing = WavvMotionEasing)) { it / 16 },
             exit = fadeOut(tween(180, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) +
-                slideOutVertically(tween(360, easing = WavvMotionEasing)) { it / 7 } +
-                scaleOut(tween(360, easing = WavvMotionEasing), targetScale = .985f),
+                slideOutVertically(tween(280, easing = WavvMotionEasing)) { it / 18 },
         ) {
             LyricsPanel(
                 song = song,
@@ -4851,14 +4867,57 @@ private fun LyricsPanel(
     val embeddedLyrics by produceState<List<LyricLine>?>(initialValue = null, song.uri) {
         value = null
         value = try {
-            loadEmbeddedLyrics(context.applicationContext, song.uri)
+            EmbeddedLyricsCache.load(context.applicationContext, song.uri)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             emptyList()
         }
     }
-    val sourceLyrics = importedLyrics ?: embeddedLyrics
+    val appContext = remember(context) { context.applicationContext }
+    var useEmbeddedLyrics by remember(song.id) {
+        mutableStateOf(LyricsSourcePreferences.useEmbeddedLyrics(appContext, song.id))
+    }
+    val rememberedLyricsUri = remember(song.id) {
+        LyricsSourcePreferences.importedDocumentUri(appContext, song.id)?.toString()
+    }
+    val automaticLyricsUri by produceState(
+        initialValue = LyricsSourcePreferences.automaticDocumentUri(appContext, song.id)?.toString(),
+        song.id,
+    ) {
+        AutomaticLyricsFinder.uriFlow(song.id).collect { uriString ->
+            value = uriString ?: LyricsSourcePreferences.automaticDocumentUri(appContext, song.id)?.toString()
+        }
+    }
+    val selectedFileLyricsUri = rememberedLyricsUri ?: automaticLyricsUri
+    val rememberedFileLyrics by produceState<List<LyricLine>?>(
+        initialValue = if (selectedFileLyricsUri == null) emptyList() else null,
+        song.id,
+        song.uri,
+        selectedFileLyricsUri,
+        importedLyrics != null,
+    ) {
+        if (selectedFileLyricsUri.isNullOrBlank() || importedLyrics != null) {
+            value = emptyList()
+        } else {
+            val savedFileLyrics = runCatching {
+                loadLyricsDocument(appContext, Uri.parse(selectedFileLyricsUri))
+            }.getOrNull().orEmpty()
+            value = savedFileLyrics.takeIf { it.isNotEmpty() }
+                ?: runCatching { EmbeddedLyricsCache.load(appContext, song.uri) }.getOrDefault(emptyList())
+        }
+    }
+    val sourceLyrics = when {
+        useEmbeddedLyrics && !embeddedLyrics.isNullOrEmpty() -> embeddedLyrics
+        importedLyrics != null -> importedLyrics
+        selectedFileLyricsUri != null -> rememberedFileLyrics
+        else -> embeddedLyrics
+    }
+    val embeddedLyricsInUse = useEmbeddedLyrics && !embeddedLyrics.isNullOrEmpty()
+    val importedLyricsInUse = !embeddedLyricsInUse && (
+        importedLyrics != null ||
+            selectedFileLyricsUri != null && !rememberedFileLyrics.isNullOrEmpty()
+        )
     val lyricLines = remember(sourceLyrics, lyricOffsetMs) {
         sourceLyrics?.map { line ->
             line.copy(
@@ -4899,6 +4958,18 @@ private fun LyricsPanel(
                 val loaded = runCatching { loadLyricsDocument(context.applicationContext, uri) }.getOrDefault(emptyList())
                 if (loaded.isNotEmpty()) {
                     onImportedLyrics(loaded)
+                    val canPersistUriPermission = runCatching {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    }.isSuccess
+                    LyricsSourcePreferences.clearImportedDocument(appContext, song.id)
+                    if (canPersistUriPermission) {
+                        LyricsSourcePreferences.rememberImportedDocument(appContext, song.id, uri)
+                    }
+                    useEmbeddedLyrics = false
+                    LyricsSourcePreferences.setUseEmbeddedLyrics(appContext, song.id, false)
                     onOffsetChange(0L)
                     importError = false
                 } else {
@@ -4986,7 +5057,7 @@ private fun LyricsPanel(
                             onClick = onLike,
                             modifier = Modifier.clip(CircleShape).background(Color.White.copy(.12f)),
                             buttonSize = 46.dp,
-                            iconSize = 34.dp,
+                            iconSize = 24.dp,
                             showIconSurface = false,
                         )
                         IconButton(
@@ -5033,7 +5104,7 @@ private fun LyricsPanel(
                             modifier = Modifier.size(46.dp).clip(CircleShape)
                                 .background(Color.White.copy(if (showOptions) .16f else .12f)),
                         ) {
-                            Icon(Icons.Default.Tune, contentDescription = "Lyrics options", tint = Color.White.copy(.87f), modifier = Modifier.size(24.dp))
+                            LyricsSettingsIcon(24.dp)
                         }
                         if (isImporting) {
                             Text("Reading lyrics…", Modifier.padding(start = 8.dp), color = Color.White.copy(.55f), fontSize = 12.sp)
@@ -5054,9 +5125,17 @@ private fun LyricsPanel(
                     LyricsOptionsMenu(
                         song = song,
                         visible = showOptions,
+                        useEmbeddedLyrics = useEmbeddedLyrics,
+                        embeddedLyricsInUse = embeddedLyricsInUse,
+                        importedLyricsInUse = importedLyricsInUse,
                         onImport = {
                             showOptions = false
                             filePicker.launch(arrayOf("*/*"))
+                        },
+                        onToggleEmbeddedLyrics = { enabled ->
+                            useEmbeddedLyrics = enabled
+                            LyricsSourcePreferences.setUseEmbeddedLyrics(appContext, song.id, enabled)
+                            showOptions = false
                         },
                         onAdjustOffset = {
                             showOptions = false
@@ -5132,8 +5211,9 @@ private fun LyricsScrollArea(
     val currentPositionMs = scrubPosition ?: progress.positionMs
     val lyricsState = rememberLazyListState()
     val lyricsTopInsetPx = with(LocalDensity.current) { 78.dp.roundToPx() }
+    var initialLyricsPositionSet by remember(songId) { mutableStateOf(false) }
     val lyricItemPlacementSpec = remember {
-        tween<IntOffset>(durationMillis = 820, easing = WavvMotionEasing)
+        tween<IntOffset>(durationMillis = 420, easing = WavvMotionEasing)
     }
     var lastObservedPositionMs by remember(songId) { mutableStateOf(currentPositionMs) }
     var playbackReachedEnd by remember(songId) { mutableStateOf(false) }
@@ -5191,6 +5271,13 @@ private fun LyricsScrollArea(
     val waitingProgress = waitingWindow?.progressAt(currentPositionMs) ?: 0f
     val isLyricsWaiting = waitingWindow?.contains(currentPositionMs) == true
 
+    LaunchedEffect(songId, lyricLines) {
+        if (initialLyricsPositionSet || lyricLines == null) return@LaunchedEffect
+        val initialListIndex = activeLyricAnchorIndex.takeIf { it >= 0 }?.let { it * 2 + 1 } ?: 0
+        if (lyricLines.isNotEmpty()) lyricsState.scrollToItem(initialListIndex)
+        initialLyricsPositionSet = true
+    }
+
     LaunchedEffect(songId, currentPositionMs) {
         val previousPositionMs = lastObservedPositionMs
         val returnedToStart = currentPositionMs <= 1_500L &&
@@ -5216,7 +5303,8 @@ private fun LyricsScrollArea(
         }
     }
 
-    LaunchedEffect(activeLyricTime, activeLyricIndex, isScrubbing) {
+    LaunchedEffect(activeLyricTime, activeLyricIndex, isScrubbing, initialLyricsPositionSet) {
+        if (!initialLyricsPositionSet) return@LaunchedEffect
         if (activeLyricIndex >= 0) {
             // During scrubbing, jump directly so a stream of seek updates does not keep
             // cancelling and restarting list animations. Resume smooth following on release.
@@ -5225,15 +5313,25 @@ private fun LyricsScrollArea(
             } else {
                 val target = lyricsState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeLyricListIndex }
                 if (target == null) {
-                    lyricsState.animateScrollToItem(activeLyricListIndex)
+                    // Large jumps (initial entry, seek, or a lyrics-file timeline jump)
+                    // should land on the active cue directly instead of racing through rows.
+                    lyricsState.scrollToItem(activeLyricListIndex)
                 } else {
-                    // For the usual next-line transition, animate the measured distance
-                    // with a long ease-out so the lyric drifts into place instead of snapping.
+                    // Pace the scroll to the lyric interval. A fixed long animation gets
+                    // cancelled repeatedly on fast tracks and looks like a zooming list.
                     val distance = target.offset - lyricsTopInsetPx
                     if (abs(distance) > 1) {
+                        val nextCueTimeMs = nextLyricTimes.getOrNull(activeLyricIndex)
+                        val cueIntervalMs = nextCueTimeMs?.let { next ->
+                            (next - (activeLyricTime ?: next)).coerceAtLeast(0L)
+                        }
+                        val scrollDurationMs = cueIntervalMs
+                            ?.let { (it * .68f).toInt() }
+                            ?.coerceIn(160, 560)
+                            ?: 420
                         lyricsState.animateScrollBy(
                             value = distance.toFloat(),
-                            animationSpec = tween(durationMillis = 820, easing = WavvMotionEasing),
+                            animationSpec = tween(durationMillis = scrollDurationMs, easing = WavvEaseInOut),
                         )
                     }
                 }
@@ -5625,7 +5723,11 @@ private fun LyricsLoadingState() {
 private fun LyricsOptionsMenu(
     song: Song,
     visible: Boolean,
+    useEmbeddedLyrics: Boolean,
+    embeddedLyricsInUse: Boolean,
+    importedLyricsInUse: Boolean,
     onImport: () -> Unit,
+    onToggleEmbeddedLyrics: (Boolean) -> Unit,
     onAdjustOffset: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -5656,15 +5758,26 @@ private fun LyricsOptionsMenu(
                     slideOutVertically(tween(150, easing = WavvMotionEasing)) { it / 9 },
             ) {
                 val shape = RoundedCornerShape(18.dp)
-                Box(Modifier.widthIn(min = 196.dp, max = 218.dp).shadow(20.dp, shape).clip(shape)) {
+                Box(Modifier.width(IntrinsicSize.Max).widthIn(max = 204.dp).shadow(20.dp, shape).clip(shape)) {
                     AlbumArt(song, Modifier.matchParentSize().scale(1.18f).blur(26.dp), null, 0.dp)
                     Box(
                         Modifier.matchParentSize().background(
-                            Brush.verticalGradient(listOf(Color(0xEB121316), Color(0xF2090A0C))),
+                            Brush.verticalGradient(listOf(Color(0xE936383D), Color(0xF027292E))),
                         ),
                     )
                     Column(Modifier.padding(vertical = 5.dp)) {
-                        LyricsMenuItem(Icons.Default.Folder, "Import lyrics", onClick = onImport)
+                        LyricsMenuItem(
+                            Icons.Default.Folder,
+                            "Import lyrics",
+                            selected = importedLyricsInUse,
+                            onClick = onImport,
+                        )
+                        LyricsMenuItem(
+                            Icons.Default.LibraryMusic,
+                            "Embedded Lyrics",
+                            selected = embeddedLyricsInUse,
+                            onClick = { onToggleEmbeddedLyrics(!useEmbeddedLyrics) },
+                        )
                         LyricsMenuItem(Icons.Default.Tune, "Lyrics offset", onClick = onAdjustOffset)
                         LyricsMenuItem(Icons.Default.MusicNote, "Lyrics provider", enabled = false, onClick = {})
                     }
@@ -5683,6 +5796,28 @@ private fun LyricsHorizontalMoreIcon(size: Dp) {
                 color = Color.White.copy(.92f),
                 radius = radius,
                 center = Offset(this.size.width * fraction, this.size.height * .5f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsSettingsIcon(size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val centerX = this.size.width * .5f
+        val strokeWidth = this.size.minDimension * .17f
+        listOf(
+            .70f to .28f,
+            .58f to .50f,
+            .38f to .72f,
+        ).forEach { (widthFraction, yFraction) ->
+            val halfWidth = this.size.width * widthFraction * .5f
+            drawLine(
+                color = Color.White.copy(.87f),
+                start = Offset(centerX - halfWidth, this.size.height * yFraction),
+                end = Offset(centerX + halfWidth, this.size.height * yFraction),
+                strokeWidth = strokeWidth,
+                cap = androidx.compose.ui.graphics.StrokeCap.Round,
             )
         }
     }
@@ -5729,15 +5864,15 @@ private fun LyricsTrackActionsMenu(
             ) {
                 val shape = RoundedCornerShape(19.dp)
                 Box(
-                    Modifier.widthIn(min = 208.dp, max = 232.dp)
+                    Modifier.width(IntrinsicSize.Max).widthIn(max = 210.dp)
                         .shadow(22.dp, shape)
                         .clip(shape)
-                        .background(Color(0xE8111215))
-                        .border(1.dp, Color.White.copy(.045f), shape),
+                        .background(Color(0xEA292B30))
+                        .border(1.dp, Color.White.copy(.075f), shape),
                 ) {
                     AlbumArt(song, Modifier.matchParentSize().scale(1.16f).blur(25.dp), null, 0.dp)
-                    Box(Modifier.matchParentSize().background(Color(0xE6090A0C)))
-                    Column(Modifier.padding(vertical = 5.dp)) {
+                    Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color(0xE934363B), Color(0xED24262B)))))
+                    Column(Modifier.width(IntrinsicSize.Max).padding(vertical = 5.dp)) {
                         LyricsMenuItem(Icons.Default.SkipNext, "Play next", onClick = onPlayNext)
                         LyricsMenuItem(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue", onClick = onAddToQueue)
                         LyricsMenuItem(Icons.Default.Add, "Add to playlist", onClick = onAddToPlaylist)
@@ -5762,6 +5897,7 @@ private fun LyricsMenuItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     enabled: Boolean = true,
+    selected: Boolean = false,
     onClick: () -> Unit,
 ) {
     Row(
@@ -5770,7 +5906,23 @@ private fun LyricsMenuItem(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(icon, contentDescription = null, tint = Color.White.copy(if (enabled) .78f else .32f), modifier = Modifier.size(18.dp))
-        Text(label, color = Color.White.copy(if (enabled) .91f else .42f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text(
+            label,
+            Modifier.weight(1f),
+            color = Color.White.copy(if (enabled) .91f else .42f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (selected) {
+            Box(
+                Modifier.padding(start = 8.dp).size(7.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFF2F0EC)),
+            )
+        }
     }
 }
 
