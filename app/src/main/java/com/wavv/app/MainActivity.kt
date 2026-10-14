@@ -743,6 +743,12 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                         if (result == QueueActionResult.Added) libraryViewModel.recordQueueAction(it.id, "autoplay_queue")
                         reportQueueAction(result, showUnavailable)
                     },
+                    onMoveAutoplayToQueue = { song, index ->
+                        val result = playbackController.moveAutoplayToQueue(song, index)
+                        if (result == QueueActionResult.Added) libraryViewModel.recordQueueAction(song.id, "autoplay_queue_reorder")
+                        reportQueueAction(result, showUnavailable)
+                        result
+                    },
                     onRemoveAutoplaySong = playbackController::removeAutoplaySong,
                     onMoveAutoplayItem = playbackController::moveAutoplayItem,
                     onSetAutoplayEnabled = playbackController::setAutoplayEnabled,
@@ -831,6 +837,7 @@ internal data class WavvContentActions(
     val onPlayAutoplaySong: (Song) -> Unit,
     val onPlayNextFromAutoplay: (Song) -> Unit,
     val onAddAutoplayToQueue: (Song) -> Unit,
+    val onMoveAutoplayToQueue: (Song, Int) -> QueueActionResult,
     val onRemoveAutoplaySong: (Song) -> Unit,
     val onMoveAutoplayItem: (Int, Int) -> Unit,
     val onSetAutoplayEnabled: (Boolean) -> Unit,
@@ -891,6 +898,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onPlayAutoplaySong = actions.onPlayAutoplaySong
     val onPlayNextFromAutoplay = actions.onPlayNextFromAutoplay
     val onAddAutoplayToQueue = actions.onAddAutoplayToQueue
+    val onMoveAutoplayToQueue = actions.onMoveAutoplayToQueue
     val onRemoveAutoplaySong = actions.onRemoveAutoplaySong
     val onMoveAutoplayItem = actions.onMoveAutoplayItem
     val onSetAutoplayEnabled = actions.onSetAutoplayEnabled
@@ -1550,6 +1558,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onPlayAutoplaySong = onPlayAutoplaySong,
                     onPlayNextFromAutoplay = onPlayNextFromAutoplay,
                     onAddAutoplayToQueue = onAddAutoplayToQueue,
+                    onMoveAutoplayToQueue = onMoveAutoplayToQueue,
                     onRemoveAutoplaySong = onRemoveAutoplaySong,
                     onMoveAutoplayItem = onMoveAutoplayItem,
                     onSetAutoplayEnabled = onSetAutoplayEnabled,
@@ -2644,6 +2653,7 @@ private fun FullPlayer(
     onPlayAutoplaySong: (Song) -> Unit,
     onPlayNextFromAutoplay: (Song) -> Unit,
     onAddAutoplayToQueue: (Song) -> Unit,
+    onMoveAutoplayToQueue: (Song, Int) -> QueueActionResult,
     onRemoveAutoplaySong: (Song) -> Unit,
     onMoveAutoplayItem: (Int, Int) -> Unit,
     onSetAutoplayEnabled: (Boolean) -> Unit,
@@ -2956,6 +2966,7 @@ private fun FullPlayer(
                 onPlayAutoplaySong = onPlayAutoplaySong,
                 onPlayNextFromAutoplay = onPlayNextFromAutoplay,
                 onAddAutoplayToQueue = onAddAutoplayToQueue,
+                onMoveAutoplayToQueue = onMoveAutoplayToQueue,
                 onRemoveAutoplaySong = onRemoveAutoplaySong,
                 onMoveAutoplayItem = onMoveAutoplayItem,
                 onSetAutoplayEnabled = onSetAutoplayEnabled,
@@ -3973,7 +3984,7 @@ private fun QueueSongRow(
                 DisposableEffect(rowKey) { onDispose(onDragHandleDisposed) }
                 Image(
                     androidx.compose.ui.res.painterResource(R.drawable.queue_drag_handle),
-                    if (isAutoplay) "Drag to reorder ${song.title} in AutoPlay" else "Drag to reorder ${song.title}",
+                    if (isAutoplay) "Drag to reorder ${song.title} or move it into the queue" else "Drag to reorder ${song.title}",
                     Modifier.size(36.dp),
                     colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White.copy(.48f)),
                 )
@@ -4033,6 +4044,7 @@ private fun QueuePanel(
     onPlayAutoplaySong: (Song) -> Unit,
     onPlayNextFromAutoplay: (Song) -> Unit,
     onAddAutoplayToQueue: (Song) -> Unit,
+    onMoveAutoplayToQueue: (Song, Int) -> QueueActionResult,
     onRemoveAutoplaySong: (Song) -> Unit,
     onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     onCreatePlaylist: (Long) -> Unit,
@@ -4046,6 +4058,9 @@ private fun QueuePanel(
     var draggingSongKey by remember { mutableStateOf<String?>(null) }
     var draggingSongIndex by remember { mutableIntStateOf(-1) }
     var draggingSection by remember { mutableStateOf(QueueListSection.Queue) }
+    var draggingEntry by remember { mutableStateOf<QueueDragEntry?>(null) }
+    var draggingAutoplayOrder by remember { mutableStateOf<List<QueueDragEntry>?>(null) }
+    var draggingIntoQueue by remember { mutableStateOf(false) }
     val draggingPointerYState = remember { mutableFloatStateOf(Float.NaN) }
     var draggingPointerY by draggingPointerYState
     var draggingTouchOffsetY by remember { mutableFloatStateOf(0f) }
@@ -4054,6 +4069,7 @@ private fun QueuePanel(
     var localAutoplayOrder by remember { mutableStateOf<List<QueueDragEntry>?>(null) }
     var pendingQueueIds by remember { mutableStateOf<List<Long>?>(null) }
     var pendingAutoplayIds by remember { mutableStateOf<List<Long>?>(null) }
+    var pendingAutoplayRemovalId by remember { mutableStateOf<Long?>(null) }
     var settlingSongKey by remember { mutableStateOf<String?>(null) }
     var settlingOverlayStartTopPx by remember { mutableFloatStateOf(0f) }
     var settlingOverlayTargetTopPx by remember { mutableFloatStateOf(0f) }
@@ -4068,12 +4084,13 @@ private fun QueuePanel(
     val latestQueue = rememberUpdatedState(queue)
     val latestAutoplaySongs = rememberUpdatedState(autoplaySongs)
     val latestMoveQueueItem = rememberUpdatedState(onMoveQueueItem)
+    val latestMoveAutoplayToQueue = rememberUpdatedState(onMoveAutoplayToQueue)
     val externalQueueEntries = remember(queue) {
         val occurrences = mutableMapOf<Long, Int>()
         queue.map { queuedSong ->
             val occurrence = occurrences.getOrDefault(queuedSong.id, 0)
             occurrences[queuedSong.id] = occurrence + 1
-            QueueDragEntry("queue:${queuedSong.id}:$occurrence", queuedSong, QueueListSection.Queue)
+            QueueDragEntry("track:${queuedSong.id}:$occurrence", queuedSong, QueueListSection.Queue)
         }
     }
     val externalAutoplayEntries = remember(autoplaySongs) {
@@ -4081,17 +4098,17 @@ private fun QueuePanel(
         autoplaySongs.map { suggestedSong ->
             val occurrence = occurrences.getOrDefault(suggestedSong.id, 0)
             occurrences[suggestedSong.id] = occurrence + 1
-            QueueDragEntry("autoplay:${suggestedSong.id}:$occurrence", suggestedSong, QueueListSection.AutoPlay)
+            QueueDragEntry("track:${suggestedSong.id}:$occurrence", suggestedSong, QueueListSection.AutoPlay)
         }
     }
     val displayedQueueEntries = localQueueOrder ?: externalQueueEntries
     val displayedAutoplayEntries = localAutoplayOrder ?: externalAutoplayEntries
     val queueControlsEnabled = draggingSongKey == null && settlingSongKey == null &&
-        pendingQueueIds == null && pendingAutoplayIds == null
+        pendingQueueIds == null && pendingAutoplayIds == null && pendingAutoplayRemovalId == null
     val rowActionsEnabled = queueControlsEnabled && !queueListState.isScrollInProgress
     val settleProgress by animateFloatAsState(
         targetValue = if (settlingSongKey != null && settlingTargetReady) 1f else 0f,
-        animationSpec = tween(230, easing = WavvScreenEasing),
+        animationSpec = tween(320, easing = WavvMotionEasing),
         label = "queue row drop settle",
     )
     val captureState = remember { AtomicBoolean(false) }
@@ -4105,26 +4122,90 @@ private fun QueuePanel(
             localQueueOrder = null
         }
     }
-    LaunchedEffect(autoplaySongs, pendingAutoplayIds, draggingSongKey) {
+    LaunchedEffect(autoplaySongs, pendingAutoplayIds, pendingAutoplayRemovalId, draggingSongKey) {
         val expectedIds = pendingAutoplayIds
-        if (expectedIds != null && autoplaySongs.map { it.id } == expectedIds) {
+        val removalId = pendingAutoplayRemovalId
+        if (removalId != null && autoplaySongs.none { it.id == removalId }) {
+            localAutoplayOrder = null
+            pendingAutoplayRemovalId = null
+        } else if (removalId == null && expectedIds != null && autoplaySongs.map { it.id } == expectedIds) {
             localAutoplayOrder = null
             pendingAutoplayIds = null
-        } else if (expectedIds == null && draggingSongKey == null) {
+        } else if (removalId == null && expectedIds == null && draggingSongKey == null) {
             localAutoplayOrder = null
         }
     }
+    fun pointerIsOverQueue(pointerY: Float): Boolean {
+        val layout = queueListState.layoutInfo
+        if (displayedQueueEntries.isEmpty() || layout.visibleItemsInfo.isEmpty() ||
+            queueListState.firstVisibleItemIndex >= displayedQueueEntries.size
+        ) return false
+        val header = layout.visibleItemsInfo.firstOrNull { it.key == "autoplay-section-header" }
+        val end = header?.offset?.toFloat() ?: layout.viewportEndOffset.toFloat()
+        return pointerY >= layout.viewportStartOffset && pointerY < end
+    }
+    fun pointerIsOverAutoplay(pointerY: Float): Boolean {
+        val layout = queueListState.layoutInfo
+        if (layout.visibleItemsInfo.isEmpty()) return false
+        val autoplayStartIndex = displayedQueueEntries.size + 1
+        val header = layout.visibleItemsInfo.firstOrNull { it.key == "autoplay-section-header" }
+        val start = if (header != null) (header.offset + header.size).toFloat()
+            else if (queueListState.firstVisibleItemIndex >= autoplayStartIndex) layout.viewportStartOffset.toFloat()
+            else return false
+        return pointerY >= start && pointerY <= layout.viewportEndOffset
+    }
+    fun insertionIndex(rows: List<QueueDragEntry>, draggedKey: String, centerY: Float): Int {
+        val remainingRows = rows.filterNot { it.key == draggedKey }
+        val visibleCenters = remainingRows.mapIndexedNotNull { index, entry ->
+            val item = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == entry.key }
+                ?: return@mapIndexedNotNull null
+            index to (item.offset + item.size / 2f)
+        }
+        visibleCenters.firstOrNull { (_, center) -> centerY < center }?.let { return it.first }
+        return visibleCenters.lastOrNull()?.first?.plus(1)
+            ?: if (centerY < queueListState.layoutInfo.viewportStartOffset) 0 else remainingRows.size
+    }
+    fun placeEntryAt(rows: List<QueueDragEntry>, entry: QueueDragEntry, targetIndex: Int): List<QueueDragEntry> {
+        val reordered = rows.filterNot { it.key == entry.key }.toMutableList()
+        reordered.add(targetIndex.coerceIn(0, reordered.size), entry)
+        return reordered
+    }
     fun moveDraggedRowLocally() {
         val key = draggingSongKey ?: return
-        val currentRows = when (draggingSection) {
-            QueueListSection.Queue -> localQueueOrder ?: displayedQueueEntries
-            QueueListSection.AutoPlay -> localAutoplayOrder ?: displayedAutoplayEntries
-        }
-        val currentIndex = currentRows.indexOfFirst { it.key == key }
-        if (currentIndex !in currentRows.indices) return
         val pointerY = draggingPointerY
         if (pointerY.isNaN()) return
         val overlayCenterY = pointerY - draggingTouchOffsetY + rowStepPx / 2f
+        if (draggingSection == QueueListSection.AutoPlay) {
+            val entry = draggingEntry ?: return
+            when {
+                pointerIsOverQueue(pointerY) -> {
+                    val queueRows = localQueueOrder ?: displayedQueueEntries
+                    val targetIndex = insertionIndex(queueRows, key, overlayCenterY)
+                    localQueueOrder = placeEntryAt(queueRows, entry.copy(section = QueueListSection.Queue), targetIndex)
+                    val autoplayRows = draggingAutoplayOrder ?: displayedAutoplayEntries
+                    localAutoplayOrder = autoplayRows.filterNot { it.key == key }
+                    draggingIntoQueue = true
+                }
+                pointerIsOverAutoplay(pointerY) -> {
+                    localQueueOrder = null
+                    val autoplayRows = draggingAutoplayOrder ?: displayedAutoplayEntries
+                    val targetIndex = insertionIndex(autoplayRows, key, overlayCenterY)
+                    val reordered = placeEntryAt(autoplayRows, entry.copy(section = QueueListSection.AutoPlay), targetIndex)
+                    draggingAutoplayOrder = reordered
+                    localAutoplayOrder = reordered
+                    draggingIntoQueue = false
+                }
+                else -> if (draggingIntoQueue) {
+                    localQueueOrder = null
+                    localAutoplayOrder = draggingAutoplayOrder
+                    draggingIntoQueue = false
+                }
+            }
+            return
+        }
+        val currentRows = localQueueOrder ?: displayedQueueEntries
+        val currentIndex = currentRows.indexOfFirst { it.key == key }
+        if (currentIndex !in currentRows.indices) return
         val visibleItems = queueListState.layoutInfo.visibleItemsInfo
         val nextEntry = currentRows.getOrNull(currentIndex + 1)
         val nextCenterY = nextEntry?.let { next ->
@@ -4151,9 +4232,13 @@ private fun QueuePanel(
     }
     fun finishQueueDrag() {
         val key = draggingSongKey ?: return
-        val finalRows = when (draggingSection) {
-            QueueListSection.Queue -> localQueueOrder ?: displayedQueueEntries
-            QueueListSection.AutoPlay -> localAutoplayOrder ?: displayedAutoplayEntries
+        val sourceSection = draggingSection
+        val droppedIntoQueue = draggingIntoQueue
+        val autoplayOrder = draggingAutoplayOrder ?: displayedAutoplayEntries
+        val finalRows = when {
+            sourceSection == QueueListSection.Queue -> localQueueOrder ?: displayedQueueEntries
+            droppedIntoQueue -> localQueueOrder ?: displayedQueueEntries
+            else -> autoplayOrder
         }
         val destinationIndex = finalRows.indexOfFirst { it.key == key }
         val sourceIndex = draggingSongIndex
@@ -4164,27 +4249,49 @@ private fun QueuePanel(
         draggingSongKey = null
         draggingSongIndex = -1
         draggingPointerY = Float.NaN
-        if (sourceIndex >= 0 && destinationIndex >= 0 && sourceIndex != destinationIndex) {
-            when (draggingSection) {
+        draggingIntoQueue = false
+        if (sourceSection == QueueListSection.AutoPlay && droppedIntoQueue && destinationIndex >= 0) {
+            val movedEntry = draggingEntry
+            if (movedEntry != null) {
+                pendingQueueIds = finalRows.map { it.song.id }
+                val result = latestMoveAutoplayToQueue.value(movedEntry.song, destinationIndex)
+                if (result == QueueActionResult.Added) {
+                    pendingAutoplayRemovalId = movedEntry.song.id
+                    localAutoplayOrder = autoplayOrder.filterNot { it.key == key }
+                } else {
+                    pendingQueueIds = null
+                    pendingAutoplayIds = null
+                    pendingAutoplayRemovalId = null
+                    localQueueOrder = null
+                    localAutoplayOrder = autoplayOrder
+                }
+            }
+        } else if (sourceIndex >= 0 && destinationIndex >= 0 && sourceIndex != destinationIndex) {
+            when (sourceSection) {
                 QueueListSection.Queue -> {
                     // One Media3 queue update at drop; frame-by-frame reorder stays Compose-local.
                     pendingQueueIds = finalRows.map { it.song.id }
                     latestMoveQueueItem.value(sourceIndex, destinationIndex)
                 }
                 QueueListSection.AutoPlay -> {
+                    pendingAutoplayRemovalId = null
                     pendingAutoplayIds = finalRows.map { it.song.id }
                     onMoveAutoplayItem(sourceIndex, destinationIndex)
                 }
             }
         } else {
-            when (draggingSection) {
+            when (sourceSection) {
                 QueueListSection.Queue -> localQueueOrder = null
                 QueueListSection.AutoPlay -> localAutoplayOrder = null
             }
         }
     }
     val latestBeginQueueDrag = rememberUpdatedState<(String, Float) -> Boolean> { rowKey, pointerRootY ->
-        val section = if (rowKey.startsWith("autoplay:")) QueueListSection.AutoPlay else QueueListSection.Queue
+        val section = when {
+            displayedQueueEntries.any { it.key == rowKey } -> QueueListSection.Queue
+            displayedAutoplayEntries.any { it.key == rowKey } -> QueueListSection.AutoPlay
+            else -> QueueListSection.Queue
+        }
         val currentRows = when (section) {
             QueueListSection.Queue -> latestQueue.value
             QueueListSection.AutoPlay -> latestAutoplaySongs.value
@@ -4194,12 +4301,12 @@ private fun QueuePanel(
         currentRows.forEachIndexed { queueIndex, queuedSong ->
             val occurrence = occurrences.getOrDefault(queuedSong.id, 0)
             occurrences[queuedSong.id] = occurrence + 1
-            val prefix = if (section == QueueListSection.AutoPlay) "autoplay:" else "queue:"
-            if ("$prefix${queuedSong.id}:$occurrence" == rowKey) sourceIndex = queueIndex
+            if ("track:${queuedSong.id}:$occurrence" == rowKey) sourceIndex = queueIndex
         }
         val itemInfo = queueListState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }
         if (sourceIndex >= 0 && itemInfo != null && !queueListState.isScrollInProgress &&
-            pendingQueueIds == null && pendingAutoplayIds == null && draggingSongKey == null && settlingSongKey == null
+            pendingQueueIds == null && pendingAutoplayIds == null && pendingAutoplayRemovalId == null &&
+            draggingSongKey == null && settlingSongKey == null
         ) {
             settlingSongKey = null
             settlingTargetReady = false
@@ -4208,8 +4315,16 @@ private fun QueuePanel(
             draggingSection = section
             when (section) {
                 QueueListSection.Queue -> localQueueOrder = displayedQueueEntries
-                QueueListSection.AutoPlay -> localAutoplayOrder = displayedAutoplayEntries
+                QueueListSection.AutoPlay -> {
+                    draggingAutoplayOrder = displayedAutoplayEntries
+                    localAutoplayOrder = displayedAutoplayEntries
+                }
             }
+            draggingEntry = when (section) {
+                QueueListSection.Queue -> displayedQueueEntries.firstOrNull { it.key == rowKey }
+                QueueListSection.AutoPlay -> displayedAutoplayEntries.firstOrNull { it.key == rowKey }
+            }
+            draggingIntoQueue = false
             draggingSongKey = rowKey
             draggingSongIndex = sourceIndex
             draggingTouchOffsetY = (pointerRootY - queueListTopInRootPx - itemInfo.offset)
@@ -4237,10 +4352,12 @@ private fun QueuePanel(
             ?.toFloat()
             ?: settlingOverlayStartTopPx
         settlingTargetReady = true
-        delay(240)
+        delay(340)
         if (settlingSongKey == key) {
             settlingSongKey = null
             settlingTargetReady = false
+                draggingEntry = null
+                draggingAutoplayOrder = null
         }
     }
     LaunchedEffect(draggingSongKey) {
@@ -4413,7 +4530,7 @@ private fun QueuePanel(
                         placementSpec = if (isBeingDragged) androidx.compose.animation.core.snap()
                             else androidx.compose.animation.core.spring(
                                 dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                stiffness = androidx.compose.animation.core.Spring.StiffnessHigh,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
                             ),
                     )
                         .fillMaxWidth()
@@ -4515,7 +4632,7 @@ private fun QueuePanel(
                             placementSpec = if (isBeingDragged) androidx.compose.animation.core.snap()
                             else androidx.compose.animation.core.spring(
                                 dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                stiffness = androidx.compose.animation.core.Spring.StiffnessHigh,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
                             ),
                         )
                             .fillMaxWidth()
@@ -4573,7 +4690,11 @@ private fun QueuePanel(
         }
         val overlayKey = draggingSongKey ?: settlingSongKey
         val overlayRows = if (draggingSection == QueueListSection.AutoPlay) displayedAutoplayEntries else displayedQueueEntries
-        val overlayEntry = overlayKey?.let { key -> overlayRows.firstOrNull { it.key == key } }
+        val overlayEntry = if (overlayKey == draggingSongKey || overlayKey == settlingSongKey) {
+            draggingEntry
+        } else {
+            overlayKey?.let { key -> overlayRows.firstOrNull { it.key == key } }
+        }
         if (overlayEntry != null) {
             val overlayAlpha = if (draggingSongKey != null) 1f else 1f - settleProgress
             val overlayDropBlend = if (draggingSongKey != null) 0f

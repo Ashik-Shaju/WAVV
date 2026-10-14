@@ -429,6 +429,26 @@ class PlaybackController(context: Context) {
         syncQueue(player)
     }
 
+    internal fun moveAutoplayToQueue(song: Song, queueIndex: Int): QueueActionResult {
+        val player = controller ?: return QueueActionResult.Unavailable
+        if (player.currentMediaItem?.mediaId?.toLongOrNull() == song.id) {
+            return QueueActionResult.AlreadyPlaying
+        }
+        if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) {
+            return QueueActionResult.AlreadyQueued
+        }
+        if (autoplayCandidates.none { it.id == song.id }) return QueueActionResult.Unavailable
+
+        val insertionIndex = queueIndex.coerceIn(0, player.mediaItemCount)
+        autoplayCandidates = autoplayCandidates.filterNot { it.id == song.id }
+        player.addMediaItem(insertionIndex, mediaItem(song, "autoplay_recommendation"))
+        managedQueue = readQueue(player)
+        lastShuffleOrder = readUpcomingQueue(player).map(Song::id)
+        updateAutoplayState()
+        syncQueue(player)
+        return QueueActionResult.Added
+    }
+
     fun setQueueMode(mode: QueueMode) {
         val player = controller ?: return
         val currentOrder = readQueue(player)
