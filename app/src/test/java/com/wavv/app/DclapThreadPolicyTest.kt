@@ -12,4 +12,13 @@ class DclapThreadPolicyTest {
         assertEquals(2, DclapThreadPolicy.intraOpThreadCount(8))
         assertEquals(2, DclapThreadPolicy.intraOpThreadCount(16))
     }
+
+    @Test
+    fun xnnpackThreadsScaleWithProcessorCountAndRemainBounded() {
+        assertEquals(1, DclapThreadPolicy.xnnpackThreadCount(0))
+        assertEquals(1, DclapThreadPolicy.xnnpackThreadCount(1))
+        assertEquals(2, DclapThreadPolicy.xnnpackThreadCount(2))
+        assertEquals(4, DclapThreadPolicy.xnnpackThreadCount(4))
+        assertEquals(4, DclapThreadPolicy.xnnpackThreadCount(8))
+    }
 }

@@ -350,21 +350,9 @@ internal class UHQAacEnhancer(private val context: Context) {
             check(sampleCount >= FFT_SIZE) { "AAC is too short for UHQ" }
             onProgress("Loading UHQ model", 20)
             val model = UHQAacModel.install(context)
-            val options = OrtSession.SessionOptions()
-            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-            options.setInterOpNumThreads(1)
-            options.setIntraOpNumThreads(DclapThreadPolicy.intraOpThreadCount(Runtime.getRuntime().availableProcessors()))
-            options.setMemoryPatternOptimization(true)
-            options.setCPUArenaAllocator(true)
-            options.addCPU(true)
-            val session = try {
-                OrtEnvironment.getEnvironment().createSession(model.absolutePath, options)
-            } finally {
-                options.close()
-            }
-            onProgress("Enhancing audio", 25)
-            session.use { session ->
-                enhanceTiles(inputFile, sampleCount, output, session) { completed, total ->
+            OrtSessionRuntime.create(model, preferXnnpack = true).use { runtime ->
+                onProgress("Enhancing audio", 25)
+                enhanceTiles(inputFile, sampleCount, output, runtime.session) { completed, total ->
                     onProgress("Enhancing audio", 25 + completed * 70 / total)
                 }
             }

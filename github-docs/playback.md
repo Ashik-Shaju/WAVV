@@ -18,6 +18,14 @@ ExoPlayer uses the platform renderer factory with decoder fallback enabled, conf
 - Repeat cycles through off, repeat queue, and repeat one.
 - Listening events are written after player state confirms playback, not merely when a play request is issued.
 
+## Crossfade
+
+Crossfade is off by default and can be configured in **You** for up to 12 seconds. When the current and next queue items are eligible, the service prepares the next track and blends both players with an equal-power fade. It uses an additional decoder while enabled; UHQ-enhanced tracks and ineligible transitions use normal playback instead.
+
+## Audio quality details
+
+The full player may show a source-quality label such as **Standard**, **High Quality**, **Lossless**, or **Hi-Res Lossless**. Tap it to view the available codec, bit depth, sample rate, bitrate, and channel details; an estimated bitrate is marked. These labels use metadata exposed by Android and the selected file. They do not verify recording provenance, mastering, audible quality, or bit-perfect output.
+
 ## Experimental AAC enhancement
 
 The **UHQ AAC** setting in **You** is off by default. When enabled, the service processes AAC that Android reports with the supported AAC decoder type. Playback starts from the source; after background processing succeeds, Wavv switches to a cached PCM WAV at the same position. Unsupported formats or processing failures continue from the source. Turning the setting off returns the current item to its source, and the source file is never modified.

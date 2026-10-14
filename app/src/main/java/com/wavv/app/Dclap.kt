@@ -2,7 +2,6 @@ package com.wavv.app
 
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.media.AudioFormat
 import android.media.MediaCodec
@@ -424,22 +423,8 @@ private object DclapPreprocessor {
 
 private class DclapAudioEncoder(model: File) : Closeable {
     private val environment = OrtEnvironment.getEnvironment()
-    private val session: OrtSession
-
-    init {
-        val options = OrtSession.SessionOptions()
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-        options.setInterOpNumThreads(1)
-        options.setIntraOpNumThreads(DclapThreadPolicy.intraOpThreadCount(Runtime.getRuntime().availableProcessors()))
-        options.setMemoryPatternOptimization(true)
-        options.setCPUArenaAllocator(true)
-        options.addCPU(true)
-        session = try {
-            environment.createSession(model.absolutePath, options)
-        } finally {
-            options.close()
-        }
-    }
+    private val runtime = OrtSessionRuntime.create(model, preferXnnpack = true)
+    private val session get() = runtime.session
 
     suspend fun encode(context: Context, uri: Uri): FloatArray = withContext(Dispatchers.Default) {
         val sum = FloatArray(512)
@@ -465,7 +450,7 @@ private class DclapAudioEncoder(model: File) : Closeable {
         normalize(sum)
     }
 
-    override fun close() = session.close()
+    override fun close() = runtime.close()
 }
 
 private class DclapTokenizer(directory: File) {
@@ -552,22 +537,8 @@ private data class TextTokens(val ids: LongArray, val mask: LongArray)
 private class DclapTextEncoder(model: File, tokenizerDirectory: File) : Closeable {
     private val environment = OrtEnvironment.getEnvironment()
     private val tokenizer = DclapTokenizer(tokenizerDirectory)
-    private val session: OrtSession
-
-    init {
-        val options = OrtSession.SessionOptions()
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-        options.setInterOpNumThreads(1)
-        options.setIntraOpNumThreads(DclapThreadPolicy.intraOpThreadCount(Runtime.getRuntime().availableProcessors()))
-        options.setMemoryPatternOptimization(true)
-        options.setCPUArenaAllocator(true)
-        options.addCPU(true)
-        session = try {
-            environment.createSession(model.absolutePath, options)
-        } finally {
-            options.close()
-        }
-    }
+    private val runtime = OrtSessionRuntime.create(model, preferXnnpack = false)
+    private val session get() = runtime.session
 
     fun encode(query: String): FloatArray {
         val tokens = tokenizer.encode(query)
@@ -580,7 +551,7 @@ private class DclapTextEncoder(model: File, tokenizerDirectory: File) : Closeabl
         }
     }
 
-    override fun close() = session.close()
+    override fun close() = runtime.close()
 }
 
 class DclapTextSearch(private val context: Context) : Closeable {

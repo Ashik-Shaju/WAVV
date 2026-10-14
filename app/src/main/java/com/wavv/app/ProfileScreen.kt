@@ -80,7 +80,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.max
 import java.util.Locale
 
-internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Equalizer, Standby }
+internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Crossfade, Equalizer, Standby }
 
 internal data class ProfileSetting(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -142,6 +142,7 @@ internal fun YouScreen(
     }
     val notificationsEnabled = context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
     var uhqEnabled by remember(context) { mutableStateOf(UHQPlaybackPreference.isEnabled(context)) }
+    var crossfadeSeconds by remember(context) { mutableStateOf(CrossfadeSettings.durationSeconds(context)) }
     var equalizerEnabled by remember(context) { mutableStateOf(AudioEqualizerSettings.isEnabled(context)) }
     var equalizerProfile by remember(context) { mutableStateOf(AudioEqualizerSettings.activeProfile(context)) }
     var savedEqualizerProfiles by remember(context) { mutableStateOf(AudioEqualizerSettings.savedProfiles(context)) }
@@ -169,6 +170,7 @@ internal fun YouScreen(
         ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library.", ProfileSettingContent.Folders),
         ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
         ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", uhqPlaybackLabel, "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
+        ProfileSetting(Icons.Default.Equalizer, "Crossfade", if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s", "Blend into the next queued track. Uses an extra audio decoder while enabled; UHQ tracks keep the standard transition.", ProfileSettingContent.Crossfade),
         ProfileSetting(Icons.Default.Equalizer, "Equalizer", equalizerPlaybackLabel, "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
         ProfileSetting(Icons.Default.LibraryMusic, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
@@ -228,12 +230,14 @@ internal fun YouScreen(
         activeSetting?.let { setting ->
             val displayedSettingValue = when (setting.content) {
                 ProfileSettingContent.UHQ -> uhqPlaybackLabel
+                ProfileSettingContent.Crossfade -> if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s"
                 ProfileSettingContent.Equalizer -> equalizerPlaybackLabel
                 ProfileSettingContent.Standby -> if (standbyEnabledState) "On" else "Off"
                 else -> setting.value
             }
             val sheetHeight = when (setting.content) {
                 ProfileSettingContent.Equalizer -> 760.dp
+                ProfileSettingContent.Crossfade -> 350.dp
                 ProfileSettingContent.Standby -> 740.dp
                 else -> 460.dp
             }
@@ -336,6 +340,32 @@ internal fun YouScreen(
                                     UHQPlaybackPreference.setEnabled(context, enabled)
                                 },
                             )
+                        }
+                    }
+                    ProfileSettingContent.Crossfade -> {
+                        Text(
+                            "Crossfade queued tracks",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            if (crossfadeSeconds == 0) "Off" else "$crossfadeSeconds seconds",
+                            color = Color.White.copy(.62f),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        Slider(
+                            value = crossfadeSeconds.toFloat(),
+                            onValueChange = { crossfadeSeconds = it.toInt() },
+                            onValueChangeFinished = { CrossfadeSettings.setDurationSeconds(context, crossfadeSeconds) },
+                            valueRange = 0f..CrossfadeSettings.MAX_SECONDS.toFloat(),
+                            steps = CrossfadeSettings.MAX_SECONDS - 1,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Off", color = Color.White.copy(.45f), fontSize = 11.sp)
+                            Text("12 seconds", color = Color.White.copy(.45f), fontSize = 11.sp)
                         }
                     }
                     ProfileSettingContent.Equalizer -> EqualizerSettingsContent(

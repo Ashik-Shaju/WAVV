@@ -1,6 +1,6 @@
 # Local audio metadata and inferred genres
 
-**Research snapshot:** 2026-10-13
+**Research snapshot:** 2026-10-14
 **Scope:** Source-backed design findings and an implementation summary. This note intentionally excludes dataset names/sources and private model provenance. The repository's `docs/` tree is locally excluded, so this GitHub-safe note is in `github-docs/`.
 
 ## Findings
@@ -9,7 +9,7 @@
 
 Prefer metadata Android has already indexed. `MediaStore.Audio.Media` exposes fields including title, artist, album, genre, composer, album artist, year, track/disc number, duration, bitrate, MIME type, size, and modification time; audio columns also include sample rate and recording/music classifications. Wavv queries supported indexed fields, separately reads MediaStore genre membership, and uses `MediaMetadataRetriever` as an embedded-field/artwork fallback in [MediaLibraryRepository](../app/src/main/java/com/wavv/app/MediaLibraryRepository.kt). The expanded catalog includes author, writer, compilation, bitrate, disc number, sample rate, and track count where supplied; selected document sources use the same embedded fields.
 
-The values are persisted through the Room 8→9 migration and used selectively: creator/release/technical text is searchable, album artist groups albums, track/disc numbers provide album ordering, and file tags populate playback metadata. File genres and model-inferred genres remain separate in storage. Missing or unsupported values remain unknown; coverage is not uniform across containers, Android versions, or document providers.
+The values are persisted through the Room 8→9 migration and used selectively: creator/release/technical text is searchable, album artist groups albums, track/disc numbers provide album ordering, and file tags populate playback metadata. The catalog also retains recording date and track count when available. File genres and model-inferred genres remain separate in storage. Missing or unsupported values remain unknown; coverage is not uniform across containers, Android versions, or document providers.
 
 For user-selected files/folders, keep using content URIs and provider access rather than assuming filesystem paths. SAF providers can expose local, removable, or remote documents and support persistent grants; their metadata and performance can differ. [Storage Access Framework](https://developer.android.com/guide/topics/providers/document-provider)
 
