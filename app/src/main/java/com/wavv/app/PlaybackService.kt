@@ -3,8 +3,6 @@ package com.wavv.app
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.media.audiofx.Equalizer
 import android.net.Uri
 import android.os.Bundle
@@ -22,10 +20,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
-import androidx.mediarouter.media.MediaRouter
-import androidx.mediarouter.media.MediaRouterParams
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -41,7 +35,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlin.math.roundToInt
 
@@ -69,7 +62,6 @@ private const val MEDIA_EXTRA_UHQ_INTERNAL_SWITCH = "com.wavv.app.UHQ_INTERNAL_S
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
-    private var audioRouter: MediaRouter? = null
     private lateinit var libraryStore: LibraryStore
     private val eventScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val feedback = PlaybackFeedbackReducer(WavvSession.id)
@@ -103,19 +95,6 @@ class PlaybackService : MediaSessionService() {
                 feedback.sample(current.currentPosition, SystemClock.elapsedRealtime(), current.duration)
             }
             if (player != null) feedbackHandler.postDelayed(this, FEEDBACK_SAMPLE_INTERVAL_MS)
-        }
-    }
-    private val audioRouteCallback = object : MediaRouter.Callback() {
-        override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
-            syncPlayerToSystemAudioRoute(route)
-        }
-
-        override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) {
-            syncPlayerToSystemAudioRoute(router.selectedRoute)
-        }
-
-        override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
-            if (router.selectedRoute == route) syncPlayerToSystemAudioRoute(router.selectedRoute)
         }
     }
     private val feedbackListener = object : Player.Listener {
@@ -178,20 +157,8 @@ class PlaybackService : MediaSessionService() {
         }
         player = PlaybackPlayerFactory.create(this)
         player?.addListener(feedbackListener)
-        audioRouter = MediaRouter.getInstance(applicationContext).also { router ->
-            router.routerParams = MediaRouterParams.Builder()
-                .setTransferToLocalEnabled(true)
-                .build()
-            // The system output picker can change routes while the activity is stopped.
-            // Keep this callback alive for as long as the playback session is alive.
-            router.addCallback(
-                audioOutputRouteSelector,
-                audioRouteCallback,
-            )
-            syncPlayerToSystemAudioRoute(router.selectedRoute)
-        }
+        AudioOutputRouting.attach(this)
         mediaSession = MediaSession.Builder(this, player!!)
-            .setCallback(audioOutputSessionCallback)
             .build()
         feedbackHandler.postDelayed(feedbackSampler, FEEDBACK_SAMPLE_INTERVAL_MS)
     }
@@ -206,8 +173,7 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         uhqPreferences?.unregisterOnSharedPreferenceChangeListener(uhqPreferenceListener)
         uhqPreferences = null
-        audioRouter?.removeCallback(audioRouteCallback)
-        audioRouter = null
+        AudioOutputRouting.detach()
         uhqJob?.cancel()
         feedbackHandler.removeCallbacks(feedbackSampler)
         feedbackHandler.removeCallbacks(applyEqualizer)
@@ -221,19 +187,6 @@ class PlaybackService : MediaSessionService() {
         player = null
         eventScope.cancel()
         super.onDestroy()
-    }
-
-    @OptIn(markerClass = [UnstableApi::class])
-    private fun syncPlayerToSystemAudioRoute(route: MediaRouter.RouteInfo) {
-        val currentPlayer = player ?: return
-        val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-        val connectedOutputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .filter { it.type in supportedAudioOutputTypes }
-        val device = findOutputForSystemRoute(route, connectedOutputs)
-        currentPlayer.setPreferredAudioDevice(device)
-        if (device == null && !route.isDefault && !route.isDeviceSpeaker) {
-            Log.d(TAG, "Selected system route '${route.name}' has no local AudioDeviceInfo; using Android routing")
-        }
     }
 
     private fun syncEqualizer() {
@@ -272,44 +225,6 @@ class PlaybackService : MediaSessionService() {
             unavailableEqualizerSessionId = sessionId
             PlaybackEffectStatus.updateEqualizer(EqualizerPlaybackStatus.Unavailable)
             Log.w(TAG, "Android equalizer is unavailable for the active playback session", error)
-        }
-    }
-
-    private val audioOutputSessionCallback = object : MediaSession.Callback {
-        override fun onConnect(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-        ): MediaSession.ConnectionResult {
-            val availableCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
-                .buildUpon()
-                .add(SessionCommand(PlaybackAudioOutputCommand.ACTION_SET_PREFERRED_DEVICE, Bundle.EMPTY))
-                .build()
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
-                .setAvailableSessionCommands(availableCommands)
-                .build()
-        }
-
-        @OptIn(markerClass = [UnstableApi::class])
-        override fun onCustomCommand(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            customCommand: SessionCommand,
-            args: Bundle,
-        ): ListenableFuture<SessionResult> {
-            if (!controller.isTrusted || customCommand.customAction != PlaybackAudioOutputCommand.ACTION_SET_PREFERRED_DEVICE) {
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
-            }
-            val deviceId = args.getInt(PlaybackAudioOutputCommand.EXTRA_DEVICE_ID, PlaybackAudioOutputCommand.DEFAULT_DEVICE_ID)
-            val preferredDevice = if (deviceId == PlaybackAudioOutputCommand.DEFAULT_DEVICE_ID) {
-                null
-            } else {
-                val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-                audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull { it.id == deviceId }
-                    ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
-            }
-            player?.setPreferredAudioDevice(preferredDevice)
-                ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
-            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
     }
 

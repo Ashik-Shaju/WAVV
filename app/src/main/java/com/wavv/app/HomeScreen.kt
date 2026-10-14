@@ -1097,7 +1097,7 @@ private fun HeroCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text(song.title.uppercase(), Modifier.songMetadataMarquee(), color = playAccent, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                        Text(song.title, Modifier.songMetadataMarquee(), color = playAccent, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
                         Text(song.artist, Modifier.padding(top = 2.dp).songMetadataMarquee(), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
                     }
                     GlassPill(

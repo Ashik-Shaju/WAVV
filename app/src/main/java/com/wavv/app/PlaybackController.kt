@@ -12,8 +12,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,15 +33,8 @@ data class PlaybackState(
     val autoplayEnabled: Boolean = true,
     val playingFrom: String? = null,
     val isUHQEnhanced: Boolean = false,
-    val preferredAudioDeviceId: Int? = null,
     val errorMessage: String? = null,
 )
-
-internal object PlaybackAudioOutputCommand {
-    const val ACTION_SET_PREFERRED_DEVICE = "com.wavv.app.action.SET_PREFERRED_AUDIO_DEVICE"
-    const val EXTRA_DEVICE_ID = "com.wavv.app.extra.PREFERRED_AUDIO_DEVICE_ID"
-    const val DEFAULT_DEVICE_ID = -1
-}
 
 data class PlaybackProgress(val positionMs: Long = 0L, val durationMs: Long = 0L)
 
@@ -80,6 +71,7 @@ class PlaybackController(context: Context) {
     )
 
     private val appContext = context.applicationContext
+    internal val audioOutputState: StateFlow<AudioOutputRoutingState> = AudioOutputRouting.state
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private var autoplayCandidates: List<Song> = emptyList()
     private val dismissedAutoplayIds = mutableSetOf<Long>()
@@ -236,31 +228,11 @@ class PlaybackController(context: Context) {
         onPlaybackStarted = listener
     }
 
-    fun setPreferredAudioDevice(deviceId: Int?) {
-        val previousDeviceId = _state.value.preferredAudioDeviceId
-        _state.value = _state.value.copy(preferredAudioDeviceId = deviceId)
-        val currentController = controller ?: return
-        val args = Bundle().apply {
-            putInt(PlaybackAudioOutputCommand.EXTRA_DEVICE_ID, deviceId ?: PlaybackAudioOutputCommand.DEFAULT_DEVICE_ID)
-        }
-        val commandResult = runCatching {
-            currentController.sendCustomCommand(
-                SessionCommand(PlaybackAudioOutputCommand.ACTION_SET_PREFERRED_DEVICE, Bundle.EMPTY),
-                args,
-            )
-        }.getOrNull() ?: run {
-            if (_state.value.preferredAudioDeviceId == deviceId) {
-                _state.value = _state.value.copy(preferredAudioDeviceId = previousDeviceId)
-            }
-            return
-        }
-        commandResult.addListener({
-            val accepted = runCatching { commandResult.get().resultCode == SessionResult.RESULT_SUCCESS }.getOrDefault(false)
-            if (!accepted && _state.value.preferredAudioDeviceId == deviceId) {
-                _state.value = _state.value.copy(preferredAudioDeviceId = previousDeviceId)
-            }
-        }, ContextCompat.getMainExecutor(appContext))
-    }
+    fun refreshAudioRoutes() = AudioOutputRouting.refresh()
+
+    fun selectAudioRoute(routeId: String) = AudioOutputRouting.selectRoute(routeId)
+
+    fun setAudioRouteVolume(routeId: String, volume: Int) = AudioOutputRouting.setRouteVolume(routeId, volume)
 
     fun play(
         song: Song,
@@ -310,7 +282,6 @@ class PlaybackController(context: Context) {
             autoplaySongs = autoplayCandidates.take(AUTOPLAY_VISIBLE_LIMIT),
             autoplayEnabled = _state.value.autoplayEnabled,
             playingFrom = playingFrom,
-            preferredAudioDeviceId = _state.value.preferredAudioDeviceId,
         )
         _progress.value = PlaybackProgress(durationMs = song.durationMs)
         currentController.setMediaItems(
@@ -577,7 +548,6 @@ class PlaybackController(context: Context) {
             autoplayEnabled = _state.value.autoplayEnabled,
             playingFrom = playingFrom,
             isUHQEnhanced = item.mediaMetadata.extras?.containsKey(MEDIA_EXTRA_UHQ_SOURCE_URI) == true,
-            preferredAudioDeviceId = _state.value.preferredAudioDeviceId,
         )
         refreshProgress()
     }
