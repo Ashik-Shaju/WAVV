@@ -2561,7 +2561,7 @@ private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious
 }
 
 @Composable
-internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
+internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp, showIconSurface: Boolean = true) {
     val fillProgress by animateFloatAsState(
         targetValue = if (filled) 1f else 0f,
         animationSpec = tween(durationMillis = 280),
@@ -2571,7 +2571,7 @@ internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
         val unit = size.minDimension / 24f
         val fillAlpha = fillProgress.coerceIn(0f, 1f)
         val buttonRadius = 11.8f * unit
-        drawCircle(Color.White.copy(alpha = .15f), radius = buttonRadius)
+        if (showIconSurface) drawCircle(Color.White.copy(alpha = .15f), radius = buttonRadius)
 
         val iconScale = .72f
         fun inset(value: Float) = 12f + (value - 12f) * iconScale
@@ -2599,9 +2599,16 @@ internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp) {
 }
 
 @Composable
-private fun FavouriteButton(liked: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun FavouriteButton(
+    liked: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    buttonSize: Dp = 38.dp,
+    iconSize: Dp = 30.dp,
+    showIconSurface: Boolean = true,
+) {
     Box(
-        modifier.size(38.dp)
+        modifier.size(buttonSize)
             .semantics(mergeDescendants = true) {
                 contentDescription = if (liked) "Remove from favorites" else "Add to favorites"
                 stateDescription = if (liked) "Liked" else "Not liked"
@@ -2609,7 +2616,7 @@ private fun FavouriteButton(liked: Boolean, onClick: () -> Unit, modifier: Modif
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        FigmaFavouriteIcon(liked, 30.dp)
+        FigmaFavouriteIcon(liked, iconSize, showIconSurface)
     }
 }
 
@@ -2992,8 +2999,20 @@ private fun FullPlayer(
                 song = song,
                 progressFlow = progressFlow,
                 isPlaying = state.isPlaying,
+                liked = liked,
+                onLike = onLike,
                 onSeek = onSeek,
                 onToggle = onToggle,
+                isUHQEnhanced = state.isUHQEnhanced,
+                showUHQOption = state.isUHQEnhanced || audioDetails?.uhqEligible == true,
+                onPlayNext = { onPlayNext(song) },
+                onAddToQueue = { onAddToQueue(song) },
+                onSetTrackUHQ = { onSetTrackUHQ(song.id, !state.isUHQEnhanced) },
+                onNavigateToAlbum = { onNavigateToAlbum(song) },
+                onNavigateToArtist = { onNavigateToArtist(song) },
+                playlists = playlists,
+                onAddSongToPlaylist = onAddSongToPlaylist,
+                onCreatePlaylist = onCreatePlaylist,
                 lyricOffsetMs = lyricsOffsetMs,
                 onOffsetChange = { lyricsOffsetMs = it },
                 importedLyrics = importedLyrics,
@@ -4804,8 +4823,20 @@ private fun LyricsPanel(
     song: Song,
     progressFlow: StateFlow<PlaybackProgress>,
     isPlaying: Boolean,
+    liked: Boolean,
+    onLike: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggle: () -> Unit,
+    isUHQEnhanced: Boolean,
+    showUHQOption: Boolean,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onSetTrackUHQ: () -> Unit,
+    onNavigateToAlbum: () -> Unit,
+    onNavigateToArtist: () -> Unit,
+    playlists: List<UserPlaylist>,
+    onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
+    onCreatePlaylist: (Long) -> Unit,
     lyricOffsetMs: Long,
     onOffsetChange: (Long) -> Unit,
     importedLyrics: List<LyricLine>?,
@@ -4832,15 +4863,33 @@ private fun LyricsPanel(
         sourceLyrics?.map { line ->
             line.copy(
                 timeMs = line.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                endTimeMs = line.endTimeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                vocalParentTimeMs = line.vocalParentTimeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
                 words = line.words.map { word ->
                     word.copy(timeMs = word.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) })
+                },
+                backgroundWords = line.backgroundWords.map { word ->
+                    word.copy(timeMs = word.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) })
+                },
+                backgroundTimeMs = line.backgroundTimeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                backgroundEndTimeMs = line.backgroundEndTimeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                backgroundCues = line.backgroundCues.map { cue ->
+                    cue.copy(
+                        timeMs = cue.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                        endTimeMs = cue.endTimeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) },
+                        words = cue.words.map { word ->
+                            word.copy(timeMs = word.timeMs?.let { (it + lyricOffsetMs).coerceAtLeast(0L) })
+                        },
+                    )
                 },
             )
         }
     }
     val scrubPositionMs = remember(song.id) { mutableStateOf<Long?>(null) }
     var showOptions by remember(song.id) { mutableStateOf(false) }
+    var showTrackMenu by remember(song.id) { mutableStateOf(false) }
     var showOffsetDialog by remember(song.id) { mutableStateOf(false) }
+    var showPlaylistPicker by remember(song.id) { mutableStateOf(false) }
     var importError by remember(song.id) { mutableStateOf(false) }
     var isImporting by remember(song.id) { mutableStateOf(false) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -4891,6 +4940,7 @@ private fun LyricsPanel(
                 AlbumArt(
                     song,
                     Modifier.size(56.dp).shadow(8.dp, thumbnailShape).clip(thumbnailShape)
+                        .clickable(role = Role.Button, onClick = onClose)
                         .onGloballyPositioned { coordinates ->
                             onArtworkFrameChange(
                                 PlayerArtworkFrame(
@@ -4926,8 +4976,39 @@ private fun LyricsPanel(
                         overflow = TextOverflow.Clip,
                     )
                 }
-                IconButton(onClick = onClose, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(.08f))) {
-                    Icon(Icons.Default.Close, contentDescription = "Return to Now Playing", tint = Color.White.copy(.9f), modifier = Modifier.size(20.dp))
+                Box {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(11.dp),
+                    ) {
+                        FavouriteButton(
+                            liked = liked,
+                            onClick = onLike,
+                            modifier = Modifier.clip(CircleShape).background(Color.White.copy(.12f)),
+                            buttonSize = 46.dp,
+                            iconSize = 34.dp,
+                            showIconSurface = false,
+                        )
+                        IconButton(
+                            onClick = { showTrackMenu = true },
+                            modifier = Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(.12f)),
+                        ) {
+                            LyricsHorizontalMoreIcon(24.dp)
+                        }
+                    }
+                    LyricsTrackActionsMenu(
+                        song = song,
+                        visible = showTrackMenu,
+                        isUHQEnhanced = isUHQEnhanced,
+                        showUHQOption = showUHQOption,
+                        onPlayNext = { showTrackMenu = false; onPlayNext() },
+                        onAddToQueue = { showTrackMenu = false; onAddToQueue() },
+                        onAddToPlaylist = { showTrackMenu = false; showPlaylistPicker = true },
+                        onNavigateToAlbum = { showTrackMenu = false; onNavigateToAlbum() },
+                        onNavigateToArtist = { showTrackMenu = false; onNavigateToArtist() },
+                        onSetTrackUHQ = { showTrackMenu = false; onSetTrackUHQ() },
+                        onDismiss = { showTrackMenu = false },
+                    )
                 }
             }
 
@@ -4940,7 +5021,7 @@ private fun LyricsPanel(
                 isPlaying = isPlaying,
                 scrubPositionMs = scrubPositionMs,
                 onSeek = onSeek,
-                onImport = { filePicker.launch(arrayOf("text/*", "application/octet-stream", "application/x-subrip")) },
+                onImport = { filePicker.launch(arrayOf("*/*")) },
                 importError = importError,
             )
 
@@ -4950,9 +5031,9 @@ private fun LyricsPanel(
                         IconButton(
                             onClick = { showOptions = !showOptions },
                             modifier = Modifier.size(46.dp).clip(CircleShape)
-                                .background(Color.White.copy(if (showOptions) .16f else .10f)),
+                                .background(Color.White.copy(if (showOptions) .16f else .12f)),
                         ) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Lyrics options", tint = Color.White.copy(.87f), modifier = Modifier.size(24.dp))
+                            Icon(Icons.Default.Tune, contentDescription = "Lyrics options", tint = Color.White.copy(.87f), modifier = Modifier.size(24.dp))
                         }
                         if (isImporting) {
                             Text("Reading lyrics…", Modifier.padding(start = 8.dp), color = Color.White.copy(.55f), fontSize = 12.sp)
@@ -4975,7 +5056,7 @@ private fun LyricsPanel(
                         visible = showOptions,
                         onImport = {
                             showOptions = false
-                            filePicker.launch(arrayOf("text/*", "application/octet-stream", "application/x-subrip"))
+                            filePicker.launch(arrayOf("*/*"))
                         },
                         onAdjustOffset = {
                             showOptions = false
@@ -4995,6 +5076,40 @@ private fun LyricsPanel(
             onOffsetChange = onOffsetChange,
             onDismiss = { showOffsetDialog = false },
         )
+    }
+    if (showPlaylistPicker) {
+        WavvBottomSheet(onDismissRequest = { showPlaylistPicker = false }) { close ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+                AlbumArt(song, Modifier.size(54.dp), song.title, 11.dp)
+                Column(Modifier.weight(1f)) {
+                    Text("Add to playlist", color = Color.White.copy(.55f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(song.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (playlists.isEmpty()) {
+                Text("Create a playlist to save this song.", Modifier.padding(vertical = 10.dp), color = Color.White.copy(.72f))
+            } else {
+                Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                    playlists.forEach { playlist ->
+                        SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, playlist.name) {
+                            onAddSongToPlaylist(playlist.id, listOf(song.id)) { success ->
+                                if (success) {
+                                    showPlaylistPicker = false
+                                    close()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            SheetActionRow(Icons.Default.Add, "Create playlist") {
+                showPlaylistPicker = false
+                close()
+                onCreatePlaylist(song.id)
+            }
+        }
     }
 }
 
@@ -5025,14 +5140,44 @@ private fun LyricsScrollArea(
     val activeLyricIndex = remember(lyricLines, currentPositionMs) {
         findActiveLyricIndex(lyricLines.orEmpty(), currentPositionMs)
     }
-    val activeLyricListIndex = if (activeLyricIndex >= 0) activeLyricIndex * 2 + 1 else -1
-    val activeLyricTime = lyricLines?.getOrNull(activeLyricIndex)?.timeMs
-    val indicesByTime = remember(lyricLines) {
-        lyricLines.orEmpty().mapIndexedNotNull { index, line -> line.timeMs?.let { it to index } }
-            .groupBy(keySelector = { it.first }, valueTransform = { it.second })
-            .mapValues { (_, indices) -> indices.toSet() }
+    val activeLyricAnchorIndex = remember(lyricLines, activeLyricIndex) {
+        val lines = lyricLines.orEmpty()
+        val parentTimeMs = lines.getOrNull(activeLyricIndex)?.vocalParentTimeMs
+            ?: return@remember activeLyricIndex
+        lines.indexOfLast { !it.isBackgroundCue && it.timeMs == parentTimeMs }
+            .takeIf { it >= 0 }
+            ?: activeLyricIndex
     }
-    val activeLyricIndices = indicesByTime[activeLyricTime].orEmpty()
+    val activeLyricListIndex = if (activeLyricAnchorIndex >= 0) activeLyricAnchorIndex * 2 + 1 else -1
+    val activeLyricTime = lyricLines?.getOrNull(activeLyricIndex)?.timeMs
+    val secondaryLyricIndices = remember(lyricLines) {
+        buildSet {
+            lyricLines.orEmpty().forEachIndexed { index, line ->
+                if (line.isBackgroundCue) add(index)
+            }
+        }.toSet()
+    }
+    val nextLyricTimes = remember(lyricLines) {
+        val lines = lyricLines.orEmpty()
+        val sortedCueTimes = lines.mapNotNull { it.timeMs }.distinct().sorted()
+        lines.map { line ->
+            val currentTime = line.timeMs ?: return@map null
+            val searchResult = sortedCueTimes.binarySearch(currentTime)
+            val nextIndex = if (searchResult >= 0) searchResult + 1 else -searchResult - 1
+            sortedCueTimes.getOrNull(nextIndex)
+        }
+    }
+    val activeLyricIndices = remember(lyricLines, currentPositionMs, nextLyricTimes, durationMs) {
+        buildSet {
+            lyricLines.orEmpty().forEachIndexed { index, line ->
+                val start = line.timeMs ?: return@forEachIndexed
+                val end = line.endTimeMs?.takeIf { it > start }
+                    ?: nextLyricTimes.getOrNull(index)
+                    ?: durationMs.takeIf { it > start }
+                if (currentPositionMs >= start && (end == null || currentPositionMs <= end)) add(index)
+            }
+        }
+    }
     val isScrubbing = scrubPosition != null
     val hasSynchronizedLyrics = remember(lyricLines) {
         hasUsableLyricsTimeline(lyricLines.orEmpty())
@@ -5114,7 +5259,7 @@ private fun LyricsScrollArea(
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
                 Text(
-                    "Import a timed .lrc file or a plain text lyric sheet.",
+                    "Import timed .lrc or .ttml lyrics, or a plain text lyric sheet.",
                     Modifier.padding(top = 7.dp),
                     color = Color.White.copy(.58f),
                     fontSize = 14.sp,
@@ -5168,14 +5313,34 @@ private fun LyricsScrollArea(
                         index % 2 == 1 -> {
                             val lineIndex = (index - 1) / 2
                             val line = displayLyrics[lineIndex]
-                            LyricsLineContent(
+                            val isSecondary = lineIndex in secondaryLyricIndices
+                            val nextCueTimeMs = nextLyricTimes.getOrNull(lineIndex)
+                            val cueEndTimeMs = line.endTimeMs?.takeIf { start -> line.timeMs?.let { start > it } == true }
+                                ?: nextCueTimeMs
+                            val secondaryIsInItsCueWindow = isSecondary && line.timeMs?.let { start ->
+                                currentPositionMs >= start &&
+                                    (cueEndTimeMs?.let { currentPositionMs < it } ?: (durationMs <= 0L || currentPositionMs < durationMs))
+                            } == true
+                            AnimatedVisibility(
+                                visible = !isSecondary || secondaryIsInItsCueWindow,
                                 modifier = Modifier.animateItem(placementSpec = lyricItemPlacementSpec)
-                                    .fillMaxWidth().padding(bottom = 25.dp),
-                                line = line,
-                                active = !isLyricsWaiting && lineIndex in activeLyricIndices,
-                                positionMs = if (lineIndex in activeLyricIndices) currentPositionMs else 0L,
-                                onClick = { line.timeMs?.let(onSeek) },
-                            )
+                                    .fillMaxWidth(),
+                                enter = fadeIn(tween(260, easing = WavvMotionEasing)) +
+                                    expandVertically(expandFrom = Alignment.CenterVertically, animationSpec = tween(420, easing = WavvMotionEasing)) +
+                                    slideInVertically(animationSpec = tween(420, easing = WavvMotionEasing)) { it / 6 },
+                                exit = fadeOut(tween(180, easing = WavvMotionEasing)) +
+                                    shrinkVertically(shrinkTowards = Alignment.CenterVertically, animationSpec = tween(360, easing = WavvMotionEasing)) +
+                                    slideOutVertically(animationSpec = tween(360, easing = WavvMotionEasing)) { it / 8 },
+                            ) {
+                                LyricsLineContent(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 25.dp),
+                                    line = line,
+                                    active = !isLyricsWaiting && lineIndex in activeLyricIndices,
+                                    positionMs = currentPositionMs,
+                                    nextLineTimeMs = line.endTimeMs ?: nextCueTimeMs,
+                                    onClick = { line.timeMs?.let(onSeek) },
+                                )
+                            }
                         }
                         else -> {
                             val afterLineIndex = index / 2 - 1
@@ -5191,7 +5356,7 @@ private fun LyricsScrollArea(
         }
         if (importError) {
             Text(
-                "Couldn’t read that lyrics file. Try an LRC or text file.",
+                "Couldn’t read that lyrics file. Try a TTML, LRC, or text file.",
                 Modifier.align(Alignment.BottomCenter).padding(horizontal = 18.dp, vertical = 12.dp),
                 color = Color.White.copy(.72f),
                 fontSize = 12.sp,
@@ -5202,14 +5367,13 @@ private fun LyricsScrollArea(
 }
 
 private fun findActiveLyricIndex(lines: List<LyricLine>, positionMs: Long): Int {
-    var low = 0
-    var high = lines.size
-    while (low < high) {
-        val middle = (low + high) ushr 1
-        val lineTime = lines[middle].timeMs
-        if (lineTime != null && lineTime <= positionMs) low = middle + 1 else high = middle
+    // TTML documents can contain untimed paragraphs between timed cues. A binary
+    // search over those mixed entries either drops them or places them at the tail.
+    for (index in lines.indices.reversed()) {
+        val lineTime = lines[index].timeMs
+        if (lineTime != null && lineTime <= positionMs) return index
     }
-    return low - 1
+    return -1
 }
 
 @Composable
@@ -5218,6 +5382,7 @@ private fun LyricsLineContent(
     line: LyricLine,
     active: Boolean,
     positionMs: Long,
+    nextLineTimeMs: Long?,
     onClick: () -> Unit,
 ) {
     val textAlign = when (line.vocalSide) {
@@ -5252,28 +5417,7 @@ private fun LyricsLineContent(
             blurRadius = with(density) { if (active) 3.dp.toPx() else 0f },
         ),
     )
-    val currentWordIndex = if (active) {
-        line.words.indexOfLast { it.timeMs?.let { time -> time <= positionMs } == true }
-    } else -1
-    val annotatedText = remember(line, active, currentWordIndex) {
-        if (line.words.isEmpty()) {
-            AnnotatedString(line.text)
-        } else {
-            buildAnnotatedString {
-                line.words.forEachIndexed { index, word ->
-                    val color = when {
-                        !active -> Color.White.copy(.46f)
-                        index == currentWordIndex -> Color(0xFFFFFFFF)
-                        index < currentWordIndex -> Color.White.copy(.78f)
-                        else -> Color.White.copy(.52f)
-                    }
-                    withStyle(SpanStyle(color = color, fontWeight = if (index == currentWordIndex && active) FontWeight.Bold else FontWeight.SemiBold)) {
-                        append(word.text)
-                    }
-                }
-            }
-        }
-    }
+    val annotatedText = rememberAnimatedLyricWords(line.words, line.text, active, positionMs, nextLineTimeMs)
     Box(modifier) {
         Column(
             Modifier.align(boxAlignment).fillMaxWidth(if (line.vocalSide == null) .94f else .88f)
@@ -5291,25 +5435,126 @@ private fun LyricsLineContent(
                 annotatedText,
                 Modifier.fillMaxWidth(),
                 color = textColor,
-                fontSize = if (active) 28.sp else 22.sp,
-                lineHeight = if (active) 36.sp else 30.sp,
+                fontSize = when {
+                    line.isBackgroundCue && active -> 19.sp
+                    line.isBackgroundCue -> 17.sp
+                    active -> 28.sp
+                    else -> 22.sp
+                },
+                lineHeight = when {
+                    line.isBackgroundCue && active -> 27.sp
+                    line.isBackgroundCue -> 24.sp
+                    active -> 36.sp
+                    else -> 30.sp
+                },
                 fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                 textAlign = textAlign,
                 style = lineStyle,
             )
-            line.backgroundText?.takeIf(String::isNotBlank)?.let { backing ->
-                Text(
-                    backing,
-                    Modifier.fillMaxWidth(),
-                    color = Color.White.copy(if (active) .65f else .36f),
-                    fontSize = 15.sp,
-                    lineHeight = 20.sp,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = textAlign,
-                )
+        }
+    }
+}
+
+@Composable
+private fun rememberAnimatedLyricWords(
+    words: List<LyricWord>,
+    fallbackText: String,
+    active: Boolean,
+    positionMs: Long,
+    nextLineTimeMs: Long?,
+    dimAlpha: Float = .46f,
+): AnnotatedString {
+    if (words.isEmpty()) return remember(fallbackText) { AnnotatedString(fallbackText) }
+    val currentWordIndex = if (active) {
+        words.indexOfLast { word -> word.timeMs?.let { it <= positionMs } == true }
+    } else -1
+    val currentWordProgress = if (currentWordIndex >= 0) {
+        lyricWordProgress(words, currentWordIndex, positionMs, nextLineTimeMs)
+    } else 0f
+    val graphemeOffsets = remember(words) { words.map { lyricGraphemeOffsets(it.text) } }
+    val animatedProgress = ArrayList<Float>(words.size)
+    words.forEachIndexed { index, _ ->
+        val target = when {
+            !active -> 0f
+            index < currentWordIndex -> 1f
+            index == currentWordIndex -> currentWordProgress
+            else -> 0f
+        }
+        val value by animateFloatAsState(
+            targetValue = target,
+            animationSpec = spring(dampingRatio = .92f, stiffness = 420f),
+            label = "completed lyric word fill",
+        )
+        animatedProgress += value
+    }
+    return remember(words, currentWordIndex, active, animatedProgress, graphemeOffsets) {
+        buildAnnotatedString {
+            words.forEachIndexed { index, word ->
+                if (!active) {
+                    withStyle(SpanStyle(color = Color.White.copy(alpha = dimAlpha), fontWeight = FontWeight.SemiBold)) {
+                        append(word.text)
+                    }
+                } else {
+                    val offsets = graphemeOffsets[index]
+                    val graphemeProgress = (offsets.size - 1) * animatedProgress[index]
+                    val completedGraphemes = graphemeProgress.toInt()
+                        .coerceIn(0, offsets.lastIndex.coerceAtLeast(0))
+                    val splitIndex = offsets.getOrElse(completedGraphemes) { word.text.length }
+                    val leadingGrapheme = offsets.getOrNull(completedGraphemes + 1) ?: word.text.length
+                    val leadingProgress = (graphemeProgress - completedGraphemes).coerceIn(0f, 1f)
+                    if (splitIndex > 0) {
+                        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) {
+                            append(word.text.substring(0, splitIndex))
+                        }
+                    }
+                    if (leadingGrapheme > splitIndex) {
+                        val leadingAlpha = .42f + (.58f * leadingProgress)
+                        withStyle(SpanStyle(color = Color.White.copy(alpha = leadingAlpha), fontWeight = FontWeight.SemiBold)) {
+                            append(word.text.substring(splitIndex, leadingGrapheme))
+                        }
+                    }
+                    if (leadingGrapheme < word.text.length) {
+                        withStyle(SpanStyle(color = Color.White.copy(alpha = .42f), fontWeight = FontWeight.SemiBold)) {
+                            append(word.text.substring(leadingGrapheme))
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+private fun lyricWordProgress(
+    words: List<LyricWord>,
+    index: Int,
+    positionMs: Long,
+    nextLineTimeMs: Long?,
+): Float {
+    val startMs = words[index].timeMs ?: return 0f
+    var nextWordTimeMs: Long? = null
+    for (nextIndex in index + 1 until words.size) {
+        val candidate = words[nextIndex].timeMs
+        if (candidate != null && candidate > startMs) {
+            nextWordTimeMs = candidate
+            break
+        }
+    }
+    val endMs = nextWordTimeMs ?: nextLineTimeMs?.takeIf { it > startMs }
+    val durationMs = (endMs?.minus(startMs) ?: 450L).coerceIn(120L, 1_200L)
+    return ((positionMs - startMs).toFloat() / durationMs).coerceIn(0f, 1f)
+}
+
+private fun lyricGraphemeOffsets(text: String): List<Int> {
+    val iterator = java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
+    iterator.setText(text)
+    val offsets = buildList {
+        var boundary = iterator.first()
+        while (boundary != java.text.BreakIterator.DONE) {
+            add(boundary)
+            boundary = iterator.next()
+        }
+    }
+    return offsets.ifEmpty { listOf(0) }
 }
 
 @Composable
@@ -5411,7 +5656,7 @@ private fun LyricsOptionsMenu(
                     slideOutVertically(tween(150, easing = WavvMotionEasing)) { it / 9 },
             ) {
                 val shape = RoundedCornerShape(18.dp)
-                Box(Modifier.widthIn(min = 220.dp, max = 260.dp).shadow(20.dp, shape).clip(shape)) {
+                Box(Modifier.widthIn(min = 196.dp, max = 218.dp).shadow(20.dp, shape).clip(shape)) {
                     AlbumArt(song, Modifier.matchParentSize().scale(1.18f).blur(26.dp), null, 0.dp)
                     Box(
                         Modifier.matchParentSize().background(
@@ -5422,6 +5667,89 @@ private fun LyricsOptionsMenu(
                         LyricsMenuItem(Icons.Default.Folder, "Import lyrics", onClick = onImport)
                         LyricsMenuItem(Icons.Default.Tune, "Lyrics offset", onClick = onAdjustOffset)
                         LyricsMenuItem(Icons.Default.MusicNote, "Lyrics provider", enabled = false, onClick = {})
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LyricsHorizontalMoreIcon(size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val radius = this.size.minDimension * .075f
+        listOf(.25f, .5f, .75f).forEach { fraction ->
+            drawCircle(
+                color = Color.White.copy(.92f),
+                radius = radius,
+                center = Offset(this.size.width * fraction, this.size.height * .5f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsTrackActionsMenu(
+    song: Song,
+    visible: Boolean,
+    isUHQEnhanced: Boolean,
+    showUHQOption: Boolean,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onNavigateToAlbum: () -> Unit,
+    onNavigateToArtist: () -> Unit,
+    onSetTrackUHQ: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var popupMounted by remember { mutableStateOf(visible) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            popupMounted = true
+        } else if (popupMounted) {
+            delay(220)
+            popupMounted = false
+        }
+    }
+
+    if (popupMounted) {
+        val yOffset = with(LocalDensity.current) { 8.dp.roundToPx() }
+        Popup(
+            alignment = Alignment.TopEnd,
+            offset = IntOffset(0, yOffset),
+            onDismissRequest = onDismiss,
+            properties = PopupProperties(focusable = true),
+        ) {
+            AnimatedVisibility(
+                visible = visible,
+                enter = fadeIn(tween(160)) + scaleIn(tween(220, easing = WavvMotionEasing), initialScale = .94f) +
+                    slideInVertically(tween(220, easing = WavvMotionEasing)) { -it / 12 },
+                exit = fadeOut(tween(130)) + scaleOut(tween(180, easing = WavvMotionEasing), targetScale = .97f) +
+                    slideOutVertically(tween(180, easing = WavvMotionEasing)) { -it / 14 },
+            ) {
+                val shape = RoundedCornerShape(19.dp)
+                Box(
+                    Modifier.widthIn(min = 208.dp, max = 232.dp)
+                        .shadow(22.dp, shape)
+                        .clip(shape)
+                        .background(Color(0xE8111215))
+                        .border(1.dp, Color.White.copy(.045f), shape),
+                ) {
+                    AlbumArt(song, Modifier.matchParentSize().scale(1.16f).blur(25.dp), null, 0.dp)
+                    Box(Modifier.matchParentSize().background(Color(0xE6090A0C)))
+                    Column(Modifier.padding(vertical = 5.dp)) {
+                        LyricsMenuItem(Icons.Default.SkipNext, "Play next", onClick = onPlayNext)
+                        LyricsMenuItem(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue", onClick = onAddToQueue)
+                        LyricsMenuItem(Icons.Default.Add, "Add to playlist", onClick = onAddToPlaylist)
+                        LyricsMenuItem(Icons.Default.Album, "Go to album", onClick = onNavigateToAlbum)
+                        LyricsMenuItem(Icons.Default.Mic, "Go to artist", onClick = onNavigateToArtist)
+                        if (showUHQOption) {
+                            LyricsMenuItem(
+                                Icons.Default.GraphicEq,
+                                if (isUHQEnhanced) "Play original" else "Upgrade quality · UHQ",
+                                onClick = onSetTrackUHQ,
+                            )
+                        }
                     }
                 }
             }
