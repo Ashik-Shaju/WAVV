@@ -310,6 +310,17 @@ class LibraryViewModel(
             try {
                 delay(SEARCH_DEBOUNCE_MS)
                 val catalogIntent = withContext(Dispatchers.Default) { parseMusicQuery(query, songs) }
+                val quickResults = withContext(Dispatchers.Default) {
+                    rankLocalSearch(
+                        songs = songs,
+                        intent = catalogIntent,
+                        semanticMatches = emptyList(),
+                        preferenceOrder = (state.value as? LibraryUiState.Ready)?.personalizedRecommendations.orEmpty(),
+                    )
+                }
+                _state.update { current ->
+                    if (current is LibraryUiState.Ready) current.copy(searchResults = quickResults) else current
+                }
                 val languageTaggedSongs = if (catalogIntent.languageCode == null) songs else withContext(Dispatchers.IO) {
                     songs.map { song ->
                         if (song.languageMetadataChecked || song.languageTags.isNotEmpty()) return@map song

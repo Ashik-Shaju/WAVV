@@ -96,6 +96,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -1064,6 +1066,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         animationSpec = tween(560, easing = WavvMotionEasing),
         label = "home stack expansion",
     )
+    val searchImeVisible = tab == Tab.Search && WindowInsets.ime.getBottom(LocalDensity.current) > 0
     LaunchedEffect(activeSong?.id) {
         if (!playerPositionInitialized && activeSong != null) {
             if (playbackState.isPlaying) playerExpanded = true
@@ -1227,7 +1230,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         }
     }
 
-    SharedTransitionLayout(Modifier.fillMaxSize()) {
+    SharedTransitionLayout(
+        Modifier.fillMaxSize().then(if (tab == Tab.Search) Modifier.imePadding() else Modifier),
+    ) {
         val navBackdrop = rememberLayerBackdrop()
         Box(Modifier.fillMaxSize().background(WavvBackground)) {
         Box(Modifier.fillMaxSize().layerBackdrop(navBackdrop)) {
@@ -1372,6 +1377,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 stackDockEnabled = tab == Tab.Home,
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
+                bottomClearance = if (tab == Tab.Search) 80.dp else 96.dp,
                 liked = activeSong.id in favoriteIds,
                 accentColor = playbackAccentColor,
                 songChangeDirection = songChangeDirection,
@@ -1420,7 +1426,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             )
         }
         AnimatedVisibility(
-            visible = showLibrary && !showStandby,
+            visible = showLibrary && !showStandby && !searchImeVisible,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn(tween(300, easing = WavvScreenEasing)),
             exit = fadeOut(tween(220, easing = WavvScreenEasing)),
@@ -2187,7 +2193,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, accentColor: Color, songChangeDirection: Int, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, accentColor: Color, songChangeDirection: Int, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, bottomClearance: Dp = 96.dp, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
     val height by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar height") {
@@ -2217,7 +2223,7 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
     val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     BoxWithConstraints(modifier) {
     val dockProgress = if (stackDockEnabled) stackDockProgress.value.coerceIn(0f, 1f) else 0f
-    val bottomPosition = maxHeight - navigationBarBottom - 96.dp - height + barOffset
+    val bottomPosition = maxHeight - navigationBarBottom - bottomClearance - height + barOffset
     val topPosition = statusBarTop + 70.dp
     val barPosition = bottomPosition * (1f - dockProgress) + topPosition * dockProgress
     Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).offset(y = barPosition).height(height)

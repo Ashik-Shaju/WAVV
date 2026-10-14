@@ -1,8 +1,20 @@
 package com.wavv.app
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,9 +30,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -32,8 +44,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,9 +60,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
@@ -93,18 +102,19 @@ internal fun SearchScreen(
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
     val imeBottomPx = WindowInsets.ime.getBottom(density)
-    val normalBarBottom = if (hasNowPlaying) 184.dp else 88.dp
-    val imeBottom = with(density) { imeBottomPx.toDp() }
-    val desiredBarBottom = maxOf(normalBarBottom, imeBottom + 10.dp)
-    val imeBarOffsetPx = remember { Animatable(0f) }
-    LaunchedEffect(imeBottomPx, normalBarBottom) {
-        val targetOffset = with(density) { (normalBarBottom - desiredBarBottom).toPx() }
-        if (imeBottomPx > 0) {
-            imeBarOffsetPx.snapTo(targetOffset)
-        } else {
-            imeBarOffsetPx.animateTo(0f, tween(280))
-        }
+    val imeVisible = imeBottomPx > 0
+    val navigationBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    val normalBarBottom = if (hasNowPlaying) {
+        navigationBarBottom + 138.dp
+    } else {
+        navigationBarBottom + 62.dp
     }
+    val targetBarBottom = if (imeVisible) 16.dp else normalBarBottom
+    val barBottom by animateDpAsState(
+        targetValue = targetBarBottom,
+        animationSpec = spring(dampingRatio = .9f, stiffness = 560f),
+        label = "search bar keyboard position",
+    )
     val genreSongs = remember(songs, selectedGenre, personalizedRecommendations) {
         selectedGenre?.let { genre ->
             recommendationOrderedSongs(songsForGenre(songs, genre), personalizedRecommendations)
@@ -113,9 +123,15 @@ internal fun SearchScreen(
     Column(Modifier.fillMaxSize()) {
         ScreenHeader("Search")
         Box(Modifier.fillMaxSize()) {
+            val resultsBottomPadding = when {
+                hasNowPlaying && imeVisible -> 100.dp
+                hasNowPlaying -> 168.dp
+                imeVisible -> 92.dp
+                else -> 92.dp
+            }
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = if (hasNowPlaying) 256.dp else 160.dp),
+                contentPadding = PaddingValues(bottom = resultsBottomPadding),
             ) {
                 if (selectedGenre != null) {
                     item {
@@ -153,8 +169,18 @@ internal fun SearchScreen(
                     }
                 } else if (query.isNotBlank()) {
                     item {
-                        ShelfLabel(if (semanticSearchComplete) "Semantic results" else "Results")
-                        Spacer(Modifier.height(4.dp))
+                        AnimatedContent(
+                            targetState = semanticSearchComplete,
+                            transitionSpec = {
+                                (fadeIn(tween(240)) + slideInVertically(tween(240)) { it / 4 }) togetherWith
+                                    (fadeOut(tween(160)) + slideOutVertically(tween(160)) { -it / 4 })
+                            },
+                            label = "search result priority label",
+                        ) { semantic ->
+                            Box(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 4.dp)) {
+                                ShelfLabel(if (semantic) "Semantic results" else "Results")
+                            }
+                        }
                     }
                     searchNotice?.let { notice ->
                         item {
@@ -179,10 +205,20 @@ internal fun SearchScreen(
                     }
                     if (semanticLoading) {
                         item {
-                            CircularProgressIndicator(
-                                color = WavvPink,
-                                modifier = Modifier.padding(horizontal = 20.dp).size(18.dp),
-                            )
+                            AnimatedContent(
+                                targetState = searchResults.isNullOrEmpty(),
+                                transitionSpec = {
+                                    (fadeIn(tween(240)) + slideInVertically(tween(240)) { it / 5 }) togetherWith
+                                        (fadeOut(tween(160)) + slideOutVertically(tween(160)) { -it / 5 })
+                                },
+                                label = "search loading to quick results",
+                            ) { waitingForQuickResults ->
+                                if (waitingForQuickResults) {
+                                    SearchLoadingSkeleton()
+                                } else {
+                                    SearchRefiningHint()
+                                }
+                            }
                         }
                     }
                     if (!semanticLoading && searchError == null && searchResults?.isEmpty() == true) {
@@ -196,7 +232,7 @@ internal fun SearchScreen(
                         }
                     }
                     itemsIndexed(searchResults.orEmpty(), key = { _, song -> song.id }) { index, song ->
-                        SearchResultRow(song) { onPlay(it, "search") }
+                        SearchResultRow(song, Modifier.animateItem()) { onPlay(it, "search") }
                         if (index != searchResults.orEmpty().lastIndex) Hairline()
                     }
                 } else if (!focused) {
@@ -225,8 +261,7 @@ internal fun SearchScreen(
                 { focused = it; if (it) selectedGenre = null },
                 focusManager,
                 Modifier.align(Alignment.BottomCenter)
-                    .padding(bottom = normalBarBottom)
-                    .graphicsLayer { translationY = imeBarOffsetPx.value },
+                    .padding(bottom = barBottom),
                 showClear = selectedGenre != null,
             )
         }
@@ -234,8 +269,8 @@ internal fun SearchScreen(
 }
 
 @Composable
-internal fun SearchResultRow(song: Song, onPlay: (Song) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onPlay(song) }.padding(horizontal = 20.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+internal fun SearchResultRow(song: Song, modifier: Modifier = Modifier, onPlay: (Song) -> Unit) {
+    Row(modifier.fillMaxWidth().clickable { onPlay(song) }.padding(horizontal = 20.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         AlbumArt(song, Modifier.size(46.dp), song.title, 8.dp)
         Column(Modifier.weight(1f)) {
             Text(song.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -243,6 +278,63 @@ internal fun SearchResultRow(song: Song, onPlay: (Song) -> Unit) {
         }
         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(.2f), modifier = Modifier.size(16.dp))
     }
+}
+
+@Composable
+private fun SearchLoadingSkeleton() {
+    val transition = rememberInfiniteTransition(label = "search results shimmer")
+    val shimmerProgress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1_050, easing = LinearEasing), RepeatMode.Restart),
+        label = "search skeleton shimmer progress",
+    )
+    val shimmer = Brush.linearGradient(
+        colors = listOf(Color.White.copy(.045f), Color.White.copy(.13f), Color.White.copy(.045f)),
+        start = Offset(shimmerProgress * 900f - 220f, 0f),
+        end = Offset(shimmerProgress * 900f + 180f, 180f),
+    )
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        repeat(4) { index ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Box(Modifier.size(46.dp).clip(RoundedCornerShape(8.dp)).background(shimmer))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.fillMaxWidth(if (index % 2 == 0) .68f else .54f)
+                            .height(12.dp).clip(CircleShape).background(shimmer),
+                    )
+                    Box(
+                        Modifier.fillMaxWidth(if (index % 2 == 0) .42f else .34f)
+                            .height(9.dp).clip(CircleShape).background(shimmer),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchRefiningHint() {
+    val transition = rememberInfiniteTransition(label = "semantic search refining hint")
+    val alpha by transition.animateFloat(
+        initialValue = .4f,
+        targetValue = .9f,
+        animationSpec = infiniteRepeatable(tween(720, easing = LinearEasing), RepeatMode.Reverse),
+        label = "semantic search refining alpha",
+    )
+    Text(
+        "Refining your matches",
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        color = WavvMuted.copy(alpha = alpha),
+        fontSize = 12.sp,
+    )
 }
 
 @Composable
@@ -319,28 +411,24 @@ private fun CategoryCard(category: GenreCategory, onClick: () -> Unit, modifier:
 
 @Composable
 private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: Boolean, onFocusChange: (Boolean) -> Unit, focusManager: androidx.compose.ui.focus.FocusManager, modifier: Modifier = Modifier, showClear: Boolean = false) {
-    val shape = RoundedCornerShape(20.dp)
+    val shape = CircleShape
     Box(
         modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).height(58.dp)
-            .shadow(18.dp, shape)
+            .shadow(14.dp, shape)
             .clip(shape)
-            .background(Color(0xD51F2125))
-            .border(1.dp, Brush.verticalGradient(0f to Color.White.copy(.24f), 1f to Color.White.copy(.08f)), shape),
-    ) {
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    0f to Color.White.copy(.09f),
-                    .46f to Color.Transparent,
-                    1f to Color.Black.copy(.18f),
+            .background(
+                Brush.horizontalGradient(
+                    listOf(Color(0xF125262B), Color(0xF12D2E34), Color(0xF1232429)),
                 ),
+            )
+            .border(
+                1.dp,
+                Brush.horizontalGradient(
+                    listOf(Color.White.copy(.14f), Color(0xFFB6D5FF).copy(.18f), Color.White.copy(.10f)),
+                ),
+                shape,
             ),
-        )
-        Box(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth(.66f).height(1.dp).background(
-                Brush.horizontalGradient(0f to Color.Transparent, .5f to Color.White.copy(.48f), 1f to Color.Transparent),
-            ),
-        )
+    ) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
