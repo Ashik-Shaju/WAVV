@@ -131,6 +131,13 @@ internal fun Modifier.staticGlassFill(tint: Color) = background(
 )
 
 private const val BACKDROP_FRAME_SCALE = .30f
+
+internal fun shouldCaptureBackdropFrame(
+    refreshRequested: Boolean,
+    freezeAfterFirstCapture: Boolean,
+    hasBackdropPixels: Boolean,
+): Boolean = refreshRequested && (!freezeAfterFirstCapture || !hasBackdropPixels)
+
 internal object FrostedBackdropFrames {
     private const val CAPTURE_PADDING_DP = 60f
     private val bitmapCanvas = AndroidCanvas()
@@ -319,7 +326,8 @@ internal class FrostedBackdropView(
     private var blurRadiusPx = blurRadiusDp * resources.displayMetrics.density
     private var appliedBlurRadiusPx = Float.NaN
     private var tintColor = tint.toArgb()
-    private var refreshEnabled = true
+    private var refreshRequested = true
+    private var freezeAfterFirstCapture = false
     private var hasBackdropPixels = false
     private var backdropPixelWidth = 0
     private var backdropPixelHeight = 0
@@ -341,17 +349,20 @@ internal class FrostedBackdropView(
         blurRadiusDp: Float,
         tint: Color,
         refreshEnabled: Boolean = true,
+        freezeAfterFirstCapture: Boolean = false,
     ) {
-        val wasRefreshEnabled = this.refreshEnabled
+        val wasRefreshEnabled = shouldRefreshBackdrop()
         val requestedBlurRadiusPx = blurRadiusDp * resources.displayMetrics.density
         val styleChanged = blurRadiusPx != requestedBlurRadiusPx || tintColor != tint.toArgb()
         blurRadiusPx = requestedBlurRadiusPx
         tintColor = tint.toArgb()
-        this.refreshEnabled = refreshEnabled
-        if (!wasRefreshEnabled && refreshEnabled) hasBackdropPixels = false
+        refreshRequested = refreshEnabled
+        this.freezeAfterFirstCapture = freezeAfterFirstCapture
+        val isRefreshEnabled = shouldRefreshBackdrop()
+        if (!wasRefreshEnabled && isRefreshEnabled) hasBackdropPixels = false
         applyBlurEffect()
         if (styleChanged) invalidate()
-        if (isAttachedToWindow && wasRefreshEnabled != refreshEnabled && refreshEnabled) invalidate()
+        if (isAttachedToWindow && wasRefreshEnabled != isRefreshEnabled && isRefreshEnabled) invalidate()
     }
 
     override fun onDraw(canvas: AndroidCanvas) {
@@ -393,6 +404,13 @@ internal class FrostedBackdropView(
         FrostedBackdropFrames.register(this, captureState)
     }
 
+    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
+        if (freezeAfterFirstCapture && (width != oldWidth || height != oldHeight)) {
+            hasBackdropPixels = false
+        }
+    }
+
     fun refreshAfterHostResume() {
         hasBackdropPixels = false
         applyBlurEffect(force = true)
@@ -423,7 +441,11 @@ internal class FrostedBackdropView(
         }
     }
 
-    fun shouldRefreshBackdrop(): Boolean = refreshEnabled
+    fun shouldRefreshBackdrop(): Boolean = shouldCaptureBackdropFrame(
+        refreshRequested = refreshRequested,
+        freezeAfterFirstCapture = freezeAfterFirstCapture,
+        hasBackdropPixels = hasBackdropPixels,
+    )
 
     /** Returns true when pixels directly behind this surface changed. */
     fun updateBackdropPixels(frame: Bitmap, root: View, scale: Float): Boolean {
@@ -479,10 +501,11 @@ internal fun FrostedBackdrop(
     tint: Color,
     modifier: Modifier,
     refreshEnabled: Boolean = true,
+    freezeAfterFirstCapture: Boolean = false,
 ) {
     AndroidView(
         modifier = modifier,
         factory = { FrostedBackdropView(it, captureState, blurRadiusDp, tint) },
-        update = { it.updateStyle(blurRadiusDp, tint, refreshEnabled) },
+        update = { it.updateStyle(blurRadiusDp, tint, refreshEnabled, freezeAfterFirstCapture) },
     )
 }

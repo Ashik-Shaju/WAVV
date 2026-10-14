@@ -3890,7 +3890,8 @@ private fun QueuePanel(
     var draggingSongKey by remember { mutableStateOf<String?>(null) }
     var draggingSongIndex by remember { mutableIntStateOf(-1) }
     var draggingSection by remember { mutableStateOf(QueueListSection.Queue) }
-    var draggingPointerY by remember { mutableFloatStateOf(Float.NaN) }
+    val draggingPointerYState = remember { mutableFloatStateOf(Float.NaN) }
+    var draggingPointerY by draggingPointerYState
     var draggingTouchOffsetY by remember { mutableFloatStateOf(0f) }
     var queueListTopInRootPx by remember { mutableFloatStateOf(0f) }
     var localQueueOrder by remember { mutableStateOf<List<QueueDragEntry>?>(null) }
@@ -4180,15 +4181,16 @@ private fun QueuePanel(
                 }
             },
     ) {
-        FrostedBackdrop(
-            captureState = captureState,
-            blurRadiusDp = 38f,
-            tint = Color(0xA9101117),
-            modifier = Modifier.matchParentSize(),
-            // The backdrop itself is static while queue rows move. Freezing the capture
-            // during a drag avoids spending a frame budget re-blurring the whole screen.
-            refreshEnabled = draggingSongKey == null && settlingSongKey == null,
-        )
+        androidx.compose.runtime.key(song.id) {
+            FrostedBackdrop(
+                captureState = captureState,
+                blurRadiusDp = 38f,
+                tint = Color(0xA9101117),
+                modifier = Modifier.matchParentSize(),
+                refreshEnabled = true,
+                freezeAfterFirstCapture = true,
+            )
+        }
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 8.dp)) {
         Row(
             Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 20.dp),
@@ -4417,12 +4419,6 @@ private fun QueuePanel(
         val overlayRows = if (draggingSection == QueueListSection.AutoPlay) displayedAutoplayEntries else displayedQueueEntries
         val overlayEntry = overlayKey?.let { key -> overlayRows.firstOrNull { it.key == key } }
         if (overlayEntry != null) {
-            val overlayTopPx = if (draggingSongKey != null && !draggingPointerY.isNaN()) {
-                draggingPointerY - draggingTouchOffsetY
-            } else {
-                settlingOverlayStartTopPx +
-                    (settlingOverlayTargetTopPx - settlingOverlayStartTopPx) * settleProgress
-            }
             val overlayAlpha = if (draggingSongKey != null) 1f else 1f - settleProgress
             val overlayDropBlend = if (draggingSongKey != null) 0f
                 else 1f - kotlin.math.abs(2f * settleProgress - 1f)
@@ -4432,6 +4428,13 @@ private fun QueuePanel(
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp)
                     .offset {
+                        val pointerY = draggingPointerYState.floatValue
+                        val overlayTopPx = if (draggingSongKey != null && !pointerY.isNaN()) {
+                            pointerY - draggingTouchOffsetY
+                        } else {
+                            settlingOverlayStartTopPx +
+                                (settlingOverlayTargetTopPx - settlingOverlayStartTopPx) * settleProgress
+                        }
                         IntOffset(0, (queueListTopInRootPx + overlayTopPx).roundToInt())
                     }
                     .zIndex(2f)
@@ -4454,9 +4457,8 @@ private fun QueuePanel(
                     blurRadiusDp = 24f,
                     tint = Color(0x99151920),
                     modifier = Modifier.matchParentSize().clip(RoundedCornerShape(16.dp)),
-                    // Sample the current pixels beneath the moving row so the blur follows
-                    // the live queue instead of exposing a stale rectangular capture.
-                    refreshEnabled = true,
+                    // Reuse the queue backdrop snapshot; never recapture the full root per drag frame.
+                    refreshEnabled = false,
                 )
                 Row(
                     Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 8.dp),
