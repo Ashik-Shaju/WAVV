@@ -31,7 +31,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateColorAsState
@@ -47,8 +46,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
@@ -293,6 +293,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.PI
@@ -310,6 +311,7 @@ internal val WavvFrostedGlass = Color(0xD62A2A31)
 internal val WavvPink = Color(0xFFFA2D48)
 internal val WavvMuted = Color.White.copy(alpha = .45f)
 internal val WavvMotionEasing = CubicBezierEasing(.32f, .72f, 0f, 1f)
+internal val WavvMotionReverseEasing = Easing { fraction -> 1f - WavvMotionEasing.transform(1f - fraction) }
 internal val WavvEaseInOut = CubicBezierEasing(.42f, 0f, .58f, 1f)
 internal val WavvScreenEasing = CubicBezierEasing(.22f, 1f, .36f, 1f)
 private val albumArtCache = object : LruCache<String, Bitmap>(12 * 1024) {
@@ -334,6 +336,7 @@ internal val WavvFontFamily = FontFamily(
     Font(R.font.nunito_variable, FontWeight.W900, variationSettings = FontVariation.Settings(FontVariation.weight(900))),
 )
 internal val WavvBrandFontFamily = FontFamily(Font(R.font.galaxie_copernicus_book, FontWeight.W400))
+internal val WavvAppNameFontFamily = FontFamily(Font(R.font.awesome, FontWeight.W400))
 internal val WavvSurfaceGradient = Brush.verticalGradient(
     listOf(Color(0xFF282832), Color(0xFF17171D)),
 )
@@ -346,15 +349,27 @@ private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
 
 private enum class PlayerArtworkFlightDirection { Opening, Closing }
 
-private enum class ArtworkFlightDestination { MiniPlayer, FullPlayer, Lyrics }
+private enum class ArtworkFlightDestination { MiniPlayer, FullPlayer, Lyrics, HomeMixDetail }
 
-private data class PlayerArtworkFrame(
+internal const val HOME_MIX_ARTWORK_TRANSITION_MS = 480
+internal const val HOME_MIX_ARTWORK_CLOSE_TRANSITION_MS = HOME_MIX_ARTWORK_TRANSITION_MS
+internal const val HOME_MIX_ARTWORK_CARD_FADE_OUT_MS = 250
+internal const val HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS = 230
+internal const val HOME_MIX_ARTWORK_MIX_FADE_IN_END_MS = 470
+
+internal data class PlayerArtworkFrame(
     val bounds: Rect,
     val cornerRadiusPx: Float,
     val alpha: Float = 1f,
     val regularArtworkAlpha: Float = 1f,
     val maskedArtworkAlpha: Float = 0f,
     val shadowElevationPx: Float = 0f,
+    val edgeBlend: Float = 0f,
+    val homeCardGradientBlend: Float = 0f,
+    val homeCardBounds: Rect? = null,
+    val homeCardCornerRadiusPx: Float = 0f,
+    val homeCardTextAccentColor: Color? = null,
+    val homeCardButtonAccentColor: Color? = null,
 )
 
 private data class PlayerArtworkFlight(
@@ -364,6 +379,7 @@ private data class PlayerArtworkFlight(
     val from: PlayerArtworkFrame,
     val to: PlayerArtworkFrame,
     val progressOrigin: Float = 0f,
+    val mixProgressOrigin: Float = 1f,
 )
 
 private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
@@ -390,12 +406,48 @@ private fun interpolateArtworkFrame(
     regularArtworkAlpha = lerpFloat(start.regularArtworkAlpha, end.regularArtworkAlpha, progress),
     maskedArtworkAlpha = lerpFloat(start.maskedArtworkAlpha, end.maskedArtworkAlpha, progress),
     shadowElevationPx = lerpFloat(start.shadowElevationPx, end.shadowElevationPx, progress),
+    edgeBlend = lerpFloat(start.edgeBlend, end.edgeBlend, progress),
+    homeCardGradientBlend = lerpFloat(start.homeCardGradientBlend, end.homeCardGradientBlend, progress),
+    homeCardBounds = when {
+        start.homeCardBounds != null && end.homeCardBounds != null -> Rect(
+            lerpFloat(start.homeCardBounds.left, end.homeCardBounds.left, progress),
+            lerpFloat(start.homeCardBounds.top, end.homeCardBounds.top, progress),
+            lerpFloat(start.homeCardBounds.right, end.homeCardBounds.right, progress),
+            lerpFloat(start.homeCardBounds.bottom, end.homeCardBounds.bottom, progress),
+        )
+        progress < .5f -> start.homeCardBounds ?: end.homeCardBounds
+        else -> end.homeCardBounds ?: start.homeCardBounds
+    },
+    homeCardCornerRadiusPx = lerpFloat(start.homeCardCornerRadiusPx, end.homeCardCornerRadiusPx, progress),
+    homeCardTextAccentColor = start.homeCardTextAccentColor ?: end.homeCardTextAccentColor,
+    homeCardButtonAccentColor = start.homeCardButtonAccentColor ?: end.homeCardButtonAccentColor,
 )
+
+private val ARTWORK_MASK_STOP_FRACTIONS = floatArrayOf(0f, .12f, .30f, .35f, .58f, .60f, .84f, 1f)
+
+private fun artworkMaskAlphaAt(fraction: Float, edgeBlend: Float): Float {
+    val clampedFraction = fraction.coerceIn(0f, 1f)
+    val playerMaskAlpha = when {
+        clampedFraction < .35f -> clampedFraction / .35f
+        clampedFraction <= .60f -> 1f
+        else -> (1f - clampedFraction) / .40f
+    }
+    val edgeBlendMaskAlpha = when {
+        clampedFraction < .12f -> .22f * clampedFraction / .12f
+        clampedFraction < .30f -> .22f + .78f * (clampedFraction - .12f) / .18f
+        clampedFraction <= .58f -> 1f
+        clampedFraction < .84f -> 1f - .28f * (clampedFraction - .58f) / .26f
+        else -> .72f * (1f - clampedFraction) / .16f
+    }
+    return lerpFloat(playerMaskAlpha, edgeBlendMaskAlpha, edgeBlend.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+}
 
 @Composable
 private fun PlayerArtworkFlightCanvas(
     flight: PlayerArtworkFlight,
     progress: Float,
+    homeMixArtworkProgress: Float?,
+    homeMixArtworkClosing: Boolean,
 ) {
     val context = LocalContext.current
     val sourceKey = "${flight.song.albumArtUri.orEmpty()}|${flight.song.uri.orEmpty()}"
@@ -411,7 +463,14 @@ private fun PlayerArtworkFlightCanvas(
         }
     }
     val image = bitmap?.asImageBitmap()
-    val frame = interpolateArtworkFrame(flight.from, flight.to, progress)
+    val interpolatedFrame = interpolateArtworkFrame(flight.from, flight.to, progress)
+    val frame = if (homeMixArtworkProgress != null) {
+        // Use the regular player mask for the entire mix flight. The separate mix edge blend
+        // changed the acrylic reveal independently of the ambient backdrop and caused a visible pop.
+        interpolatedFrame.copy(edgeBlend = 0f)
+    } else {
+        interpolatedFrame
+    }
     Canvas(Modifier.fillMaxSize()) {
         val left = frame.bounds.left
         val top = frame.bounds.top
@@ -477,10 +536,9 @@ private fun PlayerArtworkFlightCanvas(
                 )
                 drawRect(
                     brush = Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        .35f to Color.Black,
-                        .60f to Color.Black,
-                        1f to Color.Transparent,
+                        *ARTWORK_MASK_STOP_FRACTIONS.map { fraction ->
+                            fraction to Color.Black.copy(alpha = artworkMaskAlphaAt(fraction, frame.edgeBlend))
+                        }.toTypedArray(),
                         startY = top,
                         endY = top + height,
                     ),
@@ -496,6 +554,46 @@ private fun PlayerArtworkFlightCanvas(
             size = Size(width, height),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius),
         )
+        if (homeMixArtworkProgress != null &&
+            (flight.from.homeCardGradientBlend > .001f || flight.to.homeCardGradientBlend > .001f)
+        ) {
+            val mixProgress = homeMixArtworkProgress.coerceIn(0f, 1f)
+            val gradientBlend = if (homeMixArtworkClosing) {
+                ((HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS.toFloat() / HOME_MIX_ARTWORK_TRANSITION_MS - mixProgress) /
+                    ((HOME_MIX_ARTWORK_MIX_FADE_IN_END_MS - HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS).toFloat() /
+                        HOME_MIX_ARTWORK_TRANSITION_MS)).coerceIn(0f, 1f)
+            } else {
+                (1f - mixProgress / (HOME_MIX_ARTWORK_CARD_FADE_OUT_MS.toFloat() / HOME_MIX_ARTWORK_TRANSITION_MS)).coerceIn(0f, 1f)
+            }
+            val detailGradientStrength =
+                ((mixProgress - HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS.toFloat() / HOME_MIX_ARTWORK_TRANSITION_MS) /
+                    ((HOME_MIX_ARTWORK_MIX_FADE_IN_END_MS - HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS).toFloat() /
+                        HOME_MIX_ARTWORK_TRANSITION_MS)).coerceIn(0f, 1f)
+            val cardGradientStops = listOf(
+                0f to 0f,
+                .337f to 0f,
+                .537f to .48f,
+                .54f to .484f,
+                .81f to .84f,
+                1f to .934f,
+            )
+            val detailGradientAlphaAtStop = { fraction: Float ->
+                ((fraction - .54f) / .46f).coerceIn(0f, 1f) * .24f * detailGradientStrength
+            }
+            val stops = cardGradientStops.map { (fraction, cardAlpha) ->
+                val detailAlpha = detailGradientAlphaAtStop(fraction)
+                fraction to Color.Black.copy(alpha = lerpFloat(detailAlpha, cardAlpha, gradientBlend))
+            }
+            drawRect(
+                brush = Brush.verticalGradient(
+                    *stops.toTypedArray(),
+                    startY = top,
+                    endY = top + height,
+                ),
+                topLeft = Offset(left, top),
+                size = Size(width, height),
+            )
+        }
         drawContext.canvas.restore()
     }
 }
@@ -1001,6 +1099,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var playerPositionInitialized by rememberSaveable { mutableStateOf(false) }
     var homeStackListExpanded by rememberSaveable { mutableStateOf(false) }
     var homeStackIndex by rememberSaveable { mutableIntStateOf(0) }
+    var homeMixDetailOpen by rememberSaveable { mutableStateOf(false) }
+    var homeReselectSignal by remember { mutableIntStateOf(0) }
     var libraryNavigation by rememberSaveable { mutableStateOf(LibraryNavigationState()) }
     val libraryDestination = libraryNavigation.destination
     var libraryHistoryVisible by rememberSaveable { mutableStateOf(false) }
@@ -1037,6 +1137,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
     var miniPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var fullPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var homeMixArtworkSourceFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var homeMixArtworkRootBounds by remember { mutableStateOf<Rect?>(null) }
     var artworkFlight by remember { mutableStateOf<PlayerArtworkFlight?>(null) }
     var artworkFlightTracksFinger by remember { mutableStateOf(false) }
     var artworkFlightAwaitingTarget by remember { mutableStateOf(false) }
@@ -1045,10 +1147,25 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var artworkFlightSequence by remember { mutableStateOf(0L) }
     val gestureArtworkProgress = remember { mutableFloatStateOf(0f) }
     val artworkFlightProgress = remember { Animatable(0f) }
+    val homeMixArtworkTransitionProgress = remember { Animatable(0f) }
     val artworkFlightScope = rememberCoroutineScope()
     val minimumArtworkTravelPx = with(LocalDensity.current) { 280.dp.toPx() }
     val artworkRetargetThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
     val homePlayerExpanded = activeSong != null && playerExpanded
+    val homeMixArtworkProgress = artworkFlight
+        ?.takeIf { artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail }
+        ?.let { if (artworkFlightAwaitingTarget) 0f else homeMixArtworkTransitionProgress.value }
+        ?: if (homeMixDetailOpen) 1f else 0f
+    val homeMixArtworkSurfaceFrame = artworkFlight
+        ?.takeIf { artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail }
+        ?.let { flight ->
+            val rawProgress = when {
+                artworkFlightAwaitingTarget -> 0f
+                artworkFlightTracksFinger -> gestureArtworkProgress.floatValue
+                else -> artworkFlightProgress.value
+            }.coerceIn(0f, 1f)
+            interpolateArtworkFrame(flight.from, flight.to, normalizedArtworkFlightProgress(flight, rawProgress))
+        }
     val enterStandby: () -> Unit = {
         if (!showStandby && StandbyPreference.isEnabled(context) && tab == Tab.Home && homePlayerExpanded) {
             standbyPriorOrientation = hostActivity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -1174,17 +1291,50 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         }
     }
     fun animateArtworkFlight(flight: PlayerArtworkFlight) {
+        val isHomeMixFlight = artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail
+        val durationMillis = if (isHomeMixFlight && flight.direction == PlayerArtworkFlightDirection.Closing) {
+            (HOME_MIX_ARTWORK_CLOSE_TRANSITION_MS * flight.mixProgressOrigin).roundToInt().coerceAtLeast(1)
+        } else if (isHomeMixFlight) {
+            HOME_MIX_ARTWORK_TRANSITION_MS
+        } else {
+            480
+        }
+        val easing = if (isHomeMixFlight && flight.direction == PlayerArtworkFlightDirection.Closing) {
+            WavvMotionReverseEasing
+        } else {
+            WavvMotionEasing
+        }
         artworkFlightTracksFinger = true
         artworkFlightAwaitingTarget = false
         gestureArtworkProgress.floatValue = 0f
         artworkFlightScope.launch {
             artworkFlightProgress.snapTo(0f)
             artworkFlightTracksFinger = false
-            artworkFlightProgress.animateTo(1f, tween(480, easing = WavvMotionEasing))
+            if (isHomeMixFlight) {
+                if (flight.direction == PlayerArtworkFlightDirection.Opening) {
+                    homeMixArtworkTransitionProgress.snapTo(0f)
+                }
+                coroutineScope {
+                    launch {
+                        artworkFlightProgress.animateTo(1f, tween(durationMillis, easing = easing))
+                    }
+                    launch {
+                        homeMixArtworkTransitionProgress.animateTo(
+                            if (flight.direction == PlayerArtworkFlightDirection.Opening) 1f else 0f,
+                            tween(durationMillis, easing = LinearEasing),
+                        )
+                    }
+                }
+            } else {
+                artworkFlightProgress.animateTo(1f, tween(durationMillis, easing = easing))
+            }
             if (artworkFlight?.id == flight.id) {
                 artworkFlight = null
                 artworkFlightOwnedByLyrics = false
                 gestureArtworkProgress.floatValue = 0f
+                if (isHomeMixFlight && flight.direction == PlayerArtworkFlightDirection.Closing) {
+                    homeMixDetailOpen = false
+                }
             }
         }
     }
@@ -1203,6 +1353,91 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             flight.copy(from = currentFrame, to = frame, progressOrigin = rawProgress)
         } else {
             flight.copy(to = frame)
+        }
+    }
+    fun openHomeMixArtworkFlight(song: Song, sourceFrame: PlayerArtworkFrame?) {
+        artworkFlightDestination = ArtworkFlightDestination.HomeMixDetail
+        artworkFlightOwnedByLyrics = false
+        homeMixArtworkSourceFrame = sourceFrame?.copy(
+            regularArtworkAlpha = 1f,
+            maskedArtworkAlpha = 0f,
+            edgeBlend = 0f,
+        )
+        val source = homeMixArtworkSourceFrame
+        if (source != null && source.bounds.width > 0f && source.bounds.height > 0f) {
+            val openingFlight = newArtworkFlight(song, PlayerArtworkFlightDirection.Opening, source, source)
+            artworkFlight = openingFlight
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = true
+            gestureArtworkProgress.floatValue = 0f
+        } else {
+            artworkFlight = null
+            artworkFlightAwaitingTarget = false
+        }
+    }
+    fun updateHomeMixArtworkTarget(frame: PlayerArtworkFrame) {
+        if (frame.bounds.width <= 0f || frame.bounds.height <= 0f) return
+        val target = frame.copy(
+            regularArtworkAlpha = 0f,
+            maskedArtworkAlpha = 1f,
+            edgeBlend = 1f,
+            homeCardBounds = homeMixArtworkRootBounds,
+            homeCardCornerRadiusPx = 0f,
+        )
+        val flight = artworkFlight
+        if (flight?.direction == PlayerArtworkFlightDirection.Opening &&
+            artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail
+        ) {
+            if (artworkFlightAwaitingTarget) {
+                val openingFlight = flight.copy(to = target)
+                artworkFlight = openingFlight
+                animateArtworkFlight(openingFlight)
+            } else if (!artworkFlightTracksFinger && flight.to != target) {
+                artworkFlight = retargetArtworkFlight(flight, target)
+            }
+        }
+    }
+    fun closeHomeMixArtworkFlight(song: Song, targetFrame: PlayerArtworkFrame?) {
+        val currentFlight = artworkFlight?.takeIf { artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail }
+        artworkFlightDestination = ArtworkFlightDestination.HomeMixDetail
+        artworkFlightOwnedByLyrics = false
+        val openingFlight = currentFlight?.takeIf { it.direction == PlayerArtworkFlightDirection.Opening }
+        val openingProgress = openingFlight?.let { flight ->
+            val rawProgress = when {
+                artworkFlightAwaitingTarget -> 0f
+                artworkFlightTracksFinger -> gestureArtworkProgress.floatValue
+                else -> artworkFlightProgress.value.coerceIn(0f, 1f)
+            }
+            normalizedArtworkFlightProgress(flight, rawProgress)
+        }
+        val currentSource = openingFlight?.let { flight ->
+            interpolateArtworkFrame(flight.from, flight.to, openingProgress ?: 0f)
+        }
+        val source = currentSource ?: targetFrame?.copy(
+            regularArtworkAlpha = 0f,
+            maskedArtworkAlpha = 1f,
+            edgeBlend = 1f,
+        ) ?: currentFlight?.to
+        val destination = homeMixArtworkSourceFrame
+        if (source != null && destination != null &&
+            source.bounds.width > 0f && source.bounds.height > 0f &&
+            destination.bounds.width > 0f && destination.bounds.height > 0f
+        ) {
+            val closingFlight = newArtworkFlight(
+                currentFlight?.song ?: song,
+                PlayerArtworkFlightDirection.Closing,
+                source,
+                destination.copy(regularArtworkAlpha = 1f, maskedArtworkAlpha = 0f, edgeBlend = 0f),
+            ).copy(mixProgressOrigin = homeMixArtworkTransitionProgress.value.coerceIn(0f, 1f))
+            artworkFlight = closingFlight
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = false
+            animateArtworkFlight(closingFlight)
+        } else {
+            artworkFlight = null
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = false
+            homeMixDetailOpen = false
         }
     }
     fun openLyricsArtworkFlight(sourceFrame: PlayerArtworkFrame?) {
@@ -1330,8 +1565,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         }
     }
 
-    SharedTransitionLayout(
-        Modifier.fillMaxSize().then(if (tab == Tab.Search) Modifier.imePadding() else Modifier),
+    Box(
+        Modifier.fillMaxSize()
+            .onGloballyPositioned { homeMixArtworkRootBounds = it.boundsInRoot() }
+            .then(if (tab == Tab.Search) Modifier.imePadding() else Modifier),
     ) {
         val navBackdrop = rememberLayerBackdrop()
         Box(Modifier.fillMaxSize().background(WavvBackground)) {
@@ -1390,6 +1627,22 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         hasNowPlaying = activeSong != null,
                         smartMixes = smartMixes,
                         onPlayMix = startMix,
+                        homeMixArtworkFlightActive = artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail && artworkFlight != null,
+                        homeMixArtworkProgress = homeMixArtworkProgress,
+                        homeMixArtworkClosing = artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail &&
+                            artworkFlight?.direction == PlayerArtworkFlightDirection.Closing,
+                        homeMixArtworkSurfaceFrame = homeMixArtworkSurfaceFrame,
+                        homeMixArtworkSurfaceSourceFrame = homeMixArtworkSourceFrame,
+                        onOpenHomeMixArtwork = { song, frame -> openHomeMixArtworkFlight(song, frame) },
+                        onHomeMixArtworkFrameChange = { frame -> updateHomeMixArtworkTarget(frame) },
+                        onCloseHomeMixArtwork = { song, frame -> closeHomeMixArtworkFlight(song, frame) },
+                        onMixDetailVisibilityChange = { homeMixDetailOpen = it },
+                        homeReselectSignal = homeReselectSignal,
+                        onPlayHomeMix = { song, mixSongs, mixTitle ->
+                            playerExpanded = false
+                            playerPositionInitialized = true
+                            onPlayWithRecommendations(song, mixSongs, personalizedRecommendations, "home_mix", "home:${song.id}", mixTitle)
+                        },
                         onExpandPlayer = { if (homeStackIndex == 0) playerExpanded = true },
                     )
                     Tab.Search -> SearchScreen(
@@ -1472,9 +1725,9 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             NowPlayingBar(
                 song = activeSong,
                 state = playbackState,
-                expanded = tab == Tab.Home && homePlayerExpanded && !homeStackListExpanded,
-                stacked = tab == Tab.Home && (!playerExpanded || homeStackListExpanded),
-                stackDockEnabled = tab == Tab.Home,
+                expanded = !homeMixDetailOpen && tab == Tab.Home && homePlayerExpanded && !homeStackListExpanded,
+                stacked = !homeMixDetailOpen && tab == Tab.Home && (!playerExpanded || homeStackListExpanded),
+                stackDockEnabled = tab == Tab.Home && !homeMixDetailOpen,
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
                 bottomClearance = if (tab == Tab.Search) 80.dp else 96.dp,
@@ -1497,7 +1750,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     }
                 },
                 onEnterStandby = enterStandby,
-                artworkFlightActive = artworkFlight != null,
+                // Only hide the mini-player cover while it participates in a player flight.
+                // Carousel-to-mix flights are independent and should leave this cover mounted.
+                artworkFlightActive = artworkFlight != null &&
+                    (artworkFlightDestination == ArtworkFlightDestination.MiniPlayer ||
+                        artworkFlightDestination == ArtworkFlightDestination.FullPlayer),
                 onArtworkFrameChange = { frame ->
                     miniPlayerArtworkFrame = frame
                     val flight = artworkFlight
@@ -1518,10 +1775,22 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         ) {
             BottomNav(
                 active = tab,
-                onChange = { tab = it },
+                onChange = { destination ->
+                    if (destination != Tab.Home && homeMixDetailOpen) {
+                        if (artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail) {
+                            artworkFlight = null
+                            artworkFlightTracksFinger = false
+                            artworkFlightAwaitingTarget = false
+                            gestureArtworkProgress.floatValue = 0f
+                        }
+                        homeMixDetailOpen = false
+                    }
+                    tab = destination
+                },
                 onReselect = { selected ->
                     when (selected) {
                         Tab.Home -> {
+                            homeReselectSignal += 1
                             homeStackListExpanded = false
                             homeStackIndex = 0
                             playerExpanded = activeSong != null
@@ -1641,8 +1910,24 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             PlayerArtworkFlightCanvas(
                 flight = flight,
                 progress = normalizedArtworkFlightProgress(flight, rawProgress),
+                homeMixArtworkProgress = homeMixArtworkProgress.takeIf {
+                    artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail
+                },
+                homeMixArtworkClosing = artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail &&
+                    flight.direction == PlayerArtworkFlightDirection.Closing,
             )
         }
+        artworkFlight
+            ?.takeIf { artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail }
+            ?.let { flight ->
+                HomeMixCardOverlayFlight(
+                    song = flight.song,
+                    sourceFrame = homeMixArtworkSourceFrame,
+                    currentFrame = homeMixArtworkSurfaceFrame,
+                    progress = homeMixArtworkProgress,
+                    closing = flight.direction == PlayerArtworkFlightDirection.Closing,
+                )
+            }
         if (showCreatePlaylist) {
             AlertDialog(
                 onDismissRequest = { showCreatePlaylist = false },
@@ -1738,6 +2023,7 @@ internal fun ScreenHeader(
     backgroundColor: Color? = null,
     statusChips: List<HomeStatusChip> = emptyList(),
     statusChipColor: Color = Color(0xFF26385D),
+    titleFontFamily: FontFamily? = null,
     trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
     val isBrandTitle = title.equals("Wavv", ignoreCase = true)
@@ -1796,7 +2082,7 @@ internal fun ScreenHeader(
                 fontSize = if (brandHome) 33.sp else 32.sp,
                 fontWeight = if (isBrandTitle) FontWeight.Normal else if (brandHome) FontWeight.Black else FontWeight.ExtraBold,
                 letterSpacing = if (brandHome) (-1.15).sp else (-1).sp,
-                fontFamily = if (isBrandTitle) WavvBrandFontFamily else if (brandHome) FontFamily.SansSerif else FontFamily.Default,
+                fontFamily = titleFontFamily ?: if (isBrandTitle) WavvBrandFontFamily else if (brandHome) FontFamily.SansSerif else FontFamily.Default,
             )
             if (waveform) {
                 Spacer(Modifier.width(16.dp))
@@ -2023,7 +2309,7 @@ private fun ImportSourceScreen(
     onChooseFolder: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        ScreenHeader("wavv", waveform = true)
+        ScreenHeader("wavv", waveform = true, titleFontFamily = WavvAppNameFontFamily)
         Column(
             Modifier.fillMaxWidth().padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -2045,9 +2331,7 @@ private fun ImportSourceScreen(
                 Text(
                     buildAnnotatedString {
                         append("Bring your music to ")
-                        withStyle(SpanStyle(fontFamily = WavvBrandFontFamily, fontWeight = FontWeight.Normal)) {
-                            append("wavv")
-                        }
+                        append("wavv")
                     },
                     color = Color.White,
                     fontSize = 28.sp,
@@ -3272,7 +3556,11 @@ private fun QualityDetailRow(label: String, value: String) {
 }
 
 @Composable
-internal fun NowPlayingAmbientBackdrop(song: Song, isPlaying: Boolean) {
+internal fun NowPlayingAmbientBackdrop(
+    song: Song,
+    isPlaying: Boolean,
+    strongerMixBlur: Boolean = false,
+) {
     val pulseTransition = rememberInfiniteTransition(label = "album ambient glow")
     val pulse by pulseTransition.animateFloat(
         initialValue = .35f,
@@ -3293,13 +3581,21 @@ internal fun NowPlayingAmbientBackdrop(song: Song, isPlaying: Boolean) {
     Box(Modifier.fillMaxSize()) {
         AlbumArt(
             song,
-            Modifier.fillMaxSize().scale(1.12f).blur(60.dp).alpha(backdropAlpha),
+            Modifier.fillMaxSize().scale(1.12f)
+                .blur(if (strongerMixBlur) 88.dp else 60.dp)
+                .alpha(backdropAlpha),
             null,
             0.dp,
         )
         Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.45f)
-                .background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black.copy(.85f))),
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .fillMaxHeight(.45f)
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black.copy(if (strongerMixBlur) .72f else .85f),
+                    ),
+                ),
         )
         Box(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.45f)
@@ -3318,7 +3614,7 @@ internal fun NowPlayingAmbientBackdrop(song: Song, isPlaying: Boolean) {
     }
 }
 
-private fun Modifier.maskedArtworkFade(): Modifier =
+internal fun Modifier.maskedArtworkFade(): Modifier =
     graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen).drawWithContent {
         drawContent()
         drawRect(

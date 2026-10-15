@@ -32,21 +32,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.SystemBarStyle
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.updateTransition
-import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.SharedTransitionLayout
-import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -194,6 +191,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -201,10 +201,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -213,6 +214,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -231,6 +234,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
@@ -373,6 +377,134 @@ internal fun homeSectionOrder(sectionCount: Int, stackIndex: Int): List<Int> {
 internal fun homeStackContentVisible(expanded: Boolean, compactVisible: Boolean, expansionProgress: Float): Boolean =
     expanded || compactVisible || expansionProgress > 0f
 
+internal fun homeHeroCardArtworkGradient(
+    startY: Float = 0f,
+    endY: Float = Float.POSITIVE_INFINITY,
+): Brush = Brush.verticalGradient(
+    0f to Color.Transparent,
+    .28f to Color.Black.copy(.48f),
+    .66f to Color.Black.copy(.84f),
+    1f to Color.Black.copy(.96f),
+    startY = startY,
+    endY = endY,
+)
+
+@Composable
+private fun HomeMixCardAcrylicFlightSurface(
+    frame: PlayerArtworkFrame?,
+    sourceFrame: PlayerArtworkFrame?,
+    alpha: Float,
+) {
+    val bounds = frame?.homeCardBounds ?: return
+    val sourceBounds = sourceFrame?.homeCardBounds ?: return
+    if (alpha <= .001f || bounds.width <= 0f || bounds.height <= 0f) return
+    Canvas(Modifier.fillMaxSize().zIndex(11f)) {
+        val movingRadius = frame.homeCardCornerRadiusPx.coerceIn(0f, minOf(bounds.width, bounds.height) / 2f)
+        val sourceRadius = sourceFrame.homeCardCornerRadiusPx.coerceIn(0f, minOf(sourceBounds.width, sourceBounds.height) / 2f)
+        val movingPath = Path().apply {
+            addRoundRect(RoundRect(bounds, CornerRadius(movingRadius)))
+        }
+        val sourcePath = Path().apply {
+            addRoundRect(RoundRect(sourceBounds, CornerRadius(sourceRadius)))
+        }
+        val expandingSurface = Path.combine(PathOperation.Difference, movingPath, sourcePath)
+        val surfaceBrush = Brush.verticalGradient(
+            0f to Color(0xD8243048),
+            .24f to Color(0xD310192B),
+            .62f to Color(0xE0060C19),
+            1f to Color(0xEB050711),
+            startY = bounds.top,
+            endY = bounds.bottom,
+        )
+        drawPath(expandingSurface, surfaceBrush, alpha = alpha)
+        drawPath(
+            expandingSurface,
+            Brush.radialGradient(
+                0f to Color(0x563D68A5),
+                .58f to Color(0x182D4A79),
+                1f to Color.Transparent,
+                center = Offset(bounds.left + bounds.width * .16f, bounds.top + bounds.height * .12f),
+                radius = bounds.height * .55f,
+            ),
+            alpha = alpha,
+        )
+        drawPath(
+            expandingSurface,
+            Brush.linearGradient(
+                0f to Color.White.copy(alpha = .055f),
+                .35f to Color.White.copy(alpha = .012f),
+                .68f to Color.Transparent,
+                1f to Color(0xFFCCB8F4).copy(alpha = .018f),
+                start = Offset(bounds.left, bounds.top),
+                end = Offset(bounds.right, bounds.bottom),
+            ),
+            alpha = alpha,
+        )
+    }
+}
+
+internal fun homeMixDetailOverlayAlpha(progress: Float): Float =
+    ((progress - HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS.toFloat() / HOME_MIX_ARTWORK_TRANSITION_MS) /
+        ((HOME_MIX_ARTWORK_MIX_FADE_IN_END_MS - HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS).toFloat() /
+            HOME_MIX_ARTWORK_TRANSITION_MS)).coerceIn(0f, 1f)
+
+internal fun homeMixCardOverlayAlpha(progress: Float, closing: Boolean): Float =
+    if (closing) {
+        ((HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS.toFloat() / HOME_MIX_ARTWORK_TRANSITION_MS - progress) /
+            ((HOME_MIX_ARTWORK_MIX_FADE_IN_END_MS - HOME_MIX_ARTWORK_MIX_FADE_IN_START_MS).toFloat() /
+                HOME_MIX_ARTWORK_TRANSITION_MS)).coerceIn(0f, 1f)
+    } else {
+        (1f - progress / (HOME_MIX_ARTWORK_CARD_FADE_OUT_MS.toFloat() / HOME_MIX_ARTWORK_TRANSITION_MS)).coerceIn(0f, 1f)
+    }
+
+@Composable
+internal fun HomeMixCardOverlayFlight(
+    song: Song,
+    sourceFrame: PlayerArtworkFrame?,
+    currentFrame: PlayerArtworkFrame?,
+    progress: Float,
+    closing: Boolean,
+) {
+    val sourceBounds = sourceFrame?.homeCardBounds ?: return
+    val bounds = currentFrame?.homeCardBounds ?: sourceBounds
+    if (sourceBounds.width <= 0f || sourceBounds.height <= 0f) return
+    val density = LocalDensity.current
+    val overlayAlpha = homeMixCardOverlayAlpha(progress, closing)
+    if (overlayAlpha <= .001f) return
+    val buttonAccent = sourceFrame.homeCardButtonAccentColor ?: homeFallbackAccent(song.id)
+    val textAccent = sourceFrame.homeCardTextAccentColor ?: Color.White
+    Box(
+        Modifier.offset { IntOffset(bounds.left.roundToInt(), bounds.top.roundToInt()) }
+            .size(with(density) { sourceBounds.width.toDp() }, with(density) { sourceBounds.height.toDp() })
+            .graphicsLayer {
+                scaleX = bounds.width / sourceBounds.width
+                scaleY = bounds.height / sourceBounds.height
+                transformOrigin = TransformOrigin(0f, 0f)
+                alpha = overlayAlpha
+            },
+    ) {
+        Column(
+            Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                .padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(song.title, Modifier.songMetadataMarquee(), color = textAccent, fontSize = 23.sp, fontWeight = FontWeight.Black, letterSpacing = .25.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                    Text(song.artist, Modifier.padding(top = 2.dp).songMetadataMarquee(), color = Color.White.copy(.76f), fontSize = 14.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                }
+                GlassPill(
+                    onClick = {},
+                    onLongClick = {},
+                    label = "Play",
+                    accentColor = buttonAccent,
+                    iconAccentColor = textAccent,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 internal fun HomeScreen(
     songs: List<Song>,
@@ -399,6 +531,17 @@ internal fun HomeScreen(
     personalizedRecommendations: List<Song> = emptyList(),
     smartMixes: List<SmartMix> = emptyList(),
     onPlayMix: (SmartMix) -> Unit = {},
+    homeMixArtworkFlightActive: Boolean,
+    homeMixArtworkProgress: Float,
+    homeMixArtworkClosing: Boolean,
+    homeMixArtworkSurfaceFrame: PlayerArtworkFrame?,
+    homeMixArtworkSurfaceSourceFrame: PlayerArtworkFrame?,
+    onOpenHomeMixArtwork: (Song, PlayerArtworkFrame?) -> Unit,
+    onHomeMixArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onCloseHomeMixArtwork: (Song, PlayerArtworkFrame?) -> Unit,
+    onPlayHomeMix: (Song, List<Song>, String) -> Unit,
+    onMixDetailVisibilityChange: (Boolean) -> Unit,
+    homeReselectSignal: Int,
     statusChips: List<HomeStatusChip> = emptyList(),
 ) {
     val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
@@ -439,7 +582,60 @@ internal fun HomeScreen(
             }
         }
     }
+    val heroMixes = remember(songs, carouselSongs, personalizedRecommendations, smartMixes) {
+        val availableIds = songs.mapTo(mutableSetOf(), Song::id)
+        val engineMixes = buildList {
+            val depth = smartMixes.maxOfOrNull { it.songs.size } ?: 0
+            for (mixIndex in 0 until depth) {
+                smartMixes.forEach { engineMix ->
+                    val rankedSongs = engineMix.songs.filter { it.id in availableIds }
+                    val seed = rankedSongs.getOrNull(mixIndex) ?: return@forEach
+                    val queue = (listOf(seed) + rankedSongs.filterNot { it.id == seed.id })
+                        .distinctBy(Song::id)
+                        .take(21)
+                    val genreName = engineMix.title.removeSuffix(" mix").removeSuffix(" Mix").trim()
+                    val title = if (engineMix.id.startsWith("genre:") && genreName.isNotBlank()) {
+                        "$genreName Mix"
+                    } else "${seed.title} Mix"
+                    add(HomeSongMix(seed, title, queue))
+                }
+            }
+        }.distinctBy { it.seed.id }.associateBy { it.seed.id }
+        carouselSongs.map { seed ->
+            engineMixes[seed.id] ?: run {
+                val queue = (listOf(seed) + recommendationOrderedSongs(songs.filterNot { it.id == seed.id }, personalizedRecommendations))
+                    .distinctBy(Song::id)
+                    .take(21)
+                HomeSongMix(seed, "${seed.title} Mix", queue)
+            }
+        }
+    }
     var selectedCategory by remember { mutableStateOf<HomeStackEntry?>(null) }
+    var selectedHomeMix by remember { mutableStateOf<HomeSongMix?>(null) }
+    var homeMixArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var mixDetailClosing by remember { mutableStateOf(false) }
+    val latestOnMixDetailVisibilityChange = rememberUpdatedState(onMixDetailVisibilityChange)
+    LaunchedEffect(homeMixArtworkFlightActive, mixDetailClosing) {
+        if (mixDetailClosing && !homeMixArtworkFlightActive) {
+            selectedHomeMix = null
+            mixDetailClosing = false
+            latestOnMixDetailVisibilityChange.value(false)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { latestOnMixDetailVisibilityChange.value(false) }
+    }
+    val mixDetailVisible = selectedHomeMix != null
+    fun closeHomeMixDetail() {
+        val mix = selectedHomeMix ?: return
+        if (mixDetailClosing) return
+        mixDetailClosing = true
+        onCloseHomeMixArtwork(mix.seed, homeMixArtworkFrame)
+    }
+    LaunchedEffect(homeReselectSignal) {
+        if (homeReselectSignal > 0) closeHomeMixDetail()
+    }
+    BackHandler(enabled = mixDetailVisible) { closeHomeMixDetail() }
     var backdropSong by remember(carouselSongs) { mutableStateOf(carouselSongs.firstOrNull()) }
     var acrylicChipColor by remember { mutableStateOf(Color(0xFF26385D)) }
     val context = LocalContext.current
@@ -475,6 +671,7 @@ internal fun HomeScreen(
             backgroundColor = Color.Transparent,
             statusChips = statusChips,
             statusChipColor = acrylicChipColor,
+            titleFontFamily = WavvAppNameFontFamily,
         )
         if (songs.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -491,9 +688,19 @@ internal fun HomeScreen(
                 ) {
                     Spacer(Modifier.height(10.dp))
                     HeroCarousel(
-                        songs = carouselSongs,
+                        mixes = heroMixes,
                         onCurrentSongChanged = { backdropSong = it },
                         onPlay = onPlay,
+                        mixDetailVisible = mixDetailVisible,
+                        hiddenArtworkSongId = selectedHomeMix?.seed?.id.takeIf { homeMixArtworkFlightActive },
+                        cardOverlayAlpha = homeMixCardOverlayAlpha(homeMixArtworkProgress, homeMixArtworkClosing),
+                        onOpenMix = { mix, sourceFrame ->
+                            mixDetailClosing = false
+                            selectedHomeMix = mix
+                            homeMixArtworkFrame = null
+                            onMixDetailVisibilityChange(true)
+                            onOpenHomeMixArtwork(mix.seed, sourceFrame)
+                        },
                         onPlayNext = onPlayNext,
                         favoriteIds = favoriteIds,
                         onAddToQueue = onAddToQueue,
@@ -527,6 +734,30 @@ internal fun HomeScreen(
                 )
             }
         }
+        }
+        val detailOverlayAlpha = homeMixDetailOverlayAlpha(homeMixArtworkProgress)
+        HomeMixCardAcrylicFlightSurface(
+            frame = homeMixArtworkSurfaceFrame,
+            sourceFrame = homeMixArtworkSurfaceSourceFrame,
+            alpha = if (homeMixArtworkFlightActive) 1f - detailOverlayAlpha else 0f,
+        )
+        selectedHomeMix?.let { mix ->
+            HomeMixDetailScreen(
+                mix = mix,
+                modifier = Modifier.fillMaxSize().zIndex(12f),
+                overlayAlpha = detailOverlayAlpha,
+                isInteractive = detailOverlayAlpha >= .999f && !homeMixArtworkFlightActive,
+                hideSharpArtwork = homeMixArtworkFlightActive || mixDetailClosing,
+                onArtworkFrameChange = { frame ->
+                    homeMixArtworkFrame = frame
+                    onHomeMixArtworkFrameChange(frame)
+                },
+                onBack = ::closeHomeMixDetail,
+                onPlay = { song ->
+                    onPlayHomeMix(song, mix.songs, mix.title)
+                },
+            )
+        }
         selectedCategory?.let { category ->
             val categorySongs = songs.filter { song ->
                 val text = "${song.title} ${song.artist} ${song.album}".lowercase()
@@ -547,7 +778,6 @@ internal fun HomeScreen(
             }
         }
     }
-    }
 }
 
 private data class HomeStackEntry(
@@ -555,6 +785,12 @@ private data class HomeStackEntry(
     val subtitle: String? = null,
     val song: Song? = null,
     val color: Color? = null,
+)
+
+private data class HomeSongMix(
+    val seed: Song,
+    val title: String,
+    val songs: List<Song>,
 )
 
 private data class HomeStackSection(val label: String, val entries: List<HomeStackEntry>, val mix: SmartMix? = null)
@@ -905,18 +1141,24 @@ private fun Modifier.scrollSafeTap(
     val latestCanTap = rememberUpdatedState(canTap)
     val latestOnTap = rememberUpdatedState(onTap)
     val latestOnLongClick = rememberUpdatedState(onLongClick)
+    val density = LocalDensity.current.density
     pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val velocityTracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
             gestureMoved = down.isConsumed || !latestCanTap.value()
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                velocityTracker.addPosition(change.uptimeMillis, change.position)
                 val delta = change.position - down.position
+                val fastFlick = kotlin.math.abs(velocityTracker.calculateVelocity().y) > 650f * density &&
+                    kotlin.math.abs(delta.y) > 4f * density
                 if (
                     change.isConsumed ||
                     kotlin.math.abs(delta.x) > viewConfiguration.touchSlop ||
-                    kotlin.math.abs(delta.y) > viewConfiguration.touchSlop
+                    kotlin.math.abs(delta.y) > viewConfiguration.touchSlop ||
+                    fastFlick
                 ) {
                     gestureMoved = true
                 }
@@ -996,6 +1238,139 @@ private fun HomeCategoryDetailScreen(
 }
 
 @Composable
+private fun HomeMixDetailScreen(
+    mix: HomeSongMix,
+    modifier: Modifier,
+    overlayAlpha: Float,
+    isInteractive: Boolean,
+    hideSharpArtwork: Boolean,
+    onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onBack: () -> Unit,
+    onPlay: (Song) -> Unit,
+) {
+    BoxWithConstraints(modifier.graphicsLayer { alpha = overlayAlpha }.background(WavvBackground)) {
+        val heroHeight = minOf(620.dp, maxWidth + 170.dp)
+        val artworkSize = minOf(maxWidth, 480.dp)
+        val density = LocalDensity.current
+        val mixListState = rememberLazyListState()
+        val mixListIsScrolling = rememberUpdatedState(mixListState.isScrollInProgress)
+        SongListArtworkBackdrop(
+            mix.seed,
+            Modifier.matchParentSize(),
+            strongerMixBlur = true,
+        )
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            state = mixListState,
+            userScrollEnabled = isInteractive,
+            contentPadding = PaddingValues(bottom = 120.dp),
+        ) {
+            item {
+                Box(Modifier.fillMaxWidth().height(heroHeight)) {
+                    Box(
+                        Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 32.dp).size(artworkSize)
+                            .onGloballyPositioned { coordinates ->
+                                onArtworkFrameChange(
+                                    PlayerArtworkFrame(
+                                        bounds = coordinates.boundsInRoot(),
+                                        cornerRadiusPx = with(density) { 0.dp.toPx() },
+                                        regularArtworkAlpha = 0f,
+                                        maskedArtworkAlpha = 1f,
+                                        edgeBlend = 1f,
+                                        homeCardGradientBlend = 0f,
+                                    ),
+                                )
+                            },
+                    ) {
+                        Box(
+                            Modifier.matchParentSize().alpha(if (hideSharpArtwork) 0f else 1f).maskedArtworkFade(),
+                        ) {
+                            AlbumArt(mix.seed, Modifier.fillMaxSize(), mix.seed.title, 0.dp)
+                            Box(
+                                Modifier.fillMaxSize().background(
+                                    Brush.verticalGradient(
+                                        0f to Color.Transparent,
+                                        .54f to Color.Transparent,
+                                        1f to Color.Black.copy(alpha = .24f),
+                                    ),
+                                ),
+                            )
+                        }
+                    }
+                    IconButton(
+                        enabled = isInteractive,
+                        onClick = onBack,
+                        modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 12.dp, top = 8.dp)
+                            .size(42.dp).clip(CircleShape).background(Color.Black.copy(.28f)),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to home", tint = Color.White)
+                    }
+                    Column(
+                        Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("PERSONALIZED MIX", color = Color.White.copy(.65f), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.1.sp)
+                        Text(mix.title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp, fontFamily = WavvFontFamily, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOfNotNull(mix.seed.artist.takeIf(String::isNotBlank), mix.seed.genre?.takeIf(String::isNotBlank))
+                                .joinToString(" · ").ifBlank { "Recommended around ${mix.seed.title}" },
+                            color = Color.White.copy(.6f),
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().height(56.dp).padding(top = 2.dp)
+                                .clip(CircleShape).background(Color.White)
+                                .scrollSafeTap(
+                                    enabled = isInteractive,
+                                    canTap = { isInteractive && !mixListIsScrolling.value },
+                                ) { onPlay(mix.seed) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color(0xFF111111), modifier = Modifier.size(23.dp))
+                            Text("Play Mix", Modifier.padding(start = 6.dp), color = Color(0xFF111111), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+            }
+            item {
+                Text(
+                    "UP NEXT",
+                    Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 3.dp),
+                    color = Color.White.copy(.48f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = .9.sp,
+                )
+            }
+            itemsIndexed(mix.songs.drop(1), key = { _, song -> song.id }) { index, song ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .scrollSafeTap(
+                            enabled = isInteractive,
+                            canTap = { isInteractive && !mixListIsScrolling.value },
+                        ) { onPlay(song) }
+                        .padding(horizontal = 20.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text("${index + 1}", Modifier.width(22.dp), color = Color.White.copy(.34f), fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    AlbumArt(song, Modifier.size(52.dp), song.title, 9.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.artist, Modifier.padding(top = 3.dp), color = Color.White.copy(.48f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Play ${song.title}", tint = Color.White.copy(.45f), modifier = Modifier.size(19.dp))
+                }
+                if (index != mix.songs.lastIndex - 1) Hairline()
+            }
+        }
+    }
+}
+
+@Composable
 private fun EmptyLibraryCard(onChooseSource: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(20.dp).clip(RoundedCornerShape(20.dp)).background(WavvSurfaceGradient).padding(24.dp),
@@ -1010,9 +1385,13 @@ private fun EmptyLibraryCard(onChooseSource: () -> Unit) {
 
 @Composable
 private fun HeroCarousel(
-    songs: List<Song>,
+    mixes: List<HomeSongMix>,
     onCurrentSongChanged: (Song) -> Unit,
     onPlay: (Song) -> Unit,
+    onOpenMix: (HomeSongMix, PlayerArtworkFrame?) -> Unit,
+    hiddenArtworkSongId: Long?,
+    cardOverlayAlpha: Float,
+    mixDetailVisible: Boolean,
     onPlayNext: (Song) -> Unit,
     favoriteIds: Set<Long>,
     onAddToQueue: (Song) -> Unit,
@@ -1021,15 +1400,15 @@ private fun HeroCarousel(
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
 ) {
-    val pageCount = minOf(8, songs.size).coerceAtLeast(1)
+    val pageCount = minOf(8, mixes.size).coerceAtLeast(1)
     val pagerState = rememberPagerState { pageCount }
-    LaunchedEffect(pagerState.currentPage, songs) {
-        if (songs.isNotEmpty()) {
-            songs.getOrNull(pagerState.currentPage % songs.size)?.let(onCurrentSongChanged)
+    LaunchedEffect(pagerState.currentPage, mixes) {
+        if (mixes.isNotEmpty()) {
+            mixes.getOrNull(pagerState.currentPage % mixes.size)?.seed?.let(onCurrentSongChanged)
         }
     }
-    LaunchedEffect(pageCount) {
-        if (pageCount > 1) while (isActive) {
+    LaunchedEffect(pageCount, mixDetailVisible) {
+        if (pageCount > 1 && !mixDetailVisible) while (isActive) {
             delay(10_000)
             pagerState.animateScrollToPage((pagerState.currentPage + 1) % pageCount)
         }
@@ -1043,10 +1422,15 @@ private fun HeroCarousel(
                 pageSpacing = 12.dp,
                 modifier = Modifier.fillMaxWidth(),
             ) { page ->
-                val song = songs[page % songs.size]
+                val mix = mixes[page % mixes.size]
+                val song = mix.seed
                 HeroCard(
                     song = song,
                     onPlay = onPlay,
+                    onOpenMix = { sourceFrame -> onOpenMix(mix, sourceFrame) },
+                    hideArtwork = song.id == hiddenArtworkSongId,
+                    overlayAlpha = cardOverlayAlpha,
+                    interactive = !mixDetailVisible,
                     onPlayNext = onPlayNext,
                     isFavorite = song.id in favoriteIds,
                     onAddToQueue = onAddToQueue,
@@ -1073,6 +1457,10 @@ private fun HeroCarousel(
 private fun HeroCard(
     song: Song,
     onPlay: (Song) -> Unit,
+    onOpenMix: (PlayerArtworkFrame?) -> Unit,
+    hideArtwork: Boolean,
+    overlayAlpha: Float,
+    interactive: Boolean,
     onPlayNext: (Song) -> Unit,
     isFavorite: Boolean,
     onAddToQueue: (Song) -> Unit,
@@ -1082,8 +1470,11 @@ private fun HeroCard(
     onNavigateToArtist: (Song) -> Unit,
 ) {
     var showActions by remember(song.id) { mutableStateOf(false) }
+    var artworkFrame by remember(song.id) { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var cardBounds by remember(song.id) { mutableStateOf<Rect?>(null) }
     var thumbnailAccent by remember(song.id) { mutableStateOf(homeFallbackAccent(song.id)) }
     val context = LocalContext.current
+    val density = LocalDensity.current
     LaunchedEffect(song.id, song.albumArtUri, song.uri) {
         thumbnailAccent = withContext(Dispatchers.IO) { homeThumbnailAccentColor(context, song) }
     }
@@ -1095,27 +1486,51 @@ private fun HeroCard(
     val cardShape = RoundedCornerShape(20.dp)
     Box(
         Modifier.fillMaxWidth().aspectRatio(.95f)
+            .onGloballyPositioned { cardBounds = it.boundsInRoot() }
             .combinedClickable(
+                enabled = interactive,
                 role = Role.Button,
-                onClick = {},
+                onClick = {
+                    onOpenMix(
+                        artworkFrame?.copy(
+                            homeCardBounds = cardBounds,
+                            homeCardCornerRadiusPx = with(density) { 20.dp.toPx() },
+                            homeCardTextAccentColor = playAccent,
+                            homeCardButtonAccentColor = thumbnailAccent,
+                        ),
+                    )
+                },
                 onLongClickLabel = "Song actions",
                 onLongClick = { showActions = true },
             ),
     ) {
-        Box(Modifier.matchParentSize().clip(cardShape).background(Color.Black)) {
-            AlbumArt(song, Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1f), song.title, 0.dp)
+        Box(
+            Modifier.matchParentSize().clip(cardShape)
+                .background(if (hideArtwork) Color.Transparent else Color.Black),
+        ) {
+            AlbumArt(
+                song,
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(1f)
+                    .onGloballyPositioned { coordinates ->
+                        artworkFrame = PlayerArtworkFrame(
+                            bounds = coordinates.boundsInRoot(),
+                            cornerRadiusPx = with(density) { 20.dp.toPx() },
+                            homeCardGradientBlend = 1f,
+                        )
+                    }
+                    .alpha(if (hideArtwork) 0f else 1f),
+                song.title,
+                0.dp,
+            )
             Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.68f).background(
-                    Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        .28f to Color.Black.copy(.48f),
-                        .66f to Color.Black.copy(.84f),
-                        1f to Color.Black.copy(.96f),
-                    ),
-                ),
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.68f)
+                    .graphicsLayer { alpha = if (hideArtwork) 0f else overlayAlpha }
+                    .background(homeHeroCardArtworkGradient()),
             )
             Column(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
+                Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                    .graphicsLayer { alpha = if (hideArtwork) 0f else overlayAlpha }
+                    .padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

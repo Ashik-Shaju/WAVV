@@ -499,7 +499,7 @@ internal fun recommendationOrderedSongs(songs: List<Song>, recommendations: List
 
 internal fun playPreferenceWeight(selectionSource: String?, inSession: Boolean): Double = when (selectionSource) {
     "autoplay_auto" -> if (inSession) 0.08 else 0.025
-    "smart_mix", "autoplay_recommendation" -> if (inSession) 0.38 else 0.16
+    "smart_mix", "home_mix", "autoplay_recommendation" -> if (inSession) 0.38 else 0.16
     "manual", "home", "home_shelf", "search", "genre", "collection", "collection_shuffle" ->
         if (inSession) 0.46 else 0.18
     "queue" -> if (inSession) 0.32 else 0.12

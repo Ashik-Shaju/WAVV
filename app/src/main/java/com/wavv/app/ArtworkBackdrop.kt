@@ -16,7 +16,11 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 
 @androidx.compose.runtime.Composable
-internal fun SongListArtworkBackdrop(song: Song?, modifier: Modifier = Modifier) {
+internal fun SongListArtworkBackdrop(
+    song: Song?,
+    modifier: Modifier = Modifier,
+    strongerMixBlur: Boolean = false,
+) {
     androidx.compose.foundation.layout.Box(modifier.clipToBounds().background(WavvBackground)) {
         if (song != null) {
             AnimatedContent(
@@ -27,7 +31,13 @@ internal fun SongListArtworkBackdrop(song: Song?, modifier: Modifier = Modifier)
                 },
                 contentKey = { it.id },
                 label = "collection edge to edge artwork",
-            ) { artworkSong -> NowPlayingAmbientBackdrop(artworkSong, isPlaying = true) }
+            ) { artworkSong ->
+                NowPlayingAmbientBackdrop(
+                    artworkSong,
+                    isPlaying = true,
+                    strongerMixBlur = strongerMixBlur,
+                )
+            }
         }
     }
 }
