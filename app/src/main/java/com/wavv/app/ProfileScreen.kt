@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -149,7 +150,13 @@ internal fun YouScreen(
     var savedEqualizerProfiles by remember(context) { mutableStateOf(AudioEqualizerSettings.savedProfiles(context)) }
     val playbackEffects by PlaybackEffectStatus.state.collectAsStateWithLifecycle()
     val uhqPlaybackLabel = uhqSettingLabel(uhqEnabled, activeTrackId, playbackEffects)
-    val equalizerPlaybackLabel = equalizerSettingLabel(equalizerEnabled, equalizerProfile.name, playbackEffects.equalizer)
+    val equalizerPlaybackLabel = equalizerSettingLabel(
+        equalizerEnabled,
+        equalizerProfile.name,
+        playbackEffects.equalizer,
+        playbackEffects.gain,
+        equalizerProfile.gainDb,
+    )
     var standbyEnabledState by remember(context) { mutableStateOf(standbyEnabled) }
     var deviceAdminEnabled by remember(context) { mutableStateOf(StandbyDeviceLock.isEnabled(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -393,10 +400,9 @@ internal fun YouScreen(
                             AudioEqualizerSettings.setActiveProfile(context, profile)
                             AudioEqualizerSettings.setEnabled(context, true)
                         },
-                        onBandChange = { index, gainDb ->
-                            val gains = equalizerProfile.gainsDb.toMutableList().apply { this[index] = gainDb }
-                            equalizerProfile = EqualizerProfile("Custom", gains)
-                            AudioEqualizerSettings.setActiveProfile(context, equalizerProfile)
+                        onProfileChange = { profile ->
+                            equalizerProfile = profile
+                            AudioEqualizerSettings.setActiveProfile(context, profile)
                         },
                         onSaveProfile = { name ->
                             val profile = equalizerProfile.copy(name = name)
@@ -524,7 +530,7 @@ private fun EqualizerSettingsContent(
     playbackStatus: String,
     onEnabledChange: (Boolean) -> Unit,
     onProfileSelected: (EqualizerProfile) -> Unit,
-    onBandChange: (Int, Float) -> Unit,
+    onProfileChange: (EqualizerProfile) -> Unit,
     onSaveProfile: (String) -> Unit,
 ) {
     var showSaveDialog by remember { mutableStateOf(false) }
@@ -537,7 +543,7 @@ private fun EqualizerSettingsContent(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Equalizer", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text("${profile.name} · 10 bands", color = Color.White.copy(.5f), fontSize = 12.sp)
+                Text("${profile.name} · EQ, gain", color = Color.White.copy(.5f), fontSize = 12.sp)
                 Text("Playback: $playbackStatus", color = Color.White.copy(.42f), fontSize = 11.sp)
             }
             Switch(checked = enabled, onCheckedChange = onEnabledChange)
@@ -566,23 +572,29 @@ private fun EqualizerSettingsContent(
             Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            items(EqualizerProfiles.frequenciesHz.size) { index ->
-                val frequencyHz = EqualizerProfiles.frequenciesHz[index]
-                Row(
-                    Modifier.fillMaxWidth().height(48.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(EqualizerProfiles.formatFrequency(frequencyHz), Modifier.width(42.dp), color = Color.White.copy(.72f), fontSize = 11.sp)
-                    Slider(
-                        value = profile.gainsDb[index],
-                        onValueChange = { onBandChange(index, it) },
-                        valueRange = EqualizerProfiles.MIN_GAIN_DB..EqualizerProfiles.MAX_GAIN_DB,
-                        steps = 23,
-                        modifier = Modifier.weight(1f),
-                        enabled = enabled,
-                    )
-                    Text(EqualizerProfiles.formatGain(profile.gainsDb[index]), Modifier.width(54.dp), color = Color.White.copy(.62f), fontSize = 10.sp)
+            item {
+                Text("Session gain", color = Color.White.copy(.56f), fontSize = 12.sp)
+            }
+            item {
+                EqualizerSliderRow("Gain", profile.gainDb, enabled) {
+                    onProfileChange(profile.copy(name = "Custom", gainDb = it))
+                }
+            }
+            item {
+                Text(
+                    "Positive gain can clip loud tracks.",
+                    Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp),
+                    color = Color.White.copy(.36f),
+                    fontSize = 10.sp,
+                )
+            }
+            item {
+                Text("10-band equalizer", color = Color.White.copy(.56f), fontSize = 12.sp)
+            }
+            itemsIndexed(EqualizerProfiles.frequenciesHz) { index, frequencyHz ->
+                EqualizerSliderRow(EqualizerProfiles.formatFrequency(frequencyHz), profile.gainsDb[index], enabled) {
+                    val gains = profile.gainsDb.toMutableList().apply { this[index] = it }
+                    onProfileChange(profile.copy(name = "Custom", gainsDb = gains))
                 }
             }
         }
@@ -648,6 +660,33 @@ private fun EqualizerSettingsContent(
             titleContentColor = Color.White,
             textContentColor = Color.White.copy(.72f),
         )
+    }
+}
+
+
+@Composable
+private fun EqualizerSliderRow(
+    label: String,
+    gainDb: Float,
+    enabled: Boolean,
+    onGainChange: (Float) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().height(48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(label, Modifier.width(64.dp), color = Color.White.copy(.72f), fontSize = 11.sp, maxLines = 1)
+        Slider(
+            value = gainDb,
+            onValueChange = { onGainChange(EqualizerProfiles.quantizeGainDb(it)) },
+            valueRange = EqualizerProfiles.MIN_GAIN_DB..EqualizerProfiles.MAX_GAIN_DB,
+            steps = ((EqualizerProfiles.MAX_GAIN_DB - EqualizerProfiles.MIN_GAIN_DB) /
+                EqualizerProfiles.GAIN_STEP_DB).toInt() - 1,
+            modifier = Modifier.weight(1f),
+            enabled = enabled,
+        )
+        Text(EqualizerProfiles.formatGain(gainDb), Modifier.width(54.dp), color = Color.White.copy(.62f), fontSize = 10.sp)
     }
 }
 

@@ -15,6 +15,7 @@ internal data class PlaybackEffectState(
     val uhqProgressPercent: Int? = null,
     val uhqProgressStage: String? = null,
     val equalizer: EqualizerPlaybackStatus = EqualizerPlaybackStatus.Disabled,
+    val gain: EqualizerPlaybackStatus = EqualizerPlaybackStatus.Disabled,
 )
 
 internal object PlaybackEffectStatus {
@@ -41,6 +42,10 @@ internal object PlaybackEffectStatus {
         mutableState.update { it.copy(equalizer = status) }
     }
 
+    fun updateGain(status: EqualizerPlaybackStatus) {
+        mutableState.update { it.copy(gain = status) }
+    }
+
     fun reset() {
         mutableState.value = PlaybackEffectState()
     }
@@ -65,9 +70,13 @@ internal fun equalizerSettingLabel(
     enabled: Boolean,
     profileName: String,
     status: EqualizerPlaybackStatus,
+    gainStatus: EqualizerPlaybackStatus = EqualizerPlaybackStatus.Disabled,
+    gainDb: Float = 0f,
 ): String = when {
     !enabled -> "Off"
     status == EqualizerPlaybackStatus.Unavailable -> "Unavailable"
     status == EqualizerPlaybackStatus.Waiting || status == EqualizerPlaybackStatus.Disabled -> "Waiting for playback"
+    gainDb != 0f && gainStatus == EqualizerPlaybackStatus.Unavailable -> "$profileName · Gain unavailable"
+    gainDb != 0f && gainStatus != EqualizerPlaybackStatus.Applied -> "Waiting for playback"
     else -> profileName
 }

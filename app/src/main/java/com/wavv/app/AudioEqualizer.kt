@@ -4,12 +4,14 @@ import android.content.Context
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.ln
+import kotlin.math.roundToInt
 
 internal const val AUDIO_EQUALIZER_PREFERENCE_PREFIX = "equalizer_"
 
 internal data class EqualizerProfile(
     val name: String,
     val gainsDb: List<Float>,
+    val gainDb: Float = 0f,
 )
 
 internal data class SavedEqualizerProfile(
@@ -23,16 +25,22 @@ internal fun hasEqualizerProfileName(profiles: List<SavedEqualizerProfile>, cand
 }
 
 internal object EqualizerProfiles {
-    const val MIN_GAIN_DB = -6f
-    const val MAX_GAIN_DB = 6f
+    const val MIN_GAIN_DB = -10f
+    const val MAX_GAIN_DB = 10f
+    const val GAIN_STEP_DB = 1f
     val frequenciesHz = listOf(31, 62, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000)
 
     val presets = listOf(
         EqualizerProfile("Flat", List(frequenciesHz.size) { 0f }),
-        EqualizerProfile("Bass", listOf(3f, 3f, 2.5f, 1.5f, .5f, 0f, 0f, 0f, 0f, 0f)),
-        EqualizerProfile("Vocal", listOf(-1.5f, -1f, -.5f, 0f, 1.5f, 2.5f, 2f, 1f, 0f, -.5f)),
-        EqualizerProfile("Treble", listOf(0f, 0f, 0f, 0f, 0f, .5f, 1.5f, 2.5f, 3f, 3f)),
+        EqualizerProfile("Bass", listOf(3f, 3f, 3f, 2f, 1f, 0f, 0f, 0f, 0f, 0f)),
+        EqualizerProfile("Vocal", listOf(-2f, -1f, -1f, 0f, 2f, 3f, 2f, 1f, 0f, -1f)),
+        EqualizerProfile("Treble", listOf(0f, 0f, 0f, 0f, 0f, 1f, 2f, 3f, 3f, 3f)),
     )
+
+    fun quantizeGainDb(gainDb: Float): Float {
+        if (!gainDb.isFinite()) return 0f
+        return (gainDb.coerceIn(MIN_GAIN_DB, MAX_GAIN_DB) / GAIN_STEP_DB).roundToInt() * GAIN_STEP_DB
+    }
 
     fun gainAtFrequency(gainsDb: List<Float>, frequencyHz: Int): Float {
         require(gainsDb.size == frequenciesHz.size)
@@ -49,28 +57,30 @@ internal object EqualizerProfiles {
 
     fun encodeGains(gainsDb: List<Float>): String? {
         if (gainsDb.size != frequenciesHz.size || gainsDb.any { !it.isFinite() }) return null
-        return gainsDb.joinToString(",") { it.coerceIn(MIN_GAIN_DB, MAX_GAIN_DB).toString() }
+        return gainsDb.joinToString(",") { quantizeGainDb(it).toString() }
     }
 
     fun decodeGains(encoded: String?): List<Float>? {
         val values = encoded?.split(',')?.map(String::toFloatOrNull) ?: return null
         if (values.size != frequenciesHz.size || values.any { it == null || !it.isFinite() }) return null
-        return values.filterNotNull().map { it.coerceIn(MIN_GAIN_DB, MAX_GAIN_DB) }
+        return values.filterNotNull().map(::quantizeGainDb)
     }
 
     fun formatFrequency(frequencyHz: Int): String =
         if (frequencyHz < 1_000) "${frequencyHz}Hz" else "${frequencyHz / 1_000}kHz"
 
-    fun formatGain(gainDb: Float): String = String.format(Locale.ROOT, "%+.1f dB", gainDb)
+    fun formatGain(gainDb: Float): String = String.format(Locale.ROOT, "%+.0f dB", gainDb)
 }
 
 internal object AudioEqualizerSettings {
     private const val ENABLED = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}enabled"
     private const val ACTIVE_NAME = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}active_name"
     private const val ACTIVE_GAINS = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}active_gains"
+    private const val ACTIVE_GAIN = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}active_gain"
     private const val PROFILE_IDS = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}profile_ids"
     private const val PROFILE_NAME_PREFIX = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}profile_name_"
     private const val PROFILE_GAINS_PREFIX = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}profile_gains_"
+    private const val PROFILE_GAIN_PREFIX = "${AUDIO_EQUALIZER_PREFERENCE_PREFIX}profile_gain_"
 
     fun isEnabled(context: Context): Boolean =
         UHQPlaybackPreference.preferences(context).getBoolean(ENABLED, false)
@@ -84,7 +94,11 @@ internal object AudioEqualizerSettings {
         val name = preferences.getString(ACTIVE_NAME, null)?.trim()?.takeIf(String::isNotEmpty) ?: "Flat"
         val gains = EqualizerProfiles.decodeGains(preferences.getString(ACTIVE_GAINS, null))
             ?: EqualizerProfiles.presets.first().gainsDb
-        return EqualizerProfile(name.take(32), gains)
+        return EqualizerProfile(
+            name = name.take(32),
+            gainsDb = gains,
+            gainDb = readGain(preferences, ACTIVE_GAIN),
+        )
     }
 
     fun setActiveProfile(context: Context, profile: EqualizerProfile) {
@@ -92,6 +106,7 @@ internal object AudioEqualizerSettings {
         UHQPlaybackPreference.preferences(context).edit()
             .putString(ACTIVE_NAME, profile.name.trim().take(32).ifEmpty { "Custom" })
             .putString(ACTIVE_GAINS, encoded)
+            .putFloat(ACTIVE_GAIN, EqualizerProfiles.quantizeGainDb(profile.gainDb))
             .apply()
     }
 
@@ -102,7 +117,14 @@ internal object AudioEqualizerSettings {
                 ?: return@mapNotNull null
             val gains = EqualizerProfiles.decodeGains(preferences.getString(PROFILE_GAINS_PREFIX + id, null))
                 ?: return@mapNotNull null
-            SavedEqualizerProfile(id, EqualizerProfile(name.take(32), gains))
+            SavedEqualizerProfile(
+                id,
+                EqualizerProfile(
+                    name = name.take(32),
+                    gainsDb = gains,
+                    gainDb = readGain(preferences, PROFILE_GAIN_PREFIX + id),
+                ),
+            )
         }.sortedBy { it.profile.name.lowercase(Locale.ROOT) }
     }
 
@@ -118,7 +140,11 @@ internal object AudioEqualizerSettings {
             .putStringSet(PROFILE_IDS, ids)
             .putString(PROFILE_NAME_PREFIX + id, name)
             .putString(PROFILE_GAINS_PREFIX + id, encoded)
+            .putFloat(PROFILE_GAIN_PREFIX + id, EqualizerProfiles.quantizeGainDb(profile.gainDb))
             .apply()
         return savedProfiles(context)
     }
+
+    private fun readGain(preferences: android.content.SharedPreferences, key: String): Float =
+        EqualizerProfiles.quantizeGainDb(preferences.getFloat(key, 0f))
 }

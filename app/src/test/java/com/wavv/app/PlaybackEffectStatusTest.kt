@@ -36,5 +36,9 @@ class PlaybackEffectStatusTest {
         assertEquals("Waiting for playback", equalizerSettingLabel(true, "Bass", EqualizerPlaybackStatus.Waiting))
         assertEquals("Unavailable", equalizerSettingLabel(true, "Bass", EqualizerPlaybackStatus.Unavailable))
         assertEquals("Bass", equalizerSettingLabel(true, "Bass", EqualizerPlaybackStatus.Applied))
+        assertEquals(
+            "Bass · Gain unavailable",
+            equalizerSettingLabel(true, "Bass", EqualizerPlaybackStatus.Applied, EqualizerPlaybackStatus.Unavailable, 3f),
+        )
     }
 }

@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -90,6 +92,8 @@ class PlaybackService : MediaSessionService() {
     private var equalizerSessionId = C.AUDIO_SESSION_ID_UNSET
     private var audioEqualizer: Equalizer? = null
     private var unavailableEqualizerSessionId = C.AUDIO_SESSION_ID_UNSET
+    private var loudnessEnhancer: LoudnessEnhancer? = null
+    private var unavailableGainSessionId = C.AUDIO_SESSION_ID_UNSET
     private val applyEqualizer = Runnable { syncEqualizer() }
     private var uhqPreferences: SharedPreferences? = null
     private var crossfadePreferences: SharedPreferences? = null
@@ -214,8 +218,11 @@ class PlaybackService : MediaSessionService() {
             if (equalizerSessionId == audioSessionId) return
             runCatching { audioEqualizer?.release() }
             audioEqualizer = null
+            runCatching { loudnessEnhancer?.release() }
+            loudnessEnhancer = null
             equalizerSessionId = audioSessionId
             unavailableEqualizerSessionId = C.AUDIO_SESSION_ID_UNSET
+            unavailableGainSessionId = C.AUDIO_SESSION_ID_UNSET
             syncEqualizer()
         }
     }
@@ -242,6 +249,13 @@ class PlaybackService : MediaSessionService() {
         )
         PlaybackEffectStatus.updateEqualizer(
             if (AudioEqualizerSettings.isEnabled(this)) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
+        )
+        PlaybackEffectStatus.updateGain(
+            if (AudioEqualizerSettings.isEnabled(this) && AudioEqualizerSettings.activeProfile(this).gainDb != 0f) {
+                EqualizerPlaybackStatus.Waiting
+            } else {
+                EqualizerPlaybackStatus.Disabled
+            },
         )
         libraryStore = LibraryStore(WavvDatabase.get(this))
         uhqPreferences = UHQPlaybackPreference.preferences(this).also {
@@ -279,6 +293,8 @@ class PlaybackService : MediaSessionService() {
         feedbackHandler.removeCallbacks(crossfadeFrame)
         runCatching { audioEqualizer?.release() }
         audioEqualizer = null
+        runCatching { loudnessEnhancer?.release() }
+        loudnessEnhancer = null
         PlaybackEffectStatus.reset()
         player?.removeListener(feedbackListener)
         mediaSession?.release()
@@ -571,39 +587,75 @@ class PlaybackService : MediaSessionService() {
     private fun syncEqualizer() {
         val sessionId = equalizerSessionId
         val enabled = AudioEqualizerSettings.isEnabled(this)
+        val profile = AudioEqualizerSettings.activeProfile(this)
         if (sessionId <= 0) {
             PlaybackEffectStatus.updateEqualizer(
                 if (enabled) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
+            )
+            PlaybackEffectStatus.updateGain(
+                if (enabled && profile.gainDb != 0f) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
             )
             return
         }
         if (unavailableEqualizerSessionId == sessionId) {
             PlaybackEffectStatus.updateEqualizer(EqualizerPlaybackStatus.Unavailable)
+        } else {
+            try {
+                val effect = audioEqualizer ?: Equalizer(0, sessionId).also { audioEqualizer = it }
+                val bandCount = effect.numberOfBands.toInt()
+                val levels = effect.bandLevelRange
+                if (bandCount <= 0 || levels.size < 2) error("Android returned invalid equalizer capabilities")
+                for (band in 0 until bandCount) {
+                    val frequencyHz = effect.getCenterFreq(band.toShort()) / 1_000
+                    val levelMb = (EqualizerProfiles.gainAtFrequency(profile.gainsDb, frequencyHz) * 100)
+                        .roundToInt()
+                        .coerceIn(levels[0].toInt(), levels[1].toInt())
+                    effect.setBandLevel(band.toShort(), levelMb.toShort())
+                }
+                effect.enabled = enabled
+                PlaybackEffectStatus.updateEqualizer(
+                    if (enabled) EqualizerPlaybackStatus.Applied else EqualizerPlaybackStatus.Disabled,
+                )
+            } catch (error: Exception) {
+                runCatching { audioEqualizer?.release() }
+                audioEqualizer = null
+                unavailableEqualizerSessionId = sessionId
+                PlaybackEffectStatus.updateEqualizer(EqualizerPlaybackStatus.Unavailable)
+                Log.w(TAG, "Android equalizer is unavailable for the active playback session", error)
+            }
+        }
+        syncGain(sessionId, enabled, profile.gainDb)
+    }
+
+    private fun syncGain(sessionId: Int, enabled: Boolean, gainDb: Float) {
+        if (!enabled || gainDb == 0f) {
+            runCatching { loudnessEnhancer?.setEnabled(false) }
+            PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Disabled)
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || unavailableGainSessionId == sessionId) {
+            PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Unavailable)
             return
         }
         try {
-            val effect = audioEqualizer ?: Equalizer(0, sessionId).also { audioEqualizer = it }
-            val bandCount = effect.numberOfBands.toInt()
-            val levels = effect.bandLevelRange
-            if (bandCount <= 0 || levels.size < 2) error("Android returned invalid equalizer capabilities")
-            val gains = AudioEqualizerSettings.activeProfile(this).gainsDb
-            for (band in 0 until bandCount) {
-                val frequencyHz = effect.getCenterFreq(band.toShort()) / 1_000
-                val levelMb = (EqualizerProfiles.gainAtFrequency(gains, frequencyHz) * 100)
-                    .roundToInt()
-                    .coerceIn(levels[0].toInt(), levels[1].toInt())
-                effect.setBandLevel(band.toShort(), levelMb.toShort())
+            val effect = loudnessEnhancer ?: LoudnessEnhancer(sessionId).also { loudnessEnhancer = it }
+            applySessionGain(effect, gainDb)
+            check(effect.hasControl()) { "Android did not grant control of session gain" }
+            check(effect.setEnabled(true) == android.media.audiofx.AudioEffect.SUCCESS) {
+                "Android could not enable session gain"
             }
-            effect.enabled = enabled
-            PlaybackEffectStatus.updateEqualizer(
-                if (enabled) EqualizerPlaybackStatus.Applied else EqualizerPlaybackStatus.Disabled,
-            )
+            check(effect.enabled) { "Android did not enable session gain" }
+            check(kotlin.math.abs(effect.targetGain - gainDb * 100f) <= 1f) {
+                "Android did not apply the requested session gain"
+            }
+            PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Applied)
         } catch (error: Exception) {
-            runCatching { audioEqualizer?.release() }
-            audioEqualizer = null
-            unavailableEqualizerSessionId = sessionId
-            PlaybackEffectStatus.updateEqualizer(EqualizerPlaybackStatus.Unavailable)
-            Log.w(TAG, "Android equalizer is unavailable for the active playback session", error)
+            runCatching { loudnessEnhancer?.setEnabled(false) }
+            runCatching { loudnessEnhancer?.release() }
+            loudnessEnhancer = null
+            unavailableGainSessionId = sessionId
+            PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Unavailable)
+            Log.w(TAG, "Android gain processing is unavailable for the active playback session", error)
         }
     }
 
@@ -795,4 +847,8 @@ class PlaybackService : MediaSessionService() {
         const val CROSSFADE_START_EARLY_MS = 50L
         const val CROSSFADE_FRAME_INTERVAL_MS = 20L
     }
+}
+
+internal fun applySessionGain(effect: LoudnessEnhancer, gainDb: Float) {
+    effect.setTargetGain((gainDb * 100f).roundToInt())
 }
