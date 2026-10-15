@@ -310,6 +310,7 @@ internal fun LibraryScreen(
     var openPlaylistMenu by remember { mutableStateOf<Long?>(null) }
     var sortMenu by remember { mutableStateOf(false) }
     var sortMode by rememberSaveable(destination.page) { mutableStateOf("Recently added") }
+    val songsById = remember(songs) { songs.associateBy(Song::id) }
     val recent = remember(songs) { songs.sortedByDescending(Song::modifiedAt).take(6) }
     val featuredSongs = remember(songs, personalizedRecommendations) {
         recommendationOrderedSongs(songs, personalizedRecommendations).take(6)
@@ -437,7 +438,7 @@ internal fun LibraryScreen(
                     ).map { item ->
                         LibraryCard(
                             item.id.toString(), item.name, "${item.songIds.size} songs",
-                            songs.firstOrNull { song -> song.id in item.songIds },
+                            playlistArtworkSong(item.songIds, songsById),
                         ) { onNavigate(LibraryDestination(LibraryPage.Playlist, item.id, item.name)) }
                     }
                     LibraryPage.Artists -> libraryBrowseSongs.groupBy(Song::artist).entries
@@ -722,6 +723,10 @@ private fun historyTimeLabel(timestamp: Long): String =
     SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
 
 private data class LibraryCard(val id: String, val title: String, val subtitle: String, val artSong: Song?, val onClick: () -> Unit)
+
+internal fun playlistArtworkSong(songIds: List<Long>, songsById: Map<Long, Song>): Song? =
+    songIds.asSequence().mapNotNull(songsById::get).firstOrNull { !it.albumArtUri.isNullOrBlank() }
+        ?: songIds.firstNotNullOfOrNull(songsById::get)
 
 @Composable
 private fun LibraryBrowseHeader(

@@ -35,6 +35,13 @@ class PlaybackQueueTest {
     }
 
     @Test
+    fun autoplayStagesTheNextRecommendationButNeverDuplicatesAnExistingQueueItem() {
+        assertEquals(3L, autoplayStageCandidateId(true, listOf(1L, 2L, 3L), setOf(1L, 2L)))
+        assertEquals(null, autoplayStageCandidateId(false, listOf(3L), emptySet()))
+        assertEquals(null, autoplayStageCandidateId(true, emptyList(), emptySet()))
+    }
+
+    @Test
     fun rejectedQueueActionsHaveSpecificUserFeedback() {
         assertEquals("This track is already playing.", queueActionMessage(QueueActionResult.AlreadyPlaying))
         assertEquals("This track is already next.", queueActionMessage(QueueActionResult.AlreadyNext))

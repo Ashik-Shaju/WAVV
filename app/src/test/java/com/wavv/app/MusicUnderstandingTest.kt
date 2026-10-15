@@ -44,4 +44,41 @@ class MusicUnderstandingTest {
         assertEquals(listOf("genre:ambient"), tagger.tags(probabilities).map(MusicTag::task))
         assertEquals("weak_uploader_tag", tagger.tags(probabilities).single().labelSource)
     }
+
+    @Test
+    fun allSixteenHeadsApplyTheirOwnInclusiveThreshold() {
+        val tasks = listOf("genre", "mood", "attribute", "instrument")
+        val heads = List(16) { index ->
+            val group = index % 4
+            MusicHead(
+                task = "${tasks[group]}:$index",
+                taxonomy = tasks[group],
+                label = "label_$index",
+                labelSource = "model",
+                weights = floatArrayOf(0f),
+                intercept = when (group) {
+                    0, 2 -> 0f
+                    1 -> 0.84729785f
+                    else -> -0.84729785f
+                },
+                threshold = when (group) {
+                    0 -> 0.5f
+                    1, 2 -> 0.6f
+                    else -> 0.4f
+                },
+            )
+        }
+        val tagger = MusicTagger(floatArrayOf(0f), floatArrayOf(1f), heads)
+
+        val probabilities = tagger.probabilities(floatArrayOf(0f))
+        val tags = tagger.tags(probabilities)
+
+        assertEquals(16, probabilities.size)
+        assertEquals(
+            heads.filterIndexed { index, _ -> index % 4 < 2 }.map(MusicHead::task),
+            tags.map(MusicTag::task),
+        )
+        assertEquals(0.5f, tags.first().probability)
+        assertEquals(tags.size, tags.count { it.probability >= it.threshold })
+    }
 }

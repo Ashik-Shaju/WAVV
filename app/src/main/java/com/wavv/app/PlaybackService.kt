@@ -20,6 +20,9 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioOutputProvider
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.work.Data
@@ -37,6 +40,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.google.common.util.concurrent.ListenableFuture
 import kotlin.math.roundToLong
 import kotlin.math.roundToInt
@@ -48,15 +54,38 @@ private val WAVV_AUDIO_ATTRIBUTES = AudioAttributes.Builder()
 
 object PlaybackPlayerFactory {
     @OptIn(markerClass = [UnstableApi::class])
-    fun create(context: Context, handlesAudioFocus: Boolean = true): ExoPlayer = ExoPlayer.Builder(
-        context.applicationContext,
-        DefaultRenderersFactory(context.applicationContext)
-            .setEnableAudioFloatOutput(true)
-            .setEnableDecoderFallback(true),
-    )
-        .setAudioAttributes(WAVV_AUDIO_ATTRIBUTES, handlesAudioFocus)
-        .setHandleAudioBecomingNoisy(handlesAudioFocus)
-        .build()
+    fun create(
+        context: Context,
+        handlesAudioFocus: Boolean = true,
+        audioOutputProvider: AudioOutputProvider? = null,
+    ): ExoPlayer {
+        val appContext = context.applicationContext
+        val renderersFactory = object : DefaultRenderersFactory(appContext) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioOutputPlaybackParams: Boolean,
+            ): AudioSink? {
+                val provider = audioOutputProvider ?: return super.buildAudioSink(
+                    context,
+                    enableFloatOutput,
+                    enableAudioOutputPlaybackParams,
+                )
+                return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
+                    .setAudioOutputProvider(provider)
+                    .build()
+            }
+        }.apply {
+            setEnableAudioFloatOutput(true)
+            setEnableDecoderFallback(true)
+        }
+        return ExoPlayer.Builder(appContext, renderersFactory)
+            .setAudioAttributes(WAVV_AUDIO_ATTRIBUTES, handlesAudioFocus)
+            .setHandleAudioBecomingNoisy(handlesAudioFocus)
+            .build()
+    }
 }
 
 private const val MEDIA_EXTRA_UHQ_INTERNAL_SWITCH = "com.wavv.app.UHQ_INTERNAL_SWITCH"
@@ -80,6 +109,10 @@ class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var standbyPlayer: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
+    private var bitPerfectOutputProvider: BitPerfectAudioOutputProvider? = null
+    private var bitPerfectRouteJob: Job? = null
+    private var bitPerfectStatusJob: Job? = null
+    private var isBitPerfectActive = false
     private lateinit var libraryStore: LibraryStore
     private val eventScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val feedback = PlaybackFeedbackReducer(WavvSession.id)
@@ -111,6 +144,9 @@ class PlaybackService : MediaSessionService() {
                     prepareNextCrossfadePlayer()
                 }
             }
+        } else if (key == BitPerfectSettings.preferenceKey()) {
+            if (Looper.myLooper() == Looper.getMainLooper()) applyBitPerfectPreference()
+            else feedbackHandler.post(::applyBitPerfectPreference)
         }
     }
     private val uhqPreferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -175,7 +211,7 @@ class PlaybackService : MediaSessionService() {
         }
 
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
-            if (activeCrossfade != null) cancelCrossfade()
+            if (shouldCancelCrossfadeOnTimelineChange(activeCrossfade?.handedOff == true)) cancelCrossfade()
             preparedCrossfadeKey = null
             prepareNextCrossfadePlayer()
         }
@@ -224,6 +260,7 @@ class PlaybackService : MediaSessionService() {
             unavailableEqualizerSessionId = C.AUDIO_SESSION_ID_UNSET
             unavailableGainSessionId = C.AUDIO_SESSION_ID_UNSET
             syncEqualizer()
+            bitPerfectOutputProvider?.refresh()
         }
     }
 
@@ -245,16 +282,24 @@ class PlaybackService : MediaSessionService() {
         PlaybackEffectStatus.reset()
         PlaybackEffectStatus.updateUHQ(
             trackId = null,
-            status = if (UHQPlaybackPreference.isEnabled(this)) UhqPlaybackStatus.Waiting else UhqPlaybackStatus.Disabled,
+            status = when {
+                !UHQPlaybackPreference.isEnabled(this) -> UhqPlaybackStatus.Disabled
+                BitPerfectSettings.isEnabled(this) -> UhqPlaybackStatus.Bypassed
+                else -> UhqPlaybackStatus.Waiting
+            },
         )
         PlaybackEffectStatus.updateEqualizer(
-            if (AudioEqualizerSettings.isEnabled(this)) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
+            when {
+                !AudioEqualizerSettings.isEnabled(this) -> EqualizerPlaybackStatus.Disabled
+                BitPerfectSettings.isEnabled(this) -> EqualizerPlaybackStatus.Bypassed
+                else -> EqualizerPlaybackStatus.Waiting
+            },
         )
         PlaybackEffectStatus.updateGain(
-            if (AudioEqualizerSettings.isEnabled(this) && AudioEqualizerSettings.activeProfile(this).gainDb != 0f) {
-                EqualizerPlaybackStatus.Waiting
-            } else {
-                EqualizerPlaybackStatus.Disabled
+            when {
+                !AudioEqualizerSettings.isEnabled(this) || AudioEqualizerSettings.activeProfile(this).gainDb == 0f -> EqualizerPlaybackStatus.Disabled
+                BitPerfectSettings.isEnabled(this) -> EqualizerPlaybackStatus.Bypassed
+                else -> EqualizerPlaybackStatus.Waiting
             },
         )
         libraryStore = LibraryStore(WavvDatabase.get(this))
@@ -264,9 +309,26 @@ class PlaybackService : MediaSessionService() {
         crossfadePreferences = CrossfadeSettings.preferences(this).also {
             it.registerOnSharedPreferenceChangeListener(crossfadePreferenceListener)
         }
-        player = PlaybackPlayerFactory.create(this)
+        bitPerfectOutputProvider = BitPerfectAudioOutputProvider(this, PlaybackEffectStatus::updateBitPerfect)
+        player = PlaybackPlayerFactory.create(this, audioOutputProvider = bitPerfectOutputProvider)
         player?.addListener(feedbackListener)
         AudioOutputRouting.attach(this)
+        bitPerfectStatusJob = eventScope.launch(Dispatchers.Main.immediate) {
+            PlaybackEffectStatus.state
+                .map { it.bitPerfect }
+                .distinctUntilChanged()
+                .collect { status ->
+                    applyBitPerfectPlaybackState(status == BitPerfectPlaybackStatus.Active)
+                    if (!isBitPerfectActive && !isBitPerfectRequestPending()) prepareNextCrossfadePlayer()
+                }
+        }
+        bitPerfectOutputProvider?.refresh()
+        bitPerfectRouteJob = eventScope.launch(Dispatchers.Main.immediate) {
+            AudioOutputRouting.state
+                .map { it.selectedRoute?.id }
+                .distinctUntilChanged()
+                .collect { bitPerfectOutputProvider?.refresh() }
+        }
         mediaSession = MediaSession.Builder(this, player!!)
             .build()
         feedbackHandler.postDelayed(feedbackSampler, FEEDBACK_SAMPLE_INTERVAL_MS)
@@ -285,6 +347,10 @@ class PlaybackService : MediaSessionService() {
         uhqPreferences = null
         crossfadePreferences?.unregisterOnSharedPreferenceChangeListener(crossfadePreferenceListener)
         crossfadePreferences = null
+        bitPerfectRouteJob?.cancel()
+        bitPerfectRouteJob = null
+        bitPerfectStatusJob?.cancel()
+        bitPerfectStatusJob = null
         AudioOutputRouting.detach()
         uhqJob?.cancel()
         feedbackHandler.removeCallbacks(feedbackSampler)
@@ -295,7 +361,6 @@ class PlaybackService : MediaSessionService() {
         audioEqualizer = null
         runCatching { loudnessEnhancer?.release() }
         loudnessEnhancer = null
-        PlaybackEffectStatus.reset()
         player?.removeListener(feedbackListener)
         mediaSession?.release()
         mediaSession = null
@@ -305,6 +370,8 @@ class PlaybackService : MediaSessionService() {
         standbyPlayer?.release()
         standbyPlayer = null
         activeCrossfade = null
+        bitPerfectOutputProvider = null
+        PlaybackEffectStatus.reset()
         eventScope.cancel()
         super.onDestroy()
     }
@@ -314,7 +381,7 @@ class PlaybackService : MediaSessionService() {
         feedbackHandler.removeCallbacks(crossfadeStart)
         val active = player ?: return
         if (activeCrossfade != null) return
-        if (CrossfadeSettings.durationSeconds(this) == 0) {
+        if (isBitPerfectActive || isBitPerfectRequestPending() || CrossfadeSettings.durationSeconds(this) == 0) {
             releaseStandbyPlayer()
             return
         }
@@ -334,6 +401,7 @@ class PlaybackService : MediaSessionService() {
                 repeatCurrentTrack = active.repeatMode == Player.REPEAT_MODE_ONE,
                 currentNeedsUHQ = requiresUncrossfadedUHQ(currentItem),
                 nextNeedsUHQ = requiresUncrossfadedUHQ(nextItem),
+                bitPerfectMode = isBitPerfectActive || isBitPerfectRequestPending(),
             )
         ) {
             releaseStandbyPlayer()
@@ -405,7 +473,7 @@ class PlaybackService : MediaSessionService() {
         feedbackHandler.removeCallbacks(crossfadeStart)
         val active = player ?: return
         val standby = standbyPlayer ?: return
-        if (activeCrossfade != null || !active.isPlaying || CrossfadeSettings.durationSeconds(this) == 0) return
+        if (isBitPerfectActive || isBitPerfectRequestPending() || activeCrossfade != null || !active.isPlaying || CrossfadeSettings.durationSeconds(this) == 0) return
         val nextIndex = active.nextMediaItemIndex
         if (nextIndex !in 0 until active.mediaItemCount) return
         val expectedKey = CrossfadeQueueKey(
@@ -440,6 +508,7 @@ class PlaybackService : MediaSessionService() {
     private fun beginCrossfade() {
         val active = player ?: return
         val incoming = standbyPlayer ?: return
+        if (isBitPerfectActive || isBitPerfectRequestPending()) return
         val currentItem = active.currentMediaItem ?: return
         val nextIndex = active.nextMediaItemIndex
         if (!active.isPlaying || nextIndex !in 0 until active.mediaItemCount ||
@@ -452,6 +521,7 @@ class PlaybackService : MediaSessionService() {
                 repeatCurrentTrack = active.repeatMode == Player.REPEAT_MODE_ONE,
                 currentNeedsUHQ = requiresUncrossfadedUHQ(currentItem),
                 nextNeedsUHQ = requiresUncrossfadedUHQ(nextItem),
+                bitPerfectMode = isBitPerfectActive || isBitPerfectRequestPending(),
             )
         ) {
             prepareNextCrossfadePlayer()
@@ -584,10 +654,55 @@ class PlaybackService : MediaSessionService() {
         target.setHandleAudioBecomingNoisy(owns)
     }
 
+    private fun applyBitPerfectPreference() {
+        if (BitPerfectSettings.isEnabled(this)) {
+            cancelCrossfade()
+            releaseStandbyPlayer()
+        }
+        bitPerfectOutputProvider?.refresh()
+        applyBitPerfectPlaybackState(
+            PlaybackEffectStatus.state.value.bitPerfect == BitPerfectPlaybackStatus.Active,
+        )
+        if (BitPerfectSettings.isEnabled(this) && !isBitPerfectActive) prepareNextCrossfadePlayer()
+    }
+
+    private fun applyBitPerfectPlaybackState(active: Boolean) {
+        if (active == isBitPerfectActive) return
+        isBitPerfectActive = active
+        syncEqualizer()
+        player?.currentMediaItem?.let { item ->
+            if (shouldEnhanceTrack(item.mediaId)) updateUHQ(item, force = true)
+            else disableUHQ(item)
+        }
+        if (active) {
+            cancelCrossfade()
+            releaseStandbyPlayer()
+        } else {
+            prepareNextCrossfadePlayer()
+        }
+    }
+
+    private fun isBitPerfectRequestPending(): Boolean = BitPerfectSettings.isEnabled(this) &&
+        PlaybackEffectStatus.state.value.bitPerfect in setOf(
+            BitPerfectPlaybackStatus.Off,
+            BitPerfectPlaybackStatus.Available,
+        )
+
     private fun syncEqualizer() {
         val sessionId = equalizerSessionId
         val enabled = AudioEqualizerSettings.isEnabled(this)
         val profile = AudioEqualizerSettings.activeProfile(this)
+        if (isBitPerfectActive) {
+            runCatching { audioEqualizer?.enabled = false }
+            runCatching { loudnessEnhancer?.setEnabled(false) }
+            PlaybackEffectStatus.updateEqualizer(
+                if (enabled) EqualizerPlaybackStatus.Bypassed else EqualizerPlaybackStatus.Disabled,
+            )
+            PlaybackEffectStatus.updateGain(
+                if (enabled && profile.gainDb != 0f) EqualizerPlaybackStatus.Bypassed else EqualizerPlaybackStatus.Disabled,
+            )
+            return
+        }
         if (sessionId <= 0) {
             PlaybackEffectStatus.updateEqualizer(
                 if (enabled) EqualizerPlaybackStatus.Waiting else EqualizerPlaybackStatus.Disabled,
@@ -607,7 +722,8 @@ class PlaybackService : MediaSessionService() {
                 if (bandCount <= 0 || levels.size < 2) error("Android returned invalid equalizer capabilities")
                 for (band in 0 until bandCount) {
                     val frequencyHz = effect.getCenterFreq(band.toShort()) / 1_000
-                    val levelMb = (EqualizerProfiles.gainAtFrequency(profile.gainsDb, frequencyHz) * 100)
+                    val gainDb = EqualizerProfiles.gainAtFrequency(profile.gainsDb, frequencyHz)
+                    val levelMb = (gainDb * 100)
                         .roundToInt()
                         .coerceIn(levels[0].toInt(), levels[1].toInt())
                     effect.setBandLevel(band.toShort(), levelMb.toShort())
@@ -633,12 +749,18 @@ class PlaybackService : MediaSessionService() {
             PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Disabled)
             return
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || unavailableGainSessionId == sessionId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Unavailable)
+            return
+        }
+        if (unavailableGainSessionId == sessionId) {
             PlaybackEffectStatus.updateGain(EqualizerPlaybackStatus.Unavailable)
             return
         }
         try {
-            val effect = loudnessEnhancer ?: LoudnessEnhancer(sessionId).also { loudnessEnhancer = it }
+            val effect = loudnessEnhancer ?: LoudnessEnhancer(sessionId).also {
+                loudnessEnhancer = it
+            }
             applySessionGain(effect, gainDb)
             check(effect.hasControl()) { "Android did not grant control of session gain" }
             check(effect.setEnabled(true) == android.media.audiofx.AudioEffect.SUCCESS) {
@@ -687,6 +809,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun shouldEnhanceTrack(songId: String): Boolean {
+        return !isBitPerfectActive && isUHQRequested(songId)
+    }
+
+    private fun isUHQRequested(songId: String): Boolean {
         val id = songId.toLongOrNull()
         val override = UHQPlaybackPreference.trackOverride(this)
         return if (id != null && override?.songId == id) override.enabled
@@ -791,7 +917,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun disableUHQ(item: MediaItem) {
-        PlaybackEffectStatus.updateUHQ(item.mediaId.toLongOrNull(), UhqPlaybackStatus.Disabled)
+        PlaybackEffectStatus.updateUHQ(
+            item.mediaId.toLongOrNull(),
+            if (isBitPerfectActive && isUHQRequested(item.mediaId)) UhqPlaybackStatus.Bypassed else UhqPlaybackStatus.Disabled,
+        )
         if (uhqSongId != item.mediaId) uhqSongId = item.mediaId
         uhqJob?.cancel()
         uhqWorkName?.let { WorkManager.getInstance(this).cancelUniqueWork(it) }

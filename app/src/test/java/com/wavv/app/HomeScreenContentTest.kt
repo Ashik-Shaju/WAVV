@@ -19,6 +19,26 @@ class HomeScreenContentTest {
     }
 
     @Test
+    fun homeCarouselUsesRecommendationsThenHistoryAndRecentFilesWithoutDuplicates() {
+        val catalog = listOf(song(1), song(2), song(3))
+
+        assertEquals(
+            listOf(3L, 2L, 1L),
+            homeCarouselSongs(
+                songs = catalog,
+                recommendations = listOf(song(3), song(99)),
+                recentlyPlayed = listOf(song(2), song(3)),
+                recentlyAdded = listOf(song(1), song(2)),
+            ).map(Song::id),
+        )
+        assertEquals(
+            listOf(3L, 2L),
+            homeCarouselSongs(catalog, listOf(song(3)), listOf(song(2)), catalog, limit = 2).map(Song::id),
+        )
+        assertEquals(emptyList<Song>(), homeCarouselSongs(catalog, emptyList(), emptyList(), catalog, limit = 0))
+    }
+
+    @Test
     fun stackOrderStartsWithSelectedSectionAndClampsRestoredIndex() {
         assertEquals(listOf(2, 3, 0, 1), homeSectionOrder(sectionCount = 4, stackIndex = 2))
         assertEquals(listOf(2, 0, 1), homeSectionOrder(sectionCount = 3, stackIndex = Int.MAX_VALUE))

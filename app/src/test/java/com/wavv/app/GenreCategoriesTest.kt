@@ -6,14 +6,20 @@ import org.junit.Test
 
 class GenreCategoriesTest {
     @Test
-    fun categoriesUseActualGenresAndOnlySongsWithArtwork() {
+    fun categoriesUseRealArtworkAndKeepConfidentInferredGenresVisibleWithoutIt() {
         val artSong = song(1, "First", listOf("Rock"), hasArtwork = true)
         val duplicate = song(2, "Second", listOf("rock", "Jazz"), hasArtwork = true)
         val noArtwork = song(3, "Voice note", listOf("Spoken word"), hasArtwork = false)
+        val inferredWithoutArtwork = song(4, "Uncovered model genre", emptyList(), hasArtwork = false)
+            .copy(inferredGenres = listOf("Ambient"))
 
         assertEquals(
-            listOf(GenreCategory("Jazz", duplicate), GenreCategory("Rock", artSong)),
-            genreCategories(listOf(artSong, duplicate, noArtwork)),
+            listOf(
+                GenreCategory("Ambient", null),
+                GenreCategory("Jazz", duplicate),
+                GenreCategory("Rock", artSong),
+            ),
+            genreCategories(listOf(artSong, duplicate, noArtwork, inferredWithoutArtwork)),
         )
     }
 
@@ -79,6 +85,30 @@ class GenreCategoriesTest {
                 listOf(jazz, pop, rock),
                 listOf(rock, jazz),
             ).map(GenreCategory::name),
+        )
+    }
+
+    @Test
+    fun coldStartCategoriesPrioritizeLocalCoverageAndUseNewestArtwork() {
+        val jazz = song(1, "Jazz", listOf("Jazz"), hasArtwork = true)
+        val olderRock = song(2, "Older rock", listOf("Rock"), hasArtwork = true).copy(modifiedAt = 10)
+        val newerRock = song(3, "Newer rock", listOf("Rock"), hasArtwork = true).copy(modifiedAt = 20)
+
+        val categories = recommendationOrderedGenreCategories(listOf(jazz, olderRock, newerRock), emptyList())
+
+        assertEquals(listOf("Rock", "Jazz"), categories.map(GenreCategory::name))
+        assertEquals(newerRock.id, categories.first().artwork?.id)
+    }
+
+    @Test
+    fun categoryArtworkFollowsTheHighestRankedAvailableTrack() {
+        val first = song(1, "First alphabetically", listOf("Rock"), hasArtwork = true)
+        val recommended = song(2, "Recommended", listOf("Rock"), hasArtwork = true)
+
+        assertEquals(
+            recommended.id,
+            recommendationOrderedGenreCategories(listOf(first, recommended), listOf(recommended))
+                .single().artwork?.id,
         )
     }
 

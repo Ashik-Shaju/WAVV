@@ -12,6 +12,13 @@ class PlaybackCrossfadeTest {
         assertEquals(false, isCrossfadeEligible("1", "2", true, false, false))
         assertEquals(false, isCrossfadeEligible("1", "2", false, true, false))
         assertEquals(false, isCrossfadeEligible("1", "2", false, false, true))
+        assertEquals(false, isCrossfadeEligible("1", "2", false, false, false, bitPerfectMode = true))
+    }
+
+    @Test
+    fun timelineUpdatesDoNotCancelTheFadeAfterPlayerHandoff() {
+        assertEquals(true, shouldCancelCrossfadeOnTimelineChange(false))
+        assertEquals(false, shouldCancelCrossfadeOnTimelineChange(true))
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.wavv.app
 
 import android.content.Context
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import androidx.mediarouter.media.MediaControlIntent
@@ -50,6 +51,7 @@ internal object AudioOutputRouting {
     val state: StateFlow<AudioOutputRoutingState> = mutableState.asStateFlow()
 
     private var router: MediaRouter? = null
+    private var audioManager: AudioManager? = null
     private var selectionTimeout: Runnable? = null
 
     private val callback = object : MediaRouter.Callback() {
@@ -98,12 +100,14 @@ internal object AudioOutputRouting {
         }
         detach()
         router = mediaRouter
+        audioManager = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         mediaRouter.routerParams = MediaRouterParams.Builder()
+            .setMediaTransferReceiverEnabled(true)
+            .setOutputSwitcherEnabled(true)
             .setTransferToLocalEnabled(true)
             .build()
-        // This service-lifetime listener tracks system-managed routes without running
-        // passive route discovery in the background.
-        mediaRouter.addCallback(audioOutputRouteSelector, callback)
+        // Observe System UI route transfers for the lifetime of the media session.
+        mediaRouter.addCallback(audioOutputRouteSelector, callback, MediaRouter.CALLBACK_FLAG_UNFILTERED_EVENTS)
         publish(mediaRouter, clearError = true)
     }
 
@@ -111,6 +115,7 @@ internal object AudioOutputRouting {
         checkMainThread()
         router?.removeCallback(callback)
         router = null
+        audioManager = null
         clearSelectionTimeout()
         mutableState.value = AudioOutputRoutingState(revision = mutableState.value.revision + 1)
     }
@@ -227,6 +232,7 @@ internal object AudioOutputRouting {
     }
 
     private fun MediaRouter.RouteInfo.toOutputRoute(selectedId: String): AudioOutputRoute {
+        val selected = id == selectedId
         val isPhone = isDefault || isDeviceSpeaker || deviceType in LOCAL_DEVICE_TYPES
         val lowerName = name.lowercase()
         val kind = when {
@@ -236,14 +242,33 @@ internal object AudioOutputRouting {
             deviceType in WIRED_DEVICE_TYPES -> "wired"
             else -> "headphones"
         }
+        // MediaRouter can retain the previous device's volume briefly during local route handoff.
+        val displayVolume = if (selected && playbackType == MediaRouter.RouteInfo.PLAYBACK_TYPE_LOCAL && playbackStream >= 0) {
+            audioManager?.let { manager ->
+                try {
+                    activeRouteVolume(
+                        routeVolume = volume,
+                        routeVolumeMax = volumeMax,
+                        isSelected = true,
+                        isLocalPlayback = true,
+                        streamVolume = manager.getStreamVolume(playbackStream),
+                        streamVolumeMax = manager.getStreamMaxVolume(playbackStream),
+                    )
+                } catch (_: IllegalArgumentException) {
+                    volume
+                }
+            } ?: volume
+        } else {
+            volume
+        }
         return AudioOutputRoute(
             id = id,
             name = if (isPhone) "This phone" else name.takeIf(String::isNotBlank) ?: "Audio output",
             kind = kind,
             deviceType = deviceType,
-            isSelected = id == selectedId,
+            isSelected = selected,
             isSystemRoute = isSystemRoute,
-            volume = volume,
+            volume = displayVolume,
             volumeMax = volumeMax,
             volumeHandling = volumeHandling,
         )

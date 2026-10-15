@@ -171,6 +171,62 @@ class OfflineDiscoveryTest {
     }
 
     @Test
+    fun confidentMusicUnderstandingTagsAcrossAllSixteenHeadsAreSearchable() {
+        val tags = listOf(
+            MusicTag("danceability", "attribute", "Danceable", "model", .8f, .5f),
+            MusicTag("mood_acoustic", "mood", "Acoustic", "model", .8f, .5f),
+            MusicTag("mood_aggressive", "mood", "Aggressive", "model", .8f, .5f),
+            MusicTag("mood_electronic", "mood", "Electronic", "model", .8f, .5f),
+            MusicTag("mood_happy", "mood", "Happy", "model", .8f, .5f),
+            MusicTag("mood_party", "mood", "Party", "model", .8f, .5f),
+            MusicTag("mood_relaxed", "mood", "Relaxed", "model", .8f, .5f),
+            MusicTag("mood_sad", "mood", "Sad", "model", .8f, .5f),
+            MusicTag("genre:electronic", "genre", "Electronic", "model", .8f, .5f),
+            MusicTag("genre:pop", "genre", "Pop", "model", .8f, .5f),
+            MusicTag("genre:rock", "genre", "Rock", "model", .8f, .5f),
+            MusicTag("genre:ambient", "genre", "Ambient", "model", .8f, .5f),
+            MusicTag("genre:easylistening", "genre", "Easy listening", "model", .8f, .5f),
+            MusicTag("instrument:piano", "instrument", "Piano", "model", .8f, .5f),
+            MusicTag("instrument:synthesizer", "instrument", "Synthesizer", "model", .8f, .5f),
+            MusicTag("instrument:bass", "instrument", "Bass", "model", .8f, .5f),
+        )
+        val candidates = tags.mapIndexed { index, _ ->
+            tracks.first().copy(
+                id = 100L + index,
+                title = "Track $index",
+                artist = "Artist $index",
+                album = "Album $index",
+                genre = null,
+                genres = emptyList(),
+                inferredGenres = emptyList(),
+            )
+        }
+        val tagsBySong = candidates.mapIndexed { index, song -> song.id to listOf(tags[index]) }.toMap()
+
+        tags.forEachIndexed { index, tag ->
+            val results = rankLocalSearch(
+                songs = candidates,
+                intent = MusicQueryIntent(tag.label.lowercase()),
+                semanticMatches = emptyList(),
+                tagsBySong = tagsBySong,
+            )
+
+            assertTrue("${tag.task} should be searchable", results.any { it.id == candidates[index].id })
+        }
+        val belowThreshold = candidates.first().copy(id = 999L)
+        assertTrue(
+            rankLocalSearch(
+                songs = listOf(belowThreshold),
+                intent = MusicQueryIntent("oboe"),
+                semanticMatches = emptyList(),
+                tagsBySong = mapOf(
+                    belowThreshold.id to listOf(MusicTag("instrument:oboe", "instrument", "Oboe", "model", .49f, .5f)),
+                ),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
     fun recommendationsRequireRealTasteEvidenceAndProduceNoColdStartMixes() {
         val discovery = buildPersonalizedDiscovery(
             songs = tracks,
@@ -206,6 +262,50 @@ class OfflineDiscoveryTest {
     }
 
     @Test
+    fun coldStartSeedUsesLatestDirectPlayButRejectsAutoplayAndNegativeSkip() {
+        val directPlay = LocalListeningEvent(1L, 900L, "play", "session", selectionSource = "home")
+        val autoplay = LocalListeningEvent(2L, 950L, "play", "session", selectionSource = "autoplay_auto")
+
+        assertEquals(1L, coldStartSeedSongId(listOf(directPlay), setOf(1L, 2L), nowMs = 1_000L))
+        assertEquals(null, coldStartSeedSongId(listOf(autoplay), setOf(1L, 2L), nowMs = 1_000L))
+        assertEquals(
+            null,
+            coldStartSeedSongId(
+                listOf(directPlay, LocalListeningEvent(1L, 950L, "skip", "session", skipPositionSeconds = 2L)),
+                setOf(1L, 2L),
+                nowMs = 1_000L,
+            ),
+        )
+        assertEquals(null, coldStartSeedSongId(listOf(directPlay), setOf(2L), nowMs = 1_000L))
+    }
+
+    @Test
+    fun seededRecommendationsUseStrongAudioOrSharedMetadataAndRejectWeakVectorOnlyMatches() {
+        val seed = song(10, "Seed", "Rock", null)
+        val genreMatch = song(11, "Genre match", "Rock", null)
+        val vectorMatch = song(12, "Audio match", "Ambient", null)
+        val weakVectorOnly = song(13, "Weak audio", "Jazz", null)
+        val calmMatch = song(14, "Tag match", "Pop", null)
+        val catalog = listOf(seed, genreMatch, vectorMatch, weakVectorOnly, calmMatch)
+        val vectors = mapOf(
+            seed.id to floatArrayOf(1f, 0f),
+            vectorMatch.id to floatArrayOf(.8f, .6f),
+            weakVectorOnly.id to floatArrayOf(0f, 1f),
+        )
+        val tags = mapOf(
+            seed.id to listOf(MusicTag("mood", "mood", "calm", "model", .9f, .5f)),
+            calmMatch.id to listOf(MusicTag("mood", "mood", "calm", "model", .8f, .5f)),
+        )
+
+        val recommendations = buildSeededRecommendations(catalog, seed.id, vectors, tags)
+
+        assertTrue(recommendations.any { it.id == genreMatch.id })
+        assertTrue(recommendations.any { it.id == vectorMatch.id })
+        assertTrue(recommendations.any { it.id == calmMatch.id })
+        assertFalse(recommendations.any { it.id == seed.id || it.id == weakVectorOnly.id })
+    }
+
+    @Test
     fun tagRecommendationsMatchTheUsersPositiveTagsInsteadOfAnyConfidentTag() {
         val discovery = buildPersonalizedDiscovery(
             songs = tracks.map { if (it.id == 3L) it.copy(genre = "Jazz") else it },
@@ -223,6 +323,44 @@ class OfflineDiscoveryTest {
 
         assertTrue(discovery.recommendations.any { it.id == 2L })
         assertFalse(discovery.recommendations.any { it.id == 3L })
+    }
+
+    @Test
+    fun recommendationsUseConfidentMoodAttributeInstrumentAndGenrePredictions() {
+        val seed = song(100L, "Seed", "", null)
+        val moodMatch = song(101L, "Mood", "", null)
+        val attributeMatch = song(102L, "Attribute", "", null)
+        val instrumentMatch = song(103L, "Instrument", "", null)
+        val genreMatch = song(104L, "Genre", "", null)
+        val tagsBySong = mapOf(
+            seed.id to listOf(
+                MusicTag("mood_happy", "mood", "Happy", "model", .9f, .5f),
+                MusicTag("danceability", "attribute", "Danceable", "model", .9f, .5f),
+                MusicTag("instrument:piano", "instrument", "Piano", "model", .9f, .5f),
+                MusicTag("genre:rock", "genre", "Rock", "model", .9f, .5f),
+            ),
+            moodMatch.id to listOf(MusicTag("mood_happy", "mood", "Happy", "model", .8f, .5f)),
+            attributeMatch.id to listOf(MusicTag("danceability", "attribute", "Danceable", "model", .8f, .5f)),
+            instrumentMatch.id to listOf(MusicTag("instrument:piano", "instrument", "Piano", "model", .8f, .5f)),
+            genreMatch.id to listOf(MusicTag("genre:rock", "genre", "Rock", "model", .8f, .5f)),
+        )
+        val catalog = listOf(seed, moodMatch, attributeMatch, instrumentMatch, genreMatch)
+            .map { it.withMusicUnderstandingGenres(tagsBySong[it.id].orEmpty()) }
+
+        val discovery = buildPersonalizedDiscovery(
+            songs = catalog,
+            events = emptyList(),
+            favoriteIds = setOf(seed.id),
+            audioVectors = emptyMap(),
+            tagsBySong = tagsBySong,
+            currentSessionId = "session",
+            nowMs = 1_000_000L,
+        )
+
+        assertTrue(discovery.recommendations.any { it.id == moodMatch.id })
+        assertTrue(discovery.recommendations.any { it.id == attributeMatch.id })
+        assertTrue(discovery.recommendations.any { it.id == instrumentMatch.id })
+        assertTrue(discovery.recommendations.any { it.id == genreMatch.id })
     }
 
     @Test

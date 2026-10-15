@@ -353,7 +353,7 @@ private fun BrowseCategories(songs: List<Song>, recommendations: List<Song>, onC
             letterSpacing = .4.sp,
         )
         if (categories.isEmpty()) {
-            Text("No genre tags with artwork were found in your library.", Modifier.padding(4.dp), color = Color.White.copy(.45f), fontSize = 13.sp)
+            Text("No genre tags were found in your library.", Modifier.padding(4.dp), color = Color.White.copy(.45f), fontSize = 13.sp)
         } else {
             categories.chunked(2).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -377,12 +377,14 @@ private fun CategoryCard(category: GenreCategory, onClick: () -> Unit, modifier:
             .border(1.dp, Color.White.copy(.14f), shape)
             .clickable(role = Role.Button, onClick = onClick),
     ) {
-        AlbumArt(
-            category.artwork,
-            Modifier.align(Alignment.CenterEnd).fillMaxWidth(.64f).fillMaxSize(),
-            contentDescription = null,
-            radius = 12.dp,
-        )
+        category.artwork?.let { artwork ->
+            AlbumArt(
+                artwork,
+                Modifier.align(Alignment.CenterEnd).fillMaxWidth(.64f).fillMaxSize(),
+                contentDescription = null,
+                radius = 12.dp,
+            )
+        }
         Box(
             Modifier.fillMaxSize().background(
                 Brush.horizontalGradient(

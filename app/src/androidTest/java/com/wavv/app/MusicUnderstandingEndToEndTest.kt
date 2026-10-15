@@ -42,6 +42,9 @@ class MusicUnderstandingEndToEndTest {
                 .bufferedReader().use { it.readText() },
         ).getJSONArray("probabilities")
         val expectedProbabilities = FloatArray(expected.length()) { expected.getDouble(it).toFloat() }
+        val heads = JSONObject(
+            testContext.assets.open("music-understanding/v1/heads.json").bufferedReader().use { it.readText() },
+        ).getJSONArray("heads")
         val expectedFeatures = readFloats("music-understanding/v1/feature_golden.f32")
         val database = Room.inMemoryDatabaseBuilder(targetContext, WavvDatabase::class.java).build()
         try {
@@ -51,11 +54,17 @@ class MusicUnderstandingEndToEndTest {
             }
 
             assertEquals("wavv-dymn04as-81d9eb2350a738c3", actual.modelId)
+            assertEquals(16, heads.length())
+            assertEquals(heads.length(), actual.probabilities.size)
             assertArrayEquals(expectedProbabilities, actual.probabilities, 0.01f)
+            val thresholdedTasks = (0 until heads.length()).filter { index ->
+                actual.probabilities[index] >= heads.getJSONObject(index).getDouble("threshold").toFloat()
+            }.map { index -> heads.getJSONObject(index).getString("task") }
             assertEquals(
-                listOf("mood_happy", "mood_relaxed", "genre:ambient"),
+                thresholdedTasks,
                 actual.tags.map(MusicTag::task),
             )
+            assertTrue(actual.tags.all { it.probability >= it.threshold })
             assertEquals("weak_uploader_tag", actual.tags.last().labelSource)
             assertTrue(actual.tags.none { it.task == "instrument:electricguitar" })
             assertTrue(actual.probabilities.all { it.isFinite() && it in 0f..1f })
@@ -69,7 +78,9 @@ class MusicUnderstandingEndToEndTest {
                 updatedAt = 10_000L,
             )
             database.musicUnderstandingDao().upsert(stored)
-            assertEquals(stored, database.musicUnderstandingDao().get(stored.songId))
+            val persisted = database.musicUnderstandingDao().get(stored.songId)
+            assertEquals(stored, persisted)
+            assertEquals(thresholdedTasks.size, org.json.JSONArray(persisted?.tagsJson ?: "[]").length())
         } finally {
             database.close()
         }

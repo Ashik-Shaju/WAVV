@@ -81,7 +81,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.max
 import java.util.Locale
 
-internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Crossfade, Equalizer, Standby, AutomaticLyrics }
+internal enum class ProfileSettingContent { Info, Theme, Folders, Storage, Notifications, History, UHQ, Crossfade, BitPerfect, Equalizer, Standby, AutomaticLyrics }
 
 internal data class ProfileSetting(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -144,12 +144,14 @@ internal fun YouScreen(
     }
     val notificationsEnabled = context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
     var uhqEnabled by remember(context) { mutableStateOf(UHQPlaybackPreference.isEnabled(context)) }
+    var bitPerfectEnabled by remember(context) { mutableStateOf(BitPerfectSettings.isEnabled(context)) }
     var crossfadeSeconds by remember(context) { mutableStateOf(CrossfadeSettings.durationSeconds(context)) }
     var equalizerEnabled by remember(context) { mutableStateOf(AudioEqualizerSettings.isEnabled(context)) }
     var equalizerProfile by remember(context) { mutableStateOf(AudioEqualizerSettings.activeProfile(context)) }
     var savedEqualizerProfiles by remember(context) { mutableStateOf(AudioEqualizerSettings.savedProfiles(context)) }
     val playbackEffects by PlaybackEffectStatus.state.collectAsStateWithLifecycle()
     val uhqPlaybackLabel = uhqSettingLabel(uhqEnabled, activeTrackId, playbackEffects)
+    val bitPerfectPlaybackLabel = bitPerfectSettingLabel(bitPerfectEnabled, playbackEffects.bitPerfect)
     val equalizerPlaybackLabel = equalizerSettingLabel(
         equalizerEnabled,
         equalizerProfile.name,
@@ -178,8 +180,9 @@ internal fun YouScreen(
         ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library.", ProfileSettingContent.Folders),
         ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
         ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", uhqPlaybackLabel, "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
-        ProfileSetting(Icons.Default.Equalizer, "Crossfade", if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s", "Blend into the next queued track. Uses an extra audio decoder while enabled; UHQ tracks keep the standard transition.", ProfileSettingContent.Crossfade),
-        ProfileSetting(Icons.Default.Equalizer, "Equalizer", equalizerPlaybackLabel, "Ten-band equalizer with local presets and saved profiles. Android audio-effect support varies by device.", ProfileSettingContent.Equalizer),
+        ProfileSetting(Icons.Default.Equalizer, "Crossfade", if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s", "Blend into the next queued track. Temporarily bypassed while bit-perfect mode is active; the saved duration is preserved.", ProfileSettingContent.Crossfade),
+        ProfileSetting(Icons.Default.Equalizer, "Bit-perfect mode", bitPerfectPlaybackLabel, "Requests Android's bit-perfect mixer mode only when a connected USB output supports the active PCM format.", ProfileSettingContent.BitPerfect),
+        ProfileSetting(Icons.Default.Equalizer, "Equalizer", equalizerPlaybackLabel, "Ten-band EQ and session gain with local profiles.", ProfileSettingContent.Equalizer),
         ProfileSetting(Icons.Default.LibraryMusic, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
         ProfileSetting(
             Icons.Default.LibraryMusic,
@@ -246,6 +249,7 @@ internal fun YouScreen(
             val displayedSettingValue = when (setting.content) {
                 ProfileSettingContent.UHQ -> uhqPlaybackLabel
                 ProfileSettingContent.Crossfade -> if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s"
+                ProfileSettingContent.BitPerfect -> bitPerfectPlaybackLabel
                 ProfileSettingContent.Equalizer -> equalizerPlaybackLabel
                 ProfileSettingContent.Standby -> if (standbyEnabledState) "On" else "Off"
                 ProfileSettingContent.AutomaticLyrics -> if (automaticLyricsSearchEnabled) "On" else "Off"
@@ -268,7 +272,9 @@ internal fun YouScreen(
                     }
                 }
                 val detail = if (setting.content == ProfileSettingContent.Equalizer) {
-                    "Ten octave-spaced bands, mapped onto bands supported by the active Android playback session. Device support can vary."
+                    "Ten EQ bands and signed session gain, applied through Android session effects where supported."
+                } else if (setting.content == ProfileSettingContent.BitPerfect) {
+                    "Uses Android 14+ BIT_PERFECT mixer mode only when the routed USB output advertises the exact PCM format used by the track. Android bypasses framework mixing and volume scaling; Wavv pauses EQ, UHQ enhancement, and crossfade while enabled. Use the DAC's hardware volume control. Other outputs continue with normal playback."
                 } else {
                     setting.detail
                 }
@@ -382,6 +388,26 @@ internal fun YouScreen(
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Off", color = Color.White.copy(.45f), fontSize = 11.sp)
                             Text("12 seconds", color = Color.White.copy(.45f), fontSize = 11.sp)
+                        }
+                    }
+                    ProfileSettingContent.BitPerfect -> {
+                        SettingInfoRow("Current status", bitPerfectPlaybackLabel, null)
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Use USB bit-perfect mixer mode", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                Text("Only active when Android confirms a matching USB format.", color = Color.White.copy(.48f), fontSize = 12.sp, lineHeight = 17.sp)
+                            }
+                            Switch(
+                                checked = bitPerfectEnabled,
+                                onCheckedChange = { enabled ->
+                                    bitPerfectEnabled = enabled
+                                    BitPerfectSettings.setEnabled(context, enabled)
+                                },
+                            )
                         }
                     }
                     ProfileSettingContent.Equalizer -> EqualizerSettingsContent(
@@ -662,7 +688,6 @@ private fun EqualizerSettingsContent(
         )
     }
 }
-
 
 @Composable
 private fun EqualizerSliderRow(

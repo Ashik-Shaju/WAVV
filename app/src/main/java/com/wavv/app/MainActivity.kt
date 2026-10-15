@@ -3582,7 +3582,7 @@ private fun AudioOutputPanel(
                             }
                             state.selectedRoute?.takeIf { it.isRemote && state.routes.none { route -> route.id == it.id } }?.let { route ->
                                 Text(
-                                    "Current remote destination: ${route.name}",
+                                    "Current output: ${route.name}",
                                     Modifier.fillMaxWidth().padding(top = 5.dp),
                                     color = Color.White.copy(.64f),
                                     fontSize = 12.sp,
@@ -3614,6 +3614,7 @@ private fun AudioOutputPanel(
         }
     }
 }
+
 @Composable
 private fun OutputWaveform(isPlaying: Boolean, modifier: Modifier = Modifier) {
     val heights = listOf(4, 7, 10, 6, 9, 5, 8, 4, 7, 5)

@@ -117,7 +117,7 @@ class MusicUnderstandingPersistenceTest {
         val database = inMemoryDatabase()
         try {
             val store = LibraryStore(database)
-            val song = song("content://com.wavv.test/unreadable")
+            val song = song("content://com.wavv.test/unreadable").copy(genre = "Rock", genres = listOf("Rock"))
             store.replaceSongs(listOf(song))
 
             val result = try {

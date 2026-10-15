@@ -156,6 +156,68 @@ internal fun rankLocalSearch(
         .map { it.first }
 }
 
+internal fun coldStartSeedSongId(
+    events: List<LocalListeningEvent>,
+    catalogSongIds: Set<Long>,
+    nowMs: Long,
+): Long? {
+    val seed = events.asSequence()
+        .filter {
+            it.songId in catalogSongIds && it.timestampMs <= nowMs && it.eventType in PLAY_EVENTS &&
+                it.selectionSource?.startsWith("autoplay_") != true
+        }
+        .maxByOrNull(LocalListeningEvent::timestampMs) ?: return null
+    val wasSkipped = events.any {
+        it.songId == seed.songId && it.sessionId == seed.sessionId && it.eventType == "skip" &&
+            it.timestampMs >= seed.timestampMs && skipPreferenceWeight(it) < 0.0
+    }
+    return seed.songId.takeUnless { wasSkipped }
+}
+
+internal fun buildSeededRecommendations(
+    songs: List<Song>,
+    seedSongId: Long,
+    audioVectors: Map<Long, FloatArray>,
+    tagsBySong: Map<Long, List<MusicTag>>,
+    limit: Int = 30,
+): List<Song> {
+    if (limit <= 0) return emptyList()
+    val catalog = songs.distinctBy(Song::id)
+    val seed = catalog.firstOrNull { it.id == seedSongId } ?: return emptyList()
+    val seedVector = audioVectors[seedSongId]?.takeIf(FloatArray::isValidVector)
+    val seedTags = tagsBySong[seedSongId].orEmpty()
+    val seedGenres = seed.genreNames().associate { genre ->
+        genre.normalized() to seed.genreConfidence(genre, seedTags)
+    }
+    val seedTagsByKey = seedTags.asSequence()
+        .filter { it.isAboveThreshold() && !it.isGenreTag() }
+        .associate { it.discoveryKey() to it.probability.toDouble() }
+    val seedCreators = seed.creatorKeys().toSet()
+
+    val ranked = catalog.mapNotNull { song ->
+        if (song.id == seedSongId) return@mapNotNull null
+        val tags = tagsBySong[song.id].orEmpty()
+        val genreScore = song.genreNames().mapNotNull { genre ->
+            seedGenres[genre.normalized()]?.let { seedScore ->
+                minOf(seedScore, song.genreConfidence(genre, tags))
+            }
+        }.maxOrNull() ?: 0.0
+        val tagScore = tags.asSequence()
+            .filter { it.isAboveThreshold() && !it.isGenreTag() }
+            .mapNotNull { tag -> seedTagsByKey[tag.discoveryKey()]?.let { minOf(it, tag.probability.toDouble()) } }
+            .maxOrNull() ?: 0.0
+        val audioScore = if (seedVector == null) 0.0 else {
+            audioVectors[song.id]?.takeIf(FloatArray::isValidVector)?.let { cosine(seedVector, it) } ?: 0.0
+        }
+        val audioMatch = audioScore >= MIN_COLD_START_AUDIO_AFFINITY
+        val creatorMatch = seedCreators.any { it in song.creatorKeys() }
+        if (!audioMatch && genreScore == 0.0 && tagScore == 0.0 && !creatorMatch) return@mapNotNull null
+        val creatorScore = if (creatorMatch) COLD_START_CREATOR_MATCH_SCORE else 0.0
+        song to maxOf(if (audioMatch) audioScore else 0.0, genreScore, tagScore, creatorScore)
+    }
+    return diverseOrder(ranked, limit)
+}
+
 internal fun buildPersonalizedDiscovery(
     songs: List<Song>,
     events: List<LocalListeningEvent>,
@@ -608,25 +670,6 @@ internal class PlaybackFeedbackReducer(private val sessionId: String = "local") 
     }
 }
 
-internal fun personalizedQueue(
-    selected: Song,
-    contextQueue: List<Song>,
-    recommendations: List<Song>,
-    recommendationLimit: Int = 12,
-): List<Song> {
-    if (recommendationLimit <= 0) return (listOf(selected) + contextQueue).distinctBy(Song::id)
-    val selectedId = selected.id
-    val recommendationTracks = recommendations.asSequence().filter { it.id != selectedId }
-        .distinctBy(Song::id).take(recommendationLimit).toList()
-    val recommendationIds = recommendationTracks.mapTo(mutableSetOf(), Song::id)
-    return buildList {
-        add(selected)
-        addAll(recommendationTracks)
-        contextQueue.asSequence().filter { it.id != selectedId && it.id !in recommendationIds }
-            .distinctBy(Song::id).forEach(::add)
-    }
-}
-
 internal fun extractExplicitLanguageTags(fields: List<TextMetadataField>): List<String> = fields.asSequence()
     .filter { field -> field.key.normalizedMetadataKey() in LANGUAGE_METADATA_KEYS }
     .flatMap { field -> field.value.split(',', ';', '/', '|').asSequence() }
@@ -790,6 +833,9 @@ private const val MIX_SIZE = 12
 private const val MIN_MIX_SIZE = 3
 private const val SEARCH_PREFERENCE_LIMIT = 20
 private const val SEARCH_PREFERENCE_BOOST = 0.035
+// shortcut: this is an uncalibrated DCLAP closeness gate; retune only with held-out listening judgments.
+private const val MIN_COLD_START_AUDIO_AFFINITY = 0.75
+private const val COLD_START_CREATOR_MATCH_SCORE = 0.6
 private val PLAY_EVENTS = setOf("play", "completion", "complete", "replay")
 private val TASTE_SIGNAL_EVENTS = setOf("play", "completion", "complete", "replay", "playlist_add", "queue_add")
 private val LANGUAGE_METADATA_KEYS = setOf("tlan", "lang", "language", "languagecode", "txxxlanguage")

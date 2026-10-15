@@ -344,6 +344,26 @@ internal fun Modifier.homeAcrylicBackground(hasArtwork: Boolean) = drawWithCache
 internal fun primaryHomeShelf(recentlyPlayed: List<Song>, recentlyAdded: List<Song>): Pair<String, List<Song>> =
     if (recentlyPlayed.isNotEmpty()) "Recently Played" to recentlyPlayed else "Recently Added" to recentlyAdded
 
+internal fun homeCarouselSongs(
+    songs: List<Song>,
+    recommendations: List<Song>,
+    recentlyPlayed: List<Song>,
+    recentlyAdded: List<Song>,
+    limit: Int = 8,
+): List<Song> {
+    if (limit <= 0) return emptyList()
+    val catalog = songs.associateBy(Song::id)
+    return sequence {
+        yieldAll(recommendations)
+        yieldAll(recentlyPlayed)
+        yieldAll(recentlyAdded)
+    }
+        .mapNotNull { catalog[it.id] }
+        .distinctBy(Song::id)
+        .take(limit)
+        .toList()
+}
+
 internal fun homeSectionOrder(sectionCount: Int, stackIndex: Int): List<Int> {
     if (sectionCount <= 0) return emptyList()
     val startIndex = stackIndex.coerceIn(0, sectionCount - 1)
@@ -382,6 +402,9 @@ internal fun HomeScreen(
     statusChips: List<HomeStatusChip> = emptyList(),
 ) {
     val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
+    val carouselSongs = remember(songs, personalizedRecommendations, recentSongs, orderedSongs) {
+        homeCarouselSongs(songs, personalizedRecommendations, recentSongs, orderedSongs)
+    }
     val sections = remember(songs, favoriteIds, recentSongs, personalizedRecommendations, smartMixes) {
         val recentlyAdded = orderedSongs
         val (primaryTitle, primarySongs) = primaryHomeShelf(recentSongs, recentlyAdded)
@@ -417,7 +440,7 @@ internal fun HomeScreen(
         }
     }
     var selectedCategory by remember { mutableStateOf<HomeStackEntry?>(null) }
-    var backdropSong by remember(songs) { mutableStateOf(songs.firstOrNull()) }
+    var backdropSong by remember(carouselSongs) { mutableStateOf(carouselSongs.firstOrNull()) }
     var acrylicChipColor by remember { mutableStateOf(Color(0xFF26385D)) }
     val context = LocalContext.current
     LaunchedEffect(backdropSong) {
@@ -468,7 +491,7 @@ internal fun HomeScreen(
                 ) {
                     Spacer(Modifier.height(10.dp))
                     HeroCarousel(
-                        songs = songs,
+                        songs = carouselSongs,
                         onCurrentSongChanged = { backdropSong = it },
                         onPlay = onPlay,
                         onPlayNext = onPlayNext,

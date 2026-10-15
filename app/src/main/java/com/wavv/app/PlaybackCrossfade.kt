@@ -40,8 +40,11 @@ internal fun isCrossfadeEligible(
     repeatCurrentTrack: Boolean,
     currentNeedsUHQ: Boolean,
     nextNeedsUHQ: Boolean,
+    bitPerfectMode: Boolean = false,
 ): Boolean = currentTrackId != null && nextTrackId != null &&
-    currentTrackId != nextTrackId && !repeatCurrentTrack && !currentNeedsUHQ && !nextNeedsUHQ
+    currentTrackId != nextTrackId && !repeatCurrentTrack && !currentNeedsUHQ && !nextNeedsUHQ && !bitPerfectMode
+
+internal fun shouldCancelCrossfadeOnTimelineChange(playerHandedOff: Boolean): Boolean = !playerHandedOff
 
 internal fun equalPowerCrossfadeGains(progress: Float): CrossfadeGains {
     val angle = progress.coerceIn(0f, 1f) * (PI.toFloat() / 2f)

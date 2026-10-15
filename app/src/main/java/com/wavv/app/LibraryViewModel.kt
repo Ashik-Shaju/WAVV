@@ -231,19 +231,27 @@ class LibraryViewModel(
         if (songs.isEmpty()) return
         discoveryJob = viewModelScope.launch(Dispatchers.IO) {
             val vectors = libraryStore.audioVectors(songs)
+            val catalogSongIds = songs.mapTo(mutableSetOf(), Song::id)
             val cutoff = System.currentTimeMillis() - DISCOVERY_HISTORY_MS
             combine(favoriteIds, libraryStore.observeDiscoveryEvents(cutoff)) { favorites, events -> favorites to events }
                 .collectLatest { (favorites, events) ->
-                    val discovery = withContext(Dispatchers.Default) {
-                        buildPersonalizedDiscovery(
+                    val nowMs = System.currentTimeMillis()
+                    val (discovery, recommendations) = withContext(Dispatchers.Default) {
+                        val discovery = buildPersonalizedDiscovery(
                             songs = songs,
                             events = events,
                             favoriteIds = favorites,
                             audioVectors = vectors,
                             tagsBySong = tagsBySong,
                             currentSessionId = sessionId,
-                            nowMs = System.currentTimeMillis(),
+                            nowMs = nowMs,
                         )
+                        val recommendations = discovery.recommendations.ifEmpty {
+                            coldStartSeedSongId(events, catalogSongIds, nowMs)?.let { seedSongId ->
+                                buildSeededRecommendations(songs, seedSongId, vectors, tagsBySong)
+                            }.orEmpty()
+                        }
+                        discovery to recommendations
                     }
                     val recentlyPlayed = libraryStore.getRecentlyPlayed()
                     val playbackHistory = libraryStore.getPlaybackHistory()
@@ -252,7 +260,7 @@ class LibraryViewModel(
                             state.copy(
                                 recentlyPlayed = recentlyPlayed,
                                 playbackHistory = playbackHistory,
-                                personalizedRecommendations = discovery.recommendations,
+                                personalizedRecommendations = recommendations,
                                 smartMixes = discovery.mixes,
                             )
                         } else state

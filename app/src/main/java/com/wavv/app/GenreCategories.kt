@@ -2,7 +2,7 @@ package com.wavv.app
 
 import java.util.Locale
 
-internal data class GenreCategory(val name: String, val artwork: Song)
+internal data class GenreCategory(val name: String, val artwork: Song?)
 
 internal fun parseGenreMetadata(value: String?): List<String> =
     value?.trim()?.takeIf(String::isNotEmpty)?.let(::listOf).orEmpty()
@@ -50,11 +50,16 @@ internal fun Song.withMusicUnderstandingGenres(tags: List<MusicTag>): Song = cop
 internal fun genreCategories(songs: List<Song>): List<GenreCategory> {
     val categories = mutableMapOf<String, GenreCategory>()
     songs.forEach { song ->
-        if (song.albumArtUri.isNullOrBlank()) return@forEach
+        val hasArtwork = !song.albumArtUri.isNullOrBlank()
         song.genreNames().forEach { name ->
+            val modelInferred = song.inferredGenres.any { it.equals(name, ignoreCase = true) }
+            if (!hasArtwork && !modelInferred) return@forEach
             val key = name.lowercase(Locale.ROOT)
-            if (key !in categories) {
-                categories[key] = GenreCategory(name, song)
+            val existing = categories[key]
+            if (existing == null) {
+                categories[key] = GenreCategory(name, song.takeIf { hasArtwork })
+            } else if (existing.artwork == null && hasArtwork) {
+                categories[key] = existing.copy(artwork = song)
             }
         }
     }
@@ -65,12 +70,37 @@ internal fun recommendationOrderedGenreCategories(
     songs: List<Song>,
     recommendations: List<Song>,
 ): List<GenreCategory> {
+    val catalog = songs.distinctBy(Song::id)
+    val songById = catalog.associateBy(Song::id)
+    val rankedSongs = recommendations.mapNotNull { songById[it.id] }.distinctBy(Song::id)
     val genrePositions = mutableMapOf<String, Int>()
-    recommendations.forEachIndexed { index, song ->
+    val songPositions = mutableMapOf<Long, Int>()
+    rankedSongs.forEachIndexed { index, song ->
+        songPositions.putIfAbsent(song.id, index)
         song.genreNames().forEach { genre -> genrePositions.putIfAbsent(genre.lowercase(Locale.ROOT), index) }
     }
-    return genreCategories(songs).withIndex()
-        .sortedWith(compareBy<IndexedValue<GenreCategory>> { genrePositions[it.value.name.lowercase(Locale.ROOT)] ?: Int.MAX_VALUE }
-            .thenBy(IndexedValue<GenreCategory>::index))
-        .map(IndexedValue<GenreCategory>::value)
+    val genreCounts = catalog.asSequence()
+        .flatMap { song -> song.genreNames().asSequence().map { it.lowercase(Locale.ROOT) } }
+        .groupingBy { it }
+        .eachCount()
+    return genreCategories(catalog)
+        .map { category ->
+            val genre = category.name.lowercase(Locale.ROOT)
+            val artwork = catalog.asSequence()
+                .filter { song ->
+                    !song.albumArtUri.isNullOrBlank() && song.genreNames().any { it.equals(category.name, ignoreCase = true) }
+                }
+                .sortedWith(
+                    compareBy<Song> { songPositions[it.id] ?: Int.MAX_VALUE }
+                        .thenByDescending(Song::modifiedAt)
+                        .thenBy(Song::id),
+                )
+                .firstOrNull() ?: category.artwork
+            category.copy(artwork = artwork)
+        }
+        .sortedWith(
+            compareBy<GenreCategory> { genrePositions[it.name.lowercase(Locale.ROOT)] ?: Int.MAX_VALUE }
+                .thenByDescending { genreCounts[it.name.lowercase(Locale.ROOT)] ?: 0 }
+                .thenBy { it.name.lowercase(Locale.ROOT) },
+        )
 }

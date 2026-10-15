@@ -50,6 +50,12 @@ internal fun nextPlaybackAction(
     else -> NextPlaybackAction.None
 }
 
+internal fun autoplayStageCandidateId(
+    enabled: Boolean,
+    candidateIds: List<Long>,
+    occupiedIds: Set<Long>,
+): Long? = if (enabled) candidateIds.firstOrNull { it !in occupiedIds } else null
+
 internal enum class QueueActionResult { Added, AlreadyPlaying, AlreadyNext, AlreadyQueued, Unavailable }
 
 internal fun queueActionMessage(result: QueueActionResult): String? = when (result) {
@@ -74,6 +80,7 @@ class PlaybackController(context: Context) {
     internal val audioOutputState: StateFlow<AudioOutputRoutingState> = AudioOutputRouting.state
     private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private var autoplayCandidates: List<Song> = emptyList()
+    private val consumedAutoplayStageIds = mutableSetOf<Long>()
     private val dismissedAutoplayIds = mutableSetOf<Long>()
     private var autoplayManuallyOrdered = false
     private var playingFrom: String? = null
@@ -114,8 +121,18 @@ class PlaybackController(context: Context) {
             val song = mediaItem?.let(::songFor)
             if (song != null) {
                 advancingAutoplay = false
-                if (mediaItem.mediaMetadata.extras?.getString(MEDIA_EXTRA_SELECTION_SOURCE) == "autoplay_recommendation") {
+                val songId = mediaItem.mediaId.toLongOrNull()
+                val selectionSource = mediaItem.mediaMetadata.extras?.getString(MEDIA_EXTRA_SELECTION_SOURCE)
+                if (selectionSource == "autoplay_recommendation" || selectionSource == "autoplay_auto") {
                     this@PlaybackController.playingFrom = "AutoPlay"
+                }
+                if (mediaItem.mediaMetadata.extras?.getBoolean(MEDIA_EXTRA_AUTOPLAY_STAGED) == true &&
+                    songId != null && songId !in consumedAutoplayStageIds
+                ) {
+                    consumedAutoplayStageIds += songId
+                    autoplayCandidates = autoplayCandidates.filterNot { it.id == songId }
+                    managedQueue = managedQueue.filterNot { it.id == songId } + song
+                    syncAutoplayStaging(controller)
                 }
                 _state.value = _state.value.copy(
                     song = song,
@@ -261,6 +278,7 @@ class PlaybackController(context: Context) {
         managedQueue = sessionQueue
         lastShuffleOrder = null
         dismissedAutoplayIds.clear()
+        consumedAutoplayStageIds.clear()
         autoplayManuallyOrdered = false
         autoplayCandidates = reconcileAutoplayRecommendations(
             current = emptyList(),
@@ -295,6 +313,7 @@ class PlaybackController(context: Context) {
             startIndex,
             0L,
         )
+        syncAutoplayStaging(currentController)
         currentController.prepare()
         currentController.play()
     }
@@ -334,10 +353,20 @@ class PlaybackController(context: Context) {
         val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
         val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
         if (existing == currentIndex + 1) {
-            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+            if (cameFromAutoplay) {
+                removeAutoplayCandidate(song.id)
+                promoteStagedAutoplay(song.id, player)
+                managedQueue = readQueue(player)
+                lastShuffleOrder = null
+                syncAutoplayStaging(player)
+                syncQueue(player)
+            }
             return QueueActionResult.AlreadyNext
         }
-        if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+        if (cameFromAutoplay) {
+            removeAutoplayCandidate(song.id)
+            promoteStagedAutoplay(song.id, player)
+        }
         if (existing != null) player.removeMediaItem(existing)
         val updatedCurrentIndex = (0 until player.mediaItemCount).firstOrNull {
             player.getMediaItemAt(it).mediaId.toLongOrNull() == currentId
@@ -349,6 +378,7 @@ class PlaybackController(context: Context) {
         managed.add(if (managedCurrentIndex < 0) managed.size else managedCurrentIndex + 1, song)
         managedQueue = managed
         lastShuffleOrder = null
+        syncAutoplayStaging(player)
         syncQueue(player)
         return QueueActionResult.Added
     }
@@ -358,17 +388,34 @@ class PlaybackController(context: Context) {
         val currentId = player.currentMediaItem?.mediaId?.toLongOrNull()
         val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
         if (currentId == song.id) {
-            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+            if (cameFromAutoplay) {
+                removeAutoplayCandidate(song.id)
+                promoteStagedAutoplay(song.id, player)
+                managedQueue = readQueue(player)
+                lastShuffleOrder = null
+                syncAutoplayStaging(player)
+                syncQueue(player)
+            }
             return QueueActionResult.AlreadyPlaying
         }
-        if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) {
-            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+        val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
+        if (existing != null) {
+            if (cameFromAutoplay) {
+                removeAutoplayCandidate(song.id)
+                promoteStagedAutoplay(song.id, player)
+                managedQueue = readQueue(player)
+                lastShuffleOrder = null
+                syncAutoplayStaging(player)
+                syncQueue(player)
+            }
             return QueueActionResult.AlreadyQueued
         }
         if (cameFromAutoplay) removeAutoplayCandidate(song.id)
-        player.addMediaItem(mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
-        managedQueue = managedQueue + song
+        val insertionIndex = pendingAutoplayStageIndex(player) ?: player.mediaItemCount
+        player.addMediaItem(insertionIndex, mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
+        managedQueue = readQueue(player)
         lastShuffleOrder = null
+        syncAutoplayStaging(player)
         syncQueue(player)
         return QueueActionResult.Added
     }
@@ -385,24 +432,29 @@ class PlaybackController(context: Context) {
     fun playAutoplaySong(song: Song) {
         val player = controller ?: return
         if (autoplayCandidates.none { it.id == song.id }) return
-        removeAutoplayCandidate(song.id)
         val existing = (0 until player.mediaItemCount).firstOrNull {
             player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id
         }
+        removeAutoplayCandidate(song.id)
+        promoteStagedAutoplay(song.id, player)
         playingFrom = "AutoPlay"
         _state.value = _state.value.copy(playingFrom = playingFrom)
+        managedQueue = managedQueue.filterNot { it.id == song.id } + song
         if (existing != null) {
             // Keep an already queued or played copy in place; selecting an AutoPlay row
             // must never rebuild or reorder the existing session queue.
+            syncAutoplayStaging(player)
             player.seekTo(existing, 0L)
             player.play()
             return
         }
-        // Append to the current session, preserving its played history and queue order.
-        val targetIndex = player.mediaItemCount
+        syncAutoplayStaging(player)
+        // Place this selection before the staged suggestion so later autoplay keeps its order.
+        val targetIndex = pendingAutoplayStageIndex(player) ?: player.mediaItemCount
         player.addMediaItem(targetIndex, mediaItem(song, "autoplay_recommendation"))
-        managedQueue = managedQueue + song
         lastShuffleOrder = null
+        managedQueue = readQueue(player)
+        syncAutoplayStaging(player)
         player.seekTo(targetIndex, 0L)
         player.play()
     }
@@ -434,17 +486,27 @@ class PlaybackController(context: Context) {
         if (player.currentMediaItem?.mediaId?.toLongOrNull() == song.id) {
             return QueueActionResult.AlreadyPlaying
         }
-        if ((0 until player.mediaItemCount).any { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }) {
+        val existingIndex = (0 until player.mediaItemCount).firstOrNull {
+            player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id
+        }
+        val stagedIndex = existingIndex?.takeIf { isPendingAutoplayStage(player, it) }
+        if (existingIndex != null && stagedIndex == null) {
             return QueueActionResult.AlreadyQueued
         }
         if (autoplayCandidates.none { it.id == song.id }) return QueueActionResult.Unavailable
 
-        val insertionIndex = queueIndex.coerceIn(0, player.mediaItemCount)
+        val insertionIndex = queueIndex.coerceIn(0, readQueue(player).size)
         autoplayCandidates = autoplayCandidates.filterNot { it.id == song.id }
-        player.addMediaItem(insertionIndex, mediaItem(song, "autoplay_recommendation"))
+        if (stagedIndex != null) {
+            promoteStagedAutoplay(song.id, player)
+            player.moveMediaItem(stagedIndex, insertionIndex)
+        } else {
+            player.addMediaItem(insertionIndex, mediaItem(song, "autoplay_recommendation"))
+        }
         managedQueue = readQueue(player)
         lastShuffleOrder = readUpcomingQueue(player).map(Song::id)
         updateAutoplayState()
+        syncAutoplayStaging(player)
         syncQueue(player)
         return QueueActionResult.Added
     }
@@ -486,11 +548,16 @@ class PlaybackController(context: Context) {
         autoplayCandidates = autoplayCandidates.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
         autoplayManuallyOrdered = true
         updateAutoplayState()
+        syncAutoplayStaging(controller)
     }
 
     fun removeAutoplaySong(song: Song) {
         dismissedAutoplayIds += song.id
         autoplayCandidates = autoplayCandidates.filterNot { it.id == song.id }
+        controller?.let { player ->
+            pendingAutoplayStageIndex(player, song.id)?.let(player::removeMediaItem)
+            syncAutoplayStaging(player)
+        }
         updateAutoplayState()
     }
 
@@ -505,12 +572,20 @@ class PlaybackController(context: Context) {
             preserveManualOrder = autoplayManuallyOrdered,
         )
         updateAutoplayState()
+        syncAutoplayStaging(player)
     }
 
     fun setAutoplayEnabled(enabled: Boolean) {
         preferences.edit().putBoolean(PREF_AUTOPLAY_ENABLED, enabled).apply()
         _state.value = _state.value.copy(autoplayEnabled = enabled)
-        if (enabled && controller?.playbackState == Player.STATE_ENDED) advanceToAutoplayIfNeeded()
+        if (!enabled) {
+            removePendingAutoplayStage(controller)
+            controller?.let(::syncQueue)
+        } else if (controller?.playbackState == Player.STATE_ENDED) {
+            advanceToAutoplayIfNeeded()
+        } else {
+            syncAutoplayStaging(controller)
+        }
     }
 
     fun setRepeatMode(mode: Int) {
@@ -601,6 +676,7 @@ class PlaybackController(context: Context) {
         val index = player.mediaItemCount
         player.addMediaItem(mediaItem(nextSong, "autoplay_auto"))
         managedQueue = managedQueue + nextSong
+        syncAutoplayStaging(player)
         playingFrom = "AutoPlay"
         _state.value = _state.value.copy(playingFrom = playingFrom)
         player.seekTo(index, 0L)
@@ -615,7 +691,72 @@ class PlaybackController(context: Context) {
     }
 
     private fun readQueue(player: MediaController): List<Song> = (0 until player.mediaItemCount)
+        .filterNot { index -> isPendingAutoplayStage(player, index) }
         .mapNotNull { index -> songFor(player.getMediaItemAt(index)) }
+
+    private fun isPendingAutoplayStage(player: Player, index: Int): Boolean {
+        if (index <= player.currentMediaItemIndex || index !in 0 until player.mediaItemCount) return false
+        val item = player.getMediaItemAt(index)
+        val id = item.mediaId.toLongOrNull() ?: return false
+        return item.mediaMetadata.extras?.getBoolean(MEDIA_EXTRA_AUTOPLAY_STAGED) == true &&
+            id !in consumedAutoplayStageIds
+    }
+
+    private fun pendingAutoplayStageIndex(player: Player, songId: Long? = null): Int? =
+        (player.currentMediaItemIndex + 1 until player.mediaItemCount).firstOrNull { index ->
+            isPendingAutoplayStage(player, index) &&
+                (songId == null || player.getMediaItemAt(index).mediaId.toLongOrNull() == songId)
+        }
+
+    private fun promoteStagedAutoplay(songId: Long, player: Player) {
+        val index = pendingAutoplayStageIndex(player, songId) ?: return
+        consumedAutoplayStageIds += songId
+        val item = player.getMediaItemAt(index)
+        val extras = Bundle(item.mediaMetadata.extras ?: Bundle()).apply {
+            remove(MEDIA_EXTRA_AUTOPLAY_STAGED)
+        }
+        player.replaceMediaItem(
+            index,
+            item.buildUpon().setMediaMetadata(item.mediaMetadata.buildUpon().setExtras(extras).build()).build(),
+        )
+    }
+
+    private fun removePendingAutoplayStage(player: Player?) {
+        if (player == null) return
+        val stageIndices = (player.currentMediaItemIndex + 1 until player.mediaItemCount)
+            .filter { isPendingAutoplayStage(player, it) }
+        stageIndices.asReversed().forEach(player::removeMediaItem)
+    }
+
+    private fun syncAutoplayStaging(player: MediaController?) {
+        if (player == null || player.mediaItemCount == 0) return
+        val oldStageIndex = pendingAutoplayStageIndex(player)
+        val occupiedIds = (0 until player.mediaItemCount)
+            .filterNot { it == oldStageIndex }
+            .mapNotNullTo(mutableSetOf()) { player.getMediaItemAt(it).mediaId.toLongOrNull() }
+        val nextSongId = autoplayStageCandidateId(
+            enabled = _state.value.autoplayEnabled,
+            candidateIds = autoplayCandidates.map(Song::id),
+            occupiedIds = occupiedIds,
+        )
+        val nextSong = autoplayCandidates.firstOrNull { it.id == nextSongId }
+        if (oldStageIndex != null && nextSong != null) {
+            val stagedItem = player.getMediaItemAt(oldStageIndex)
+            if (stagedItem.mediaId.toLongOrNull() == nextSong.id &&
+                stagedItem.localConfiguration?.uri?.toString() == nextSong.uri
+            ) {
+                return
+            }
+        }
+        if (nextSong == null) {
+            oldStageIndex?.let(player::removeMediaItem)
+            return
+        }
+        consumedAutoplayStageIds.remove(nextSong.id)
+        val stagedItem = mediaItem(nextSong, "autoplay_auto", stagedAutoplay = true)
+        if (oldStageIndex != null) player.replaceMediaItem(oldStageIndex, stagedItem)
+        else player.addMediaItem(player.mediaItemCount, stagedItem)
+    }
 
     private fun applyQueueOrder(order: List<Song>) {
         val player = controller ?: return
@@ -642,7 +783,12 @@ class PlaybackController(context: Context) {
         )
     }
 
-    private fun mediaItem(song: Song, selectionSource: String = "queue", recommendationId: String? = null) = MediaItem.Builder()
+    private fun mediaItem(
+        song: Song,
+        selectionSource: String = "queue",
+        recommendationId: String? = null,
+        stagedAutoplay: Boolean = false,
+    ) = MediaItem.Builder()
         .setMediaId(song.id.toString())
         .setUri(song.uri)
         .setMediaMetadata(
@@ -661,6 +807,7 @@ class PlaybackController(context: Context) {
                 .setExtras(Bundle().apply {
                     putString(MEDIA_EXTRA_SELECTION_SOURCE, selectionSource)
                     recommendationId?.let { putString(MEDIA_EXTRA_RECOMMENDATION_ID, it) }
+                    putBoolean(MEDIA_EXTRA_AUTOPLAY_STAGED, stagedAutoplay)
                 })
                 .build(),
         )
@@ -677,6 +824,7 @@ class PlaybackController(context: Context) {
 internal const val MEDIA_EXTRA_SELECTION_SOURCE = "com.wavv.app.SELECTION_SOURCE"
 internal const val MEDIA_EXTRA_RECOMMENDATION_ID = "com.wavv.app.RECOMMENDATION_ID"
 internal const val MEDIA_EXTRA_UHQ_SOURCE_URI = "com.wavv.app.UHQ_SOURCE_URI"
+internal const val MEDIA_EXTRA_AUTOPLAY_STAGED = "com.wavv.app.AUTOPLAY_STAGED"
 
 internal class PlaybackStartConfirmation {
     private var requestedSongId: Long? = null
