@@ -1,30 +1,31 @@
 # Privacy and local data
 
-Wavv is designed around files the user selects and data kept by the app on the device. The current manifest declares audio-library, foreground media-playback, and notification permissions, but it does not declare Android's `INTERNET` permission. The current app has no account, cloud library, or sync flow.
+Wavv reads audio sources selected on the device and stores its library and playback state locally. The Android manifest does not declare the <code>INTERNET</code> permission. The app has no account, cloud library, or sync flow.
 
 ## What Wavv reads and stores
 
 | Information | Why it is used | Where it is kept |
 | --- | --- | --- |
-| Selected source and document URIs | Refresh the chosen library and retain Android-granted access | App preferences and Android's persisted URI grants |
+| Selected library source and document URIs | Refresh the chosen library and retain Android-granted access | App preferences and Android's persisted URI grants |
 | File metadata and source URI | Display, search, and play selected tracks | Room catalog |
-| Favorite and playlist changes | Preserve explicit library choices | Room database |
-| Playback events and recently played state | Update local history and personalize discovery | Room database |
-| Analysis status, embeddings, and tag estimates | Avoid unnecessary inference and support local discovery | Room database |
-| Embedded artwork copied for display | Show artwork when a selected file or Android media provider supplies it | App-private `filesDir/embedded-artwork` |
-| Installed model files | Run bundled analysis after first use | App-private files directory |
-| Temporary UHQ AAC processing audio and enhanced copies | Optional playback enhancement after the user enables it | App cache; decoded intermediates are temporary, enhanced WAV copies are limited to 1 GiB total and may be evicted |
+| Favorites and playlists | Preserve explicit library choices | Room database |
+| Playback events and recent-track state | Show history and personalize discovery | Room database |
+| Analysis status and results | Support local discovery and avoid unnecessary reprocessing | Room database |
+| Lyrics source choices and selected lyrics document URIs | Read embedded, imported, or discovered lyrics | App preferences and Android-granted document access |
+| Embedded artwork copied for display | Show artwork supplied by a selected file or Android media provider | App-private <code>filesDir/embedded-artwork</code> |
+| Installed analysis assets | Run local analysis | App-private files directory |
+| Temporary AAC processing audio and enhanced copies | Optional playback enhancement when enabled | App cache; enhanced copies are limited to 1 GiB total and may be evicted |
 
-Wavv does not copy the original selected audio into a separate music collection or edit its embedded tags. Removing a source grant does not delete the source audio. A later library scan may stop showing a file that is no longer in the selected source.
+Wavv does not copy the original selected audio into a separate collection or edit its embedded tags. Removing a source grant does not delete the source audio.
 
-UHQ AAC reads a selected source and temporarily writes decoded audio while processing. Turning the setting off returns playback to the source but does not immediately erase completed enhanced copies; they remain in app cache until Wavv evicts them for space or Android clears the cache. The original audio is not changed.
+When **Automatically check for lyrics** is enabled, matching <code>.ttml</code> or <code>.lrc</code> files are searched only in selected music folders. With the all-device library source, Wavv checks Downloads only when Android grants whole-storage access. Lyrics imported through the player use the selected document grant. Wavv does not fetch lyrics from an online service.
 
-## Listening history controls
+## Listening history
 
-Playback activity is used locally for recent tracks and recommendations. The app removes events older than one year when history is pruned. The You screen also offers **Clear listening history**; this removes listening events and recently played markers, while favorites and playlists remain.
+Playback activity is used locally for recent tracks and recommendations. Listening events older than one year are pruned. **Clear listening history** removes listening events and recently played markers; favorites and playlists remain.
 
 ## Android permissions and backup
 
-Selecting all device music requires Android's audio-library permission (`READ_MEDIA_AUDIO` on current Android versions and `READ_EXTERNAL_STORAGE` on older versions). Selecting individual files or folders uses Android's system document picker and a persistable read grant instead.
+The all-device library requires Android's audio-library permission (<code>READ_MEDIA_AUDIO</code> on current Android versions and <code>READ_EXTERNAL_STORAGE</code> on older versions). Selecting files or folders uses Android's system document picker and a persistent read grant.
 
-Android backup rules exclude cloud backup and allow device-to-device transfer of the Room database, app preferences, and cached embedded artwork. Model copies and temporary caches are not included. Device-transfer availability and restore timing still depend on Android and the device manufacturer; the selected audio files themselves remain in their original locations and are not copied by Wavv.
+The committed backup rules exclude cloud backup and allow device-to-device transfer of the Room database, app preferences, and cached embedded artwork. Other app-private files and caches are excluded. Device-transfer availability and restore timing depend on Android and the device manufacturer. The selected music files remain in their original locations.

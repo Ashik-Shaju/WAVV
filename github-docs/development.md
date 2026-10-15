@@ -1,42 +1,40 @@
 # Development and testing
 
-Wavv is an Android application written in Kotlin with Jetpack Compose. Build prerequisites and canonical commands are in the root [README](../README.md); do not maintain a second copy of those commands here. Android and Kotlin dependency versions are kept in `gradle/libs.versions.toml`.
+Wavv is an Android application written in Kotlin with Jetpack Compose. Use the prerequisites and commands in the root [README](../README.md); this page does not keep a second copy of them. Android and Kotlin dependency versions are in <code>gradle/libs.versions.toml</code>.
 
 ## Code map
 
 | Area | Main files | Responsibility |
 | --- | --- | --- |
-| Activity, navigation, player surfaces | `MainActivity.kt` | Permission/source launchers, tab and player state, UI-to-domain actions |
-| Screens | `HomeScreen.kt`, `SearchScreen.kt`, `LibraryScreen.kt`, `ProfileScreen.kt` | Compose presentation and user interactions |
-| Catalog and source indexing | `LibraryIndexing.kt`, `MediaLibraryRepository.kt`, `LibraryViewModel.kt` | Persisted source grants, metadata scan, worker lifecycle, screen state |
-| Persistence | `WavvDatabase.kt` | Room entities, DAOs, migrations, and catalog operations |
-| Playback | `PlaybackController.kt`, `PlaybackService.kt` | Media3 controller, queue operations, service-owned ExoPlayer and session |
-| Search and personalization | `OfflineDiscovery.kt`, `SongSearch.kt` | Query parsing, local ranking, mixes, observed-playback reducer |
-| Metadata and genre views | `AudioMetadata.kt`, `MediaLibraryRepository.kt`, `GenreCategories.kt` | Read and persist supported file fields; keep file genres separate from inferred genres |
-| Model inference | `Dclap.kt`, `DclapIndexing.kt`, `MusicUnderstanding.kt`, `MusicUnderstandingRuntime.kt` | On-device embeddings, tag estimates, caching and worker progress |
-| Playback quality and enhancement | `AudioQualityDetails.kt`, `UHQEnhancement.kt` | Source format details, AAC decoding, ONNX enhancement, private cache, and playback source switching |
-| Embedded file content | `EmbeddedLanguageMetadata.kt`, `Lyrics.kt` | Supported language fields and lyrics read from selected files |
+| Activity, navigation, player surfaces | <code>MainActivity.kt</code> | Permission and source launchers, screen state, player UI, UI actions |
+| Screens | <code>HomeScreen.kt</code>, <code>SearchScreen.kt</code>, <code>LibraryScreen.kt</code>, <code>ProfileScreen.kt</code> | Compose presentation and user interactions |
+| Catalog and source indexing | <code>LibraryIndexing.kt</code>, <code>MediaLibraryRepository.kt</code>, <code>LibraryViewModel.kt</code> | Source grants, metadata scans, background indexing, screen state |
+| Persistence | <code>WavvDatabase.kt</code> | Room entities, DAOs, migrations, catalog operations |
+| Playback | <code>PlaybackController.kt</code>, <code>PlaybackService.kt</code> | Media3 controller, queue, playback service, and session |
+| Playback effects | <code>AudioEqualizer.kt</code>, <code>BitPerfectPlayback.kt</code>, <code>PlaybackCrossfade.kt</code>, <code>UHQEnhancement.kt</code> | Equalizer, output mode, crossfade, optional AAC processing |
+| Search and personalization | <code>OfflineDiscovery.kt</code>, <code>SongSearch.kt</code> | Query parsing, local ranking, mixes, playback feedback |
+| Metadata and local analysis | <code>AudioMetadata.kt</code>, <code>Dclap.kt</code>, <code>DclapIndexing.kt</code>, <code>MusicUnderstanding.kt</code> | File metadata, on-device search and tag analysis |
+| Lyrics | <code>EmbeddedLanguageMetadata.kt</code>, <code>Lyrics.kt</code> | Supported file language fields and embedded, imported, or local lyrics |
 
 ## Test levels
 
-Run the commands in the root README for these checks:
+Run the commands in the root README.
 
-| Check | What it can establish | What it cannot establish alone |
+| Check | What it covers | What it does not establish alone |
 | --- | --- | --- |
-| `:app:assembleDebug` | Kotlin/Compose compilation and debug packaging | Permission flow, playback, device codecs, output routes, or device performance |
-| `:app:testDebugUnitTest` | Deterministic JVM logic such as query parsing, ranking, queue rules, metadata parsing, and reducers | Android framework behavior, Room on-device behavior, actual audio, or visual parity |
-| `:app:connectedDebugAndroidTest` | Bundled DCLAP and Music Understanding inference, Room persistence, and the UHQ AAC enhancement path | Compatibility with every device, codec, audio route, or Android release; UHQ playback-service cache switching |
+| <code>:app:assembleDebug</code> | Kotlin/Compose compilation and debug packaging | Runtime permission flows, playback, device codecs, routes, or performance |
+| <code>:app:testDebugUnitTest</code> | Deterministic logic such as search ranking, metadata and lyrics parsing, queue rules, playback effects, and persistence helpers | Android framework behavior, playback on a device, or rendered UI parity |
+| <code>:app:connectedDebugAndroidTest</code> | Device-side analysis, Room persistence, session effects, and AAC processing | Compatibility with every device, codec, output route, or Android release |
 
-Relevant local test classes include `OfflineDiscoveryTest`, `PlaybackQueueTest`, `PlaybackFeedbackReducerTest`, `LibraryBackendTest`, `LyricsTest`, and `DclapTest`. `UHQEnhancementEndToEndTest` encodes a short AAC fixture on-device, runs the bundled enhancer, and checks WAV output and progress; its second case needs media permission and a supported AAC file in `Music/`. These tests are present in source, but their presence is not evidence that they passed. Run them on an emulator or device and report the exact result before making a runtime claim.
+The instrumentation suite includes <code>UHQEnhancementEndToEndTest</code>, which creates a short AAC input and checks the enhancement output. Its optional library case needs audio access and a supported AAC track in <code>Music/</code>. <code>DclapEndToEndTest</code> and the Music Understanding instrumentation tests exercise on-device analysis. Test files being present does not mean the checks have passed; record the actual command result before making a runtime claim.
 
-The current tree has no Compose UI test or test of the full `PlaybackService` cache-switching flow. `UHQResourceLimitsTest` checks supported MIME and temporary-audio size boundaries. The AAC enhancer instrumentation test exercises decoding, model inference, and WAV output, but not playback-service switching or device performance.
+The repository has unit tests for screen-content decisions, but no end-to-end test that drives the full app UI. It also has no test of the complete <code>PlaybackService</code> flow that switches playback to and from a cached AAC enhancement.
 
-## Practical change boundaries
+## Change boundaries
 
-- Treat source-code behavior and tests as the current contract. Historical notes and mockups are not proof that a feature shipped.
-- Keep metadata read from files separate from estimates produced by local analysis.
-- Keep file access behind the source grants selected through Android's picker or media permission.
-- A Compose preview can check layout, but it cannot validate Media3 playback, Android permission prompts, routing, or real file metadata.
-- The release variant currently uses the debug signing configuration. It is suitable for local install testing, not public production distribution.
+- Keep file metadata distinct from analysis results.
+- Keep file access behind the Android permissions or document grants selected by the user.
+- A Compose preview or unit test cannot validate device playback, Android permission prompts, audio routing, or real file metadata.
+- The current release build uses the debug signing configuration and is not a production release.
 
-For known build, indexing, search, and playback symptoms, see [Troubleshooting](troubleshooting.md).
+For build, indexing, search, and playback symptoms, see [Troubleshooting](troubleshooting.md).

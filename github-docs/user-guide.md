@@ -4,43 +4,45 @@ Wavv plays audio already available on your Android device. It does not provide a
 
 ## Choose a music source
 
-On first launch, choose one of these sources:
+On first launch, choose a source:
 
 | Choice | What it does | Access needed |
 | --- | --- | --- |
 | All music on this device | Reads Android's indexed music collection. Android may omit audio it does not classify as music. | Wavv's audio-library permission |
-| Individual audio files | Lets you select one or more audio documents. | Read access granted by Android's file picker |
-| A specific folder | Scans audio files in the selected folder and its subfolders. | A persistent folder read grant |
+| Individual audio files | Lets you select audio documents. | Read access granted by Android's file picker |
+| One or more folders | Scans selected folders and their subfolders. | Persistent folder read grants |
 
-Indexing fills the library from the selected source; it does not move or rewrite the audio. Wavv can refresh the selection when loading the library. In **You → Music Folders**, add or remove folders or switch to scanning all device music. If Android revokes a file or folder grant, choose that source again.
+Indexing adds references to your library; it does not move or rewrite the audio. In **You → Music Folders**, add or remove folders or switch to all device music. If Android revokes access, select the source again.
 
 ## Browse the app
 
-- **Home** shows library-driven shelves, such as recent tracks and available mixes. A mix appears only when local listening or favorite signals are sufficient; a new or sparse library may have no recommendations yet.
-- **Search** matches titles and metadata and can use local audio-text similarity for descriptive queries. Category cards are built from actual genre tags and tracks with artwork. If your files lack those tags or art, the app does not invent them.
-- **Library** organizes songs, albums, artists, favorites, and user-created playlists. When recommendations are available, Songs, Liked Songs, Artists, and Albums can use the **For You** sort. Playlist changes require an explicit action.
-- **You** shows local library counts, analysis progress, the selected source, notification and listening-history controls, Equalizer settings, and the optional UHQ AAC setting. The UHQ row shows the current track's enhancement state and progress while processing. The Theme row reports the current dark appearance; it is not a theme switch. Storage Used estimates the total size of the indexed audio files, not Wavv's app storage.
+- **Home** shows shelves such as recently played or recently added tracks and available mixes. A mix may be absent when the library or listening history is sparse.
+- **Search** matches available titles and metadata, and can use local audio analysis for descriptive queries. Categories use genres from file metadata or local analysis and require readable artwork.
+- **Library** organizes songs, albums, artists, favorites, and playlists. When recommendations are available, Songs, Liked Songs, Artists, and Albums can use the **For You** sort.
+- **You** shows library counts, source and analysis status, notifications, listening history, Music Folders, Standby, and playback settings. **Storage Used** estimates the size of indexed audio files, not Wavv's app storage.
 
-## Search honestly
+## Search
 
-Try a descriptive request such as `calm piano`, a metadata request such as `songs by <artist>`, or a language filter such as `songs in English`. Search uses the words and tags available in your own library. Descriptive similarity is a ranking signal, not proof that a track has a particular mood or genre.
+Try a descriptive request such as <code>calm piano</code>, an artist query such as <code>songs by &lt;artist&gt;</code>, or a language filter such as <code>songs in English</code>. Results depend on information present in your library. Descriptive matching is a ranking signal, not proof that a track has a particular mood or genre.
 
-Language filtering is stricter: Wavv matches recognized language metadata explicitly present in the file or media track. If no recognized language is present, the language stays unknown and the track will not match that language filter. Lyrics are not searched.
+Language filters match only recognized language metadata present in a file or media track. Missing language remains unknown. Search does not search lyrics.
 
-## Play and manage a queue
+## Playback and settings
 
-Tap a track to start playback. The mini-player opens the full player; use its transport buttons and seek bar to control playback. The queue can show upcoming tracks, play a track next, add tracks, reorder or remove upcoming tracks, shuffle upcoming items, and repeat the current item or queue. Repeat behavior is controlled by the player UI.
+Tap a track to start playback. The mini-player opens the full player. Use the transport controls and seek bar to control playback. The queue supports play next, add to queue, reorder or remove upcoming tracks, shuffle, repeat, and AutoPlay suggestions.
 
-The full player may show a source-quality label. Tap it to view technical details that Android can read from the file; metadata-based labels do not certify mastering or audible quality. See [Playback](playback.md) for details.
+The full player may show a source-quality label. Tap it for technical details Android can read from the file. The label does not certify mastering or audible quality. The output panel lists routes Android currently reports to Wavv; actual support depends on Android, the device, route, and decoder.
 
-The output panel lists compatible Android audio routes currently reported to Wavv. The operating system, device, selected route, and installed decoder determine actual format and output support. See [Playback](playback.md) for the boundary.
+In **You**, **Equalizer** provides a ten-band EQ, session gain, presets, and saved profiles. **Crossfade** blends eligible queued tracks and is off when set to zero. **UHQ AAC** is an experimental, opt-in enhancement that is off by default. For supported AAC, Wavv keeps playing the source while it prepares a cached copy; unsupported input or processing failure leaves playback on the original. Wavv does not modify the source file.
 
-UHQ AAC is an experimental, opt-in setting in **You** and is off by default. For AAC tracks Android can decode in the supported form, Wavv keeps the original playing while it prepares a cached enhanced copy, then may switch to that copy. Other formats and processing failures keep using the original. Turning UHQ off returns playback to the original; cached copies can remain until Android clears them or the cache needs space. Wavv never changes the source file.
+**Bit-perfect mode** requests Android's bit-perfect mixer mode for supported USB output and PCM formats on Android 14 or newer. It may not activate for the current route or track. While active, it pauses EQ, UHQ processing, and crossfade; use the USB device's hardware volume control.
 
 ## Artwork, metadata, and lyrics
 
-Wavv uses metadata and artwork it can read from the selected file or Android's media provider. Missing titles use a filename fallback; missing artist or album values remain marked unknown. The player can show embedded lyrics when the file uses a supported lyrics field. Wavv does not fetch artwork, lyrics, genres, or language from a network service.
+Wavv uses metadata and artwork it can read from a selected file or Android's media provider. Missing titles use a filename fallback; missing artist and album values remain unknown.
+
+The player can read embedded lyrics, import a <code>.ttml</code>, <code>.lrc</code>, or plain-text file, or use **Automatically check for lyrics**. Automatic checking is off by default. When enabled, Wavv checks for a matching lyric file when a track starts without embedded lyrics. It searches selected music folders, or Downloads for the all-device source only when Android grants whole-storage access. TTML is preferred to LRC when both match. Wavv does not download lyrics.
 
 ## Local personalization
 
-Favorites, confirmed plays, completions, repeats, skips, and playlist actions can influence later local recommendations. An early skip is treated as weak context, not as a definitive dislike. History is stored on-device and pruned after one year. Clearing listening history keeps favorites and playlists; see [Privacy](privacy.md).
+Favorites and listening activity can influence local recommendations. Listening history stays on-device for up to one year. **Clear listening history** removes listening events and recently played markers, while preserving favorites and playlists. See [Privacy](privacy.md).

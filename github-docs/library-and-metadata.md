@@ -1,29 +1,31 @@
 # Library and metadata
 
-The library is a catalog of references to user-selected audio. It is not a second copy of the user's music folder.
+The library is a catalog of references to audio selected by the user. Wavv does not create a second copy of the music collection.
 
 ## Source selection and indexing
 
-`LibrarySourceStore` retains the chosen source. All-device selection uses Android's `MediaStore` audio catalog and the runtime media permission. File and folder selection use Android's Storage Access Framework; Wavv retains the read grant so it can reopen the URI later. Folder scans walk the selected tree recursively. Users can add and remove folders from the You screen.
+Wavv can read Android's indexed music collection, selected individual audio documents, or one or more selected folders. The all-device source uses Android's media permission. File and folder sources use Android's Storage Access Framework; Wavv retains the granted read access so it can reopen the selected URIs. Folder scans include subfolders.
 
-`LibraryIndexWorker` runs a unique, one-time WorkManager job. It asks `MediaLibraryRepository` to read the current source, reports progress, and replaces catalog rows in a Room transaction. Work is constrained to run when storage is not low, uses exponential retry for I/O failures, and does not require a network connection. If access fails, reselect the source and retry.
+<code>LibraryIndexWorker</code> runs a unique, one-time WorkManager job. It asks <code>MediaLibraryRepository</code> to read the current source, reports progress, and replaces catalog rows in a Room transaction. If access fails, select the source again and retry.
 
-For all-device scans, Wavv asks Android for audio entries marked as music. File and folder scans accept documents with an audio MIME type or a recognized audio-file suffix. Discovery of a file does not guarantee that Android can decode it; actual playback support is described in [Playback](playback.md).
+For all-device scans, Wavv asks Android for audio entries marked as music. File and folder scans accept documents with an audio MIME type or a recognized audio-file suffix. Finding a file does not guarantee that Android can decode it; see [Playback](playback.md).
 
 ## Metadata fields
 
-Wavv reads available title, artist, album, duration, and MIME/container information. Optional catalog fields include genres, album artist, composer, year and recording date, track/disc numbers and track count, author, writer, compilation status, bitrate, and sample rate. Android media-provider values are preferred where exposed, with supported embedded metadata filling gaps. Availability varies by file, container, Android version, and document provider. Missing genres, language, or model tags are not fabricated.
+Wavv reads available title, artist, album, duration, and MIME/container information. Other available fields include genre, album artist, composer, year and recording date, track and disc numbers, track count, author, writer, compilation status, bitrate, and sample rate. Android media-provider values are preferred where exposed, with supported embedded metadata filling gaps.
 
-Language metadata is checked lazily when a language search is requested. Wavv recognizes explicit media-track language and supported embedded language fields. Unknown and unrecognized values remain unknown.
+Availability varies by file, container, Android version, and document provider. Missing values from the file or media provider remain unknown; inferred tags, when available, are separate local analysis results described in [On-device analysis](on-device-analysis.md). Language metadata is checked when a language search needs it and only recognized values qualify.
 
 ## Artwork and lyrics
 
-Artwork comes from an embedded picture or Android's album-art provider. Embedded images above the configured size limit or images Android cannot decode may be unavailable. Wavv keeps a deduplicated, resized app-private display copy and prunes artwork no longer referenced by the indexed catalog. It does not substitute unrelated album art for a track that has none.
+Artwork can come from an embedded picture or Android's album-art provider. Large or unreadable images may be unavailable. Wavv keeps a resized app-private display copy and removes copies that are no longer referenced by the catalog. It does not substitute unrelated cover art.
 
-Lyrics are read from supported embedded metadata when the player opens the lyrics panel. Timed lyric lines can be synchronized to playback position. There is no online lyrics lookup.
+The player reads supported embedded lyrics. A user can import a .ttml, .lrc, or plain-text lyrics document. The optional **Automatically check for lyrics** setting looks for a matching .ttml or .lrc document when a track starts without embedded lyrics. It searches selected music folders; with the all-device library, it checks Downloads only when Android grants whole-storage access. When both formats match, TTML is preferred. Wavv does not download lyrics.
 
-## Identity and user state
+Timed lyrics can be synchronized to playback position. Lyrics are not indexed by Search.
 
-Android media entries use their provider IDs; selected document entries receive a stable ID derived from their URI. When a source is rescanned, `LibraryStore.replaceSongs` replaces the catalog transactionally and restores favorite and last-played state for matching URIs. Analysis results are associated with the track and the source file's size and modified time; changed sources are eligible for re-analysis.
+## Track identity and user state
 
-The Room catalog, playlists, listening events, and analysis outputs are described in [Architecture](architecture.md). Selected URIs and Android grants are described in [Privacy](privacy.md).
+Android media entries use provider IDs; selected document entries receive a stable ID derived from their URI. When a source is rescanned, the catalog is replaced transactionally and favorite and last-played state is restored for matching source URIs. Local analysis results are reused only while their source-file identity remains current.
+
+Selected URIs and Android grants are described in [Privacy](privacy.md).
