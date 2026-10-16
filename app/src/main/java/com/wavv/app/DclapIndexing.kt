@@ -52,6 +52,9 @@ class DclapIndexWorker(appContext: Context, workerParams: WorkerParameters) : Co
                     ),
                 )
             } else {
+                if (store.getSongs().isNotEmpty()) {
+                    MusicInsightsNotification.notifyFirstCompletionIfNeeded(applicationContext)
+                }
                 Result.success(workDataOf(KEY_RESULTS_CHANGED to (result.updatedResults > 0)))
             }
         } catch (error: CancellationException) {

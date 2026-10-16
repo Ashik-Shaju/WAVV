@@ -31,6 +31,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.SystemBarStyle
 import androidx.compose.animation.animateColor
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -507,6 +508,15 @@ internal fun HomeMixCardOverlayFlight(
     }
 }
 
+private fun brighterAcrylicLogoColor(surfaceColor: Color): Color {
+    val lift = .54f
+    return Color(
+        red = surfaceColor.red + (1f - surfaceColor.red) * lift,
+        green = surfaceColor.green + (1f - surfaceColor.green) * lift,
+        blue = surfaceColor.blue + (1f - surfaceColor.blue) * lift,
+    )
+}
+
 @Composable
 internal fun HomeScreen(
     songs: List<Song>,
@@ -572,7 +582,7 @@ internal fun HomeScreen(
                 add(HomeStackSection(primaryTitle, primarySongs.take(8).map { HomeStackEntry(it.title, it.artist, it) }))
             }
             smartMixes.forEach { mix ->
-                val entries = mix.songs.take(8).map { HomeStackEntry(it.title, it.artist, it) }
+                val entries = mix.songs.take(HOME_STACK_MIX_SONG_LIMIT).map { HomeStackEntry(it.title, it.artist, it) }
                 if (entries.isNotEmpty()) add(HomeStackSection(mix.title, entries, mix))
             }
             if (likedSongs.isNotEmpty()) {
@@ -657,6 +667,11 @@ internal fun HomeScreen(
             withContext(Dispatchers.IO) { homeAcrylicChipColor(context, song) }
         } ?: Color(0xFF26385D)
     }
+    val acrylicLogoColor by animateColorAsState(
+        targetValue = brighterAcrylicLogoColor(acrylicChipColor),
+        animationSpec = tween(650, easing = WavvMotionEasing),
+        label = "home acrylic logo color",
+    )
 
     Box(Modifier.fillMaxSize()) {
         AnimatedContent(
@@ -684,6 +699,7 @@ internal fun HomeScreen(
             backgroundColor = Color.Transparent,
             statusChips = statusChips,
             statusChipColor = acrylicChipColor,
+            titleColor = acrylicLogoColor,
             titleFontFamily = WavvAppNameFontFamily,
         )
         if (songs.isEmpty()) {
@@ -784,6 +800,10 @@ internal fun HomeScreen(
                 onBack = ::closeHomeMixDetail,
                 onPlay = { song ->
                     onPlayHomeMix(song, mix.songs, mix.title)
+                },
+                onShuffle = {
+                    val shuffledSongs = mix.songs.shuffled().ifEmpty { listOf(mix.seed) }
+                    onPlayHomeMix(shuffledSongs.first(), shuffledSongs, mix.title)
                 },
             )
         }
@@ -905,6 +925,7 @@ private fun HomeStackPanel(
         // where the expanded player belongs. This keeps the stack attached to the carousel
         // instead of anchoring it to the bottom of a variable-height screen.
         val compactTopPx = carouselContentHeightPx + carouselGapPx * 2f + miniPlayerSlotHeightPx
+        val canExpandFromCarouselGap = !hasNowPlaying && !playerExpanded && !stackListExpanded
         // On short screens, reclaim bottom padding before sacrificing the space between the
         // carousel and the player/card lanes. This keeps a real, nonzero peek of card two in
         // the viewport, so the connected stack still reads as scrollable.
@@ -1092,6 +1113,42 @@ private fun HomeStackPanel(
                 }
                 Spacer(Modifier.height(stackPeek - cardGap))
             }
+            if (canExpandFromCarouselGap && compactTopPx > carouselContentHeightPx) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .offset(y = with(density) { carouselContentHeightPx.toDp() })
+                        .height(with(density) { (compactTopPx - carouselContentHeightPx).toDp() })
+                        .pointerInput(canExpandFromCarouselGap) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(
+                                    requireUnconsumed = false,
+                                    pass = PointerEventPass.Initial,
+                                )
+                                var handled = false
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    val delta = change.position - down.position
+                                    val verticalIntent = kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x) * 1.15f
+                                    if (!handled && verticalIntent && delta.y < -viewConfiguration.touchSlop) {
+                                        handled = true
+                                        change.consume()
+                                        currentOnStackListExpandedChange.value(true)
+                                    } else if (handled) {
+                                        change.consume()
+                                    } else if (
+                                        kotlin.math.abs(delta.x) > viewConfiguration.touchSlop &&
+                                        kotlin.math.abs(delta.x) > kotlin.math.abs(delta.y) * 1.15f
+                                    ) {
+                                        break
+                                    }
+                                    if (!change.pressed) break
+                                }
+                            }
+                        },
+                )
+            }
         }
     }
 }
@@ -1129,7 +1186,7 @@ private fun HomeStackCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(section.label.uppercase(), color = Color.White, fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black, letterSpacing = .45.sp, fontFamily = FontFamily.SansSerif)
+            Text(section.label.uppercase(), color = Color.White.copy(.48f), fontSize = 14.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black, letterSpacing = .45.sp, fontFamily = FontFamily.SansSerif)
             Text(
                 if (section.mix != null) "PLAY MIX" else "Swipe to explore",
                 Modifier.then(
@@ -1322,7 +1379,21 @@ private fun HomeMixDetailScreen(
     onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
     onBack: () -> Unit,
     onPlay: (Song) -> Unit,
+    onShuffle: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var artworkAccent by remember(mix.seed.id) { mutableStateOf(homeFallbackAccent(mix.seed.id)) }
+    LaunchedEffect(mix.seed.id, mix.seed.albumArtUri, mix.seed.uri) {
+        artworkAccent = withContext(Dispatchers.IO) { homeThumbnailAccentColor(context, mix.seed) }
+    }
+    val titleAccent = Color(
+        red = (artworkAccent.red * 1.45f).coerceAtMost(.95f),
+        green = (artworkAccent.green * 1.45f).coerceAtMost(.95f),
+        blue = (artworkAccent.blue * 1.45f).coerceAtMost(.95f),
+    )
+    val playContentColor = if (
+        artworkAccent.red * .299f + artworkAccent.green * .587f + artworkAccent.blue * .114f > .55f
+    ) Color(0xFF111111) else Color.White
     BoxWithConstraints(modifier.graphicsLayer { alpha = overlayAlpha }.background(WavvBackground)) {
         val heroHeight = minOf(620.dp, maxWidth + 170.dp)
         val artworkSize = minOf(maxWidth, 480.dp)
@@ -1385,7 +1456,7 @@ private fun HomeMixDetailScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text("PERSONALIZED MIX", color = Color.White.copy(.65f), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.1.sp)
-                        Text(mix.title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp, fontFamily = WavvFontFamily, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(mix.title, color = titleAccent, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp, fontFamily = WavvFontFamily, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(
                             listOfNotNull(mix.seed.artist.takeIf(String::isNotBlank), mix.seed.genre?.takeIf(String::isNotBlank))
                                 .joinToString(" · ").ifBlank { "Recommended around ${mix.seed.title}" },
@@ -1395,17 +1466,34 @@ private fun HomeMixDetailScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Row(
-                            Modifier.fillMaxWidth().height(56.dp).padding(top = 2.dp)
-                                .clip(CircleShape).background(Color.White)
-                                .scrollSafeTap(
-                                    enabled = isInteractive,
-                                    canTap = { isInteractive && !mixListIsScrolling.value },
-                                ) { onPlay(mix.seed) },
+                            Modifier.fillMaxWidth().padding(top = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
                         ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color(0xFF111111), modifier = Modifier.size(23.dp))
-                            Text("Play Mix", Modifier.padding(start = 6.dp), color = Color(0xFF111111), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+                            Row(
+                                Modifier.weight(3f).height(56.dp)
+                                    .clip(CircleShape).background(artworkAccent)
+                                    .scrollSafeTap(
+                                        enabled = isInteractive,
+                                        canTap = { isInteractive && !mixListIsScrolling.value },
+                                    ) { onPlay(mix.seed) },
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = playContentColor, modifier = Modifier.size(23.dp))
+                                Text("Play Mix", Modifier.padding(start = 6.dp), color = playContentColor, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+                            }
+                            Box(
+                                Modifier.weight(1f).height(56.dp)
+                                    .clip(CircleShape).background(artworkAccent)
+                                    .scrollSafeTap(
+                                        enabled = isInteractive,
+                                        canTap = { isInteractive && !mixListIsScrolling.value },
+                                    ) { onShuffle() },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(Icons.Default.Shuffle, contentDescription = "Shuffle Mix", tint = playContentColor, modifier = Modifier.size(23.dp))
+                            }
                         }
                     }
                 }
@@ -1657,7 +1745,7 @@ private fun SongActionsSheet(
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
 ) {
-    WavvBottomSheet(onDismissRequest = onDismiss) { close ->
+    WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = song) { close ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
             AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
             Column(Modifier.weight(1f)) {

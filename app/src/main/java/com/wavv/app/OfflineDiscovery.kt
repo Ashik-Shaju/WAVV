@@ -50,6 +50,8 @@ data class SmartMix(
     val songs: List<Song>,
 )
 
+internal const val HOME_STACK_MIX_SONG_LIMIT = 8
+
 internal data class TextMetadataField(val key: String, val value: String)
 
 internal object WavvSession {

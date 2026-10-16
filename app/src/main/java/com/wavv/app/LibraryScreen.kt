@@ -50,7 +50,6 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
@@ -89,6 +88,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBars
@@ -124,6 +124,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
@@ -138,6 +140,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
@@ -152,10 +155,10 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PrivacyTip
 import androidx.compose.material.icons.outlined.Wifi
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -205,11 +208,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -264,6 +269,8 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -278,7 +285,115 @@ private fun expressiveFontFor(page: LibraryPage): FontFamily = when (page) {
     else -> WavvFontFamily
 }
 
+private const val MADE_FOR_YOU_PLAYLIST_ID = Long.MIN_VALUE
+private const val LOSSLESS_PLAYLIST_ID = Long.MIN_VALUE + 1L
+private const val HI_RES_LOSSLESS_PLAYLIST_ID = Long.MIN_VALUE + 2L
+
+private val PERMANENT_PLAYLIST_IDS = setOf(
+    MADE_FOR_YOU_PLAYLIST_ID,
+    LOSSLESS_PLAYLIST_ID,
+    HI_RES_LOSSLESS_PLAYLIST_ID,
+)
+
+private fun permanentPlaylistCard(
+    id: Long,
+    title: String,
+    songs: List<Song>,
+    sortPriority: Int,
+    onNavigate: (LibraryDestination) -> Unit,
+) = LibraryCard(
+    id = id.toString(),
+    title = title,
+    subtitle = "${songs.size} songs",
+    artSong = songs.firstOrNull(),
+    priority = Int.MAX_VALUE - sortPriority,
+    permanent = true,
+    playlistSongs = songs,
+) {
+    onNavigate(LibraryDestination(LibraryPage.Playlist, id, title))
+}
+
 @Composable
+private fun LibraryPlaylistActionsSheet(
+    playlist: UserPlaylist,
+    playlistSongs: List<Song>,
+    artworkSong: Song?,
+    pinned: Boolean,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onTogglePin: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    WavvBottomSheet(
+        onDismissRequest = onDismiss,
+        maxHeight = 380.dp,
+        artworkSong = artworkSong,
+    ) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+            PlaylistArtwork(playlistSongs, artworkSong, Modifier.size(54.dp), playlist.name, 11.dp)
+            Column(Modifier.weight(1f)) {
+                Text("Playlist options", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(playlist.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${playlist.songIds.size} songs", color = Color.White.copy(.55f), fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        SheetActionRow(Icons.Default.Edit, "Edit playlist") { close(); onRename() }
+        SheetActionRow(Icons.Default.PushPin, if (pinned) "Unpin playlist" else "Pin playlist") { close(); onTogglePin() }
+        SheetActionRow(Icons.Default.Delete, "Delete playlist") { close(); onDelete() }
+    }
+}
+
+@Composable
+private fun LibraryAlbumActionsSheet(
+    albumTitle: String,
+    albumArtist: String,
+    song: Song,
+    onDismiss: () -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = song) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+            AlbumArt(song, Modifier.size(58.dp), albumTitle, 12.dp)
+            Column(Modifier.weight(1f)) {
+                Text("Album options", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(albumTitle, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(albumArtist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
+        SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
+    }
+}
+
+@Composable
+private fun LibraryArtistActionsSheet(
+    artistName: String,
+    songCount: String,
+    song: Song,
+    onDismiss: () -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = song) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+            AlbumArt(song, Modifier.size(58.dp).clip(CircleShape), artistName, 29.dp)
+            Column(Modifier.weight(1f)) {
+                Text("Artist options", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(artistName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(songCount, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
+        SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
 internal fun LibraryScreen(
     destination: LibraryDestination,
     songs: List<Song>,
@@ -288,6 +403,7 @@ internal fun LibraryScreen(
     hasNowPlaying: Boolean,
     favoriteIds: Set<Long>,
     personalizedRecommendations: List<Song>,
+    smartMixes: List<SmartMix>,
     playlists: List<UserPlaylist>,
     layout: LibraryLayout,
     pinnedPlaylistIds: Set<Long>,
@@ -307,20 +423,64 @@ internal fun LibraryScreen(
     onRemoveSongFromPlaylist: (Long, Long) -> Unit,
 ) {
     var songForPlaylist by remember { mutableStateOf<Song?>(null) }
+    var mainMenuSong by remember { mutableStateOf<Song?>(null) }
     var openPlaylistMenu by remember { mutableStateOf<Long?>(null) }
+    var openAlbumMenu by remember { mutableStateOf<String?>(null) }
+    var openArtistMenu by remember { mutableStateOf<String?>(null) }
     var sortMenu by remember { mutableStateOf(false) }
     var sortMode by rememberSaveable(destination.page) { mutableStateOf("Recently added") }
+    var artistsLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
+    val context = LocalContext.current
+    val appContext = remember(context) { context.applicationContext }
+    var audioQualitySongs by remember { mutableStateOf<Map<String, List<Song>>>(emptyMap()) }
     val songsById = remember(songs) { songs.associateBy(Song::id) }
     val recent = remember(songs) { songs.sortedByDescending(Song::modifiedAt).take(6) }
     val featuredSongs = remember(songs, personalizedRecommendations) {
         recommendationOrderedSongs(songs, personalizedRecommendations).take(6)
     }
+    val madeForYouSongs = remember(smartMixes) {
+        smartMixes.firstOrNull { it.id == "made-for-you" }?.songs?.take(HOME_STACK_MIX_SONG_LIMIT).orEmpty()
+    }
+    val shouldDetectAudioQualityCollections = destination.page == LibraryPage.Playlists ||
+        (destination.page == LibraryPage.Playlist && destination.itemId in setOf(LOSSLESS_PLAYLIST_ID, HI_RES_LOSSLESS_PLAYLIST_ID))
+    LaunchedEffect(songs, appContext, shouldDetectAudioQualityCollections) {
+        if (!shouldDetectAudioQualityCollections) return@LaunchedEffect
+        audioQualitySongs = withContext(Dispatchers.IO) {
+            val groupedSongs = mutableMapOf<String, MutableList<Song>>()
+            songs.forEach { song ->
+                currentCoroutineContext().ensureActive()
+                if (!isLosslessAudioSource(song)) return@forEach
+                val details = try {
+                    readAudioQualityDetails(appContext, song)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    null
+                } ?: return@forEach
+                if (details.qualityName == "Lossless" || details.qualityName == "Hi-Res Lossless") {
+                    groupedSongs.getOrPut(details.qualityName) { mutableListOf() }.add(song)
+                }
+            }
+            groupedSongs.mapValues { (_, tracks) -> tracks.toList() }
+        }
+    }
+    val permanentPlaylistSongs = mapOf(
+        MADE_FOR_YOU_PLAYLIST_ID to madeForYouSongs,
+        LOSSLESS_PLAYLIST_ID to audioQualitySongs["Lossless"].orEmpty(),
+        HI_RES_LOSSLESS_PLAYLIST_ID to audioQualitySongs["Hi-Res Lossless"].orEmpty(),
+    )
+    val permanentPlaylistTitles = mapOf(
+        MADE_FOR_YOU_PLAYLIST_ID to "Made for you",
+        LOSSLESS_PLAYLIST_ID to "Lossless",
+        HI_RES_LOSSLESS_PLAYLIST_ID to "Hi-Res Lossless",
+    )
     val playlist = playlists.firstOrNull { it.id == destination.itemId }
-    val collectionSongs = remember(destination, songs, favoriteIds, playlists) {
+    val collectionSongs = remember(destination, songs, favoriteIds, playlists, permanentPlaylistSongs) {
         when (destination.page) {
             LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
             LibraryPage.Songs -> songs
-            LibraryPage.Playlist -> playlist?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
+            LibraryPage.Playlist -> permanentPlaylistSongs[destination.itemId]
+                ?: playlist?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
             LibraryPage.Artist -> songs.filter { item -> item.artistNames().any { it.equals(destination.title, ignoreCase = true) } }
             LibraryPage.Album -> songs.filter { it.album == destination.title && (it.albumArtist ?: it.artist) == destination.subtitle }
             else -> emptyList()
@@ -329,7 +489,7 @@ internal fun LibraryScreen(
     val collectionTitle = when (destination.page) {
         LibraryPage.Liked -> "Liked Songs"
         LibraryPage.Songs -> "Songs"
-        LibraryPage.Playlist -> playlist?.name ?: destination.title
+        LibraryPage.Playlist -> permanentPlaylistTitles[destination.itemId] ?: playlist?.name ?: destination.title
         else -> destination.title
     }
     val collectionSubtitle = when (destination.page) {
@@ -377,7 +537,12 @@ internal fun LibraryScreen(
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     row.forEach { song ->
                                         Column(
-                                            Modifier.weight(1f).clickable { onPlay(song, listOf(song), null) },
+                                            Modifier.weight(1f).combinedClickable(
+                                                role = Role.Button,
+                                                onClick = { onPlay(song, listOf(song), null) },
+                                                onLongClickLabel = "Song actions",
+                                                onLongClick = { mainMenuSong = song },
+                                            ),
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                         ) {
                                             AlbumArt(song, Modifier.fillMaxWidth().aspectRatio(1f).shadow(14.dp, RoundedCornerShape(10.dp)), song.title, 10.dp)
@@ -416,7 +581,25 @@ internal fun LibraryScreen(
                         }
                     }
                     item { Hairline(); Text("Recently Added", Modifier.padding(start = 20.dp, top = 18.dp, bottom = 4.dp), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
-                    items(recent, key = Song::id) { item -> SearchResultRow(item) { onPlay(it, listOf(it), null) } }
+                    items(recent, key = Song::id) { item ->
+                        Row(
+                            Modifier.fillMaxWidth().combinedClickable(
+                                role = Role.Button,
+                                onClick = { onPlay(item, listOf(item), null) },
+                                onLongClickLabel = "Song actions",
+                                onLongClick = { mainMenuSong = item },
+                            ).padding(horizontal = 20.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            AlbumArt(item, Modifier.size(46.dp), item.title, 8.dp)
+                            Column(Modifier.weight(1f)) {
+                                Text(item.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(item.artist, color = Color.White.copy(.4f), fontSize = 12.sp)
+                            }
+                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(.2f), modifier = Modifier.size(16.dp))
+                        }
+                    }
                     if (songs.isEmpty()) item { LibraryEmpty("No music in your library", "Choose a music source to add tracks.") }
                 }
             }
@@ -433,20 +616,30 @@ internal fun LibraryScreen(
                     } else alphabetic
                 }
                 val cards = when (route.page) {
-                    LibraryPage.Playlists -> playlists.sortedWith(
-                        compareByDescending<UserPlaylist> { it.id in pinnedPlaylistIds }.thenByDescending(UserPlaylist::updatedAt),
-                    ).map { item ->
-                        val playlistTracks = item.songIds.mapNotNull(songsById::get)
-                        val priority = when {
-                            item.id in pinnedPlaylistIds -> 2
-                            playlistTracks.isNotEmpty() && playlistTracks.all { it.id in favoriteIds } -> 1
-                            else -> 0
+                    LibraryPage.Playlists -> buildList {
+                        add(permanentPlaylistCard(MADE_FOR_YOU_PLAYLIST_ID, "Made for you", madeForYouSongs, 0, onNavigate))
+                        audioQualitySongs["Lossless"]?.takeIf { it.isNotEmpty() }?.let { tracks ->
+                            add(permanentPlaylistCard(LOSSLESS_PLAYLIST_ID, "Lossless", tracks, 1, onNavigate))
                         }
-                        LibraryCard(
-                            item.id.toString(), item.name, "${item.songIds.size} songs",
-                            playlistArtworkSong(item.songIds, songsById),
-                            priority = priority,
-                        ) { onNavigate(LibraryDestination(LibraryPage.Playlist, item.id, item.name)) }
+                        audioQualitySongs["Hi-Res Lossless"]?.takeIf { it.isNotEmpty() }?.let { tracks ->
+                            add(permanentPlaylistCard(HI_RES_LOSSLESS_PLAYLIST_ID, "Hi-Res Lossless", tracks, 2, onNavigate))
+                        }
+                        addAll(playlists.sortedWith(
+                            compareByDescending<UserPlaylist> { it.id in pinnedPlaylistIds }.thenByDescending(UserPlaylist::updatedAt),
+                        ).map { item ->
+                            val playlistTracks = item.songIds.mapNotNull(songsById::get)
+                            val priority = when {
+                                item.id in pinnedPlaylistIds -> 2
+                                playlistTracks.isNotEmpty() && playlistTracks.all { it.id in favoriteIds } -> 1
+                                else -> 0
+                            }
+                            LibraryCard(
+                                item.id.toString(), item.name, "${item.songIds.size} songs",
+                                playlistArtworkSong(item.songIds, songsById),
+                                priority = priority,
+                                playlistSongs = playlistTracks,
+                            ) { onNavigate(LibraryDestination(LibraryPage.Playlist, item.id, item.name)) }
+                        })
                     }
                     LibraryPage.Artists -> libraryBrowseSongs
                         .flatMap { item -> item.artistNames().map { artist -> artist to item } }
@@ -472,15 +665,24 @@ internal fun LibraryScreen(
                         } }
                 }
                 Column(Modifier.fillMaxSize()) {
+                    val browseLayout = if (route.page == LibraryPage.Artists) artistsLayout else layout
+                    val toggleBrowseLayout: () -> Unit = {
+                        if (route.page == LibraryPage.Artists) {
+                            artistsLayout = if (artistsLayout == LibraryLayout.Grid) LibraryLayout.List else LibraryLayout.Grid
+                        } else {
+                            onToggleLayout()
+                        }
+                    }
                     LibraryBrowseHeader(
                         title = route.title.ifBlank { route.page.name.lowercase().replaceFirstChar(Char::uppercase) },
                         fontFamily = expressiveFontFor(route.page),
                         showLayout = true,
-                        layout = layout,
+                        layout = browseLayout,
                         onBack = onBack,
-                        onToggleLayout = onToggleLayout,
+                        onToggleLayout = toggleBrowseLayout,
                         showAdd = route.page == LibraryPage.Playlists,
                         showSort = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
+                        groupActionsInPill = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
                         onAdd = { onRequestCreatePlaylist(null) },
                         onSort = { sortMenu = true },
                     )
@@ -491,52 +693,214 @@ internal fun LibraryScreen(
                             else -> cards.sortedByDescending { it.priority }
                         }
                     }
-                    val cardRows = remember(orderedCards) { orderedCards.chunked(2) }
+                    val cardsPerRow = if (route.page == LibraryPage.Artists) 3 else 2
+                    val cardRows = remember(orderedCards, cardsPerRow) { orderedCards.chunked(cardsPerRow) }
                     LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = if (hasNowPlaying) 260.dp else 176.dp)) {
-                        if (layout == LibraryLayout.Grid) {
+                        if (browseLayout == LibraryLayout.Grid) {
                             items(cardRows.size) { rowIndex ->
                                 Row(Modifier.fillMaxWidth().padding(bottom = 22.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                     cardRows[rowIndex].forEach { card ->
-                                        Column(Modifier.weight(1f).clickable(onClick = card.onClick)) {
-                                            AlbumArt(card.artSong?.albumArtUri, Modifier.fillMaxWidth().aspectRatio(1f), card.title, 13.dp, card.artSong?.uri)
-                                            Text(card.title, Modifier.padding(top = 7.dp), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            Text(card.subtitle, color = Color.White.copy(.48f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        val artistCard = route.page == LibraryPage.Artists
+                                        val playlist = if (route.page == LibraryPage.Playlists && !card.permanent) {
+                                            card.id.toLongOrNull()?.let { id -> playlists.firstOrNull { it.id == id } }
+                                        } else null
+                                        val albumSong = if (route.page == LibraryPage.Albums) card.artSong else null
+                                        val artistSong = if (route.page == LibraryPage.Artists) card.artSong else null
+                                        val cardClickModifier = when {
+                                            playlist != null -> Modifier.combinedClickable(
+                                                role = Role.Button,
+                                                onClick = card.onClick,
+                                                onLongClickLabel = "Playlist options",
+                                                onLongClick = { openPlaylistMenu = playlist.id },
+                                            )
+                                            albumSong != null -> Modifier.combinedClickable(
+                                                role = Role.Button,
+                                                onClick = card.onClick,
+                                                onLongClickLabel = "Album options",
+                                                onLongClick = { openAlbumMenu = card.id },
+                                            )
+                                            artistSong != null -> Modifier.combinedClickable(
+                                                role = Role.Button,
+                                                onClick = card.onClick,
+                                                onLongClickLabel = "Artist options",
+                                                onLongClick = { openArtistMenu = card.id },
+                                            )
+                                            else -> Modifier.clickable(onClick = card.onClick)
+                                        }
+                                        Column(
+                                            Modifier.weight(1f).then(cardClickModifier),
+                                            horizontalAlignment = if (artistCard) Alignment.CenterHorizontally else Alignment.Start,
+                                        ) {
+                                            val artworkModifier = Modifier.fillMaxWidth().aspectRatio(1f)
+                                                .then(if (artistCard) Modifier.clip(CircleShape) else Modifier)
                                             if (route.page == LibraryPage.Playlists) {
-                                                val playlistId = card.id.toLongOrNull()
-                                                Box {
-                                                    IconButton(onClick = { openPlaylistMenu = playlistId }, modifier = Modifier.size(34.dp)) {
-                                                        FigmaMoreIcon(30.dp)
-                                                    }
-                                                    DropdownMenu(expanded = openPlaylistMenu == playlistId, onDismissRequest = { openPlaylistMenu = null }) {
-                                                        DropdownMenuItem(text = { Text("Edit playlist") }, onClick = { openPlaylistMenu = null; playlists.firstOrNull { it.id == playlistId }?.let(onRequestRenamePlaylist) })
-                                                        DropdownMenuItem(text = { Text(if (playlistId?.let(pinnedPlaylistIds::contains) == true) "Unpin" else "Pin") }, onClick = { openPlaylistMenu = null; playlistId?.let(onTogglePin) })
-                                                        DropdownMenuItem(text = { Text("Delete playlist") }, onClick = { openPlaylistMenu = null; playlists.firstOrNull { it.id == playlistId }?.let(onRequestDeletePlaylist) })
+                                                PlaylistArtwork(card.playlistSongs, card.artSong, artworkModifier, card.title, 13.dp)
+                                            } else {
+                                                AlbumArt(card.artSong?.albumArtUri, artworkModifier, card.title, 13.dp, card.artSong?.uri)
+                                            }
+                                            if (playlist != null || albumSong != null) {
+                                                Row(Modifier.fillMaxWidth().padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        card.title,
+                                                        Modifier.weight(1f),
+                                                        color = Color.White,
+                                                        fontSize = 14.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontFamily = expressiveFontFor(route.page),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                    )
+                                                    if (playlist != null) {
+                                                        Box {
+                                                            Box(Modifier.size(34.dp).clickable(role = Role.Button) { openPlaylistMenu = playlist.id }, contentAlignment = Alignment.Center) {
+                                                                FigmaMoreIcon(30.dp)
+                                                            }
+                                                            if (openPlaylistMenu == playlist.id) {
+                                                                LibraryPlaylistActionsSheet(
+                                                                    playlist = playlist,
+                                                                    playlistSongs = card.playlistSongs,
+                                                                    artworkSong = card.artSong ?: songs.firstOrNull(),
+                                                                    pinned = playlist.id in pinnedPlaylistIds,
+                                                                    onDismiss = { openPlaylistMenu = null },
+                                                                    onRename = { openPlaylistMenu = null; onRequestRenamePlaylist(playlist) },
+                                                                    onTogglePin = { openPlaylistMenu = null; onTogglePin(playlist.id) },
+                                                                    onDelete = { openPlaylistMenu = null; onRequestDeletePlaylist(playlist) },
+                                                                )
+                                                            }
+                                                        }
+                                                    } else if (albumSong != null) {
+                                                        Box {
+                                                            Box(Modifier.size(34.dp).clickable(role = Role.Button) { openAlbumMenu = card.id }, contentAlignment = Alignment.Center) {
+                                                                FigmaMoreIcon(30.dp)
+                                                            }
+                                                            if (openAlbumMenu == card.id) {
+                                                                LibraryAlbumActionsSheet(
+                                                                    albumTitle = card.title,
+                                                                    albumArtist = card.subtitle,
+                                                                    song = albumSong,
+                                                                    onDismiss = { openAlbumMenu = null },
+                                                                    onPlayNext = onPlayNext,
+                                                                    onAddToQueue = onAddToQueue,
+                                                                )
+                                                            }
+                                                        }
                                                     }
                                                 }
+                                                Text(card.subtitle, color = Color.White.copy(.48f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            } else {
+                                                Text(
+                                                    card.title,
+                                                    Modifier.fillMaxWidth().padding(top = 7.dp),
+                                                    color = Color.White,
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontFamily = expressiveFontFor(route.page),
+                                                    maxLines = if (artistCard) 2 else 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    textAlign = if (artistCard) androidx.compose.ui.text.style.TextAlign.Center else androidx.compose.ui.text.style.TextAlign.Start,
+                                                )
+                                                if (!artistCard) Text(card.subtitle, color = Color.White.copy(.48f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            }
+                                            if (artistSong != null && openArtistMenu == card.id) {
+                                                LibraryArtistActionsSheet(
+                                                    artistName = card.title,
+                                                    songCount = card.subtitle,
+                                                    song = artistSong,
+                                                    onDismiss = { openArtistMenu = null },
+                                                    onPlayNext = onPlayNext,
+                                                    onAddToQueue = onAddToQueue,
+                                                )
                                             }
                                         }
                                     }
-                                    if (orderedCards.size % 2 == 1 && rowIndex == cardRows.lastIndex) Spacer(Modifier.weight(1f))
+                                    if (rowIndex == cardRows.lastIndex && cardRows[rowIndex].size < cardsPerRow) {
+                                        repeat(cardsPerRow - cardRows[rowIndex].size) { Spacer(Modifier.weight(1f)) }
+                                    }
                                 }
                             }
                         } else {
                             items(orderedCards, key = LibraryCard::id) { card ->
-                                Row(Modifier.fillMaxWidth().clickable(onClick = card.onClick).padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                                    AlbumArt(card.artSong?.albumArtUri, Modifier.size(58.dp), card.title, 10.dp, card.artSong?.uri)
-                                    Column(Modifier.weight(1f)) {
-                                        Text(card.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp)
-                                    }
+                                val artistCard = route.page == LibraryPage.Artists
+                                val playlist = if (route.page == LibraryPage.Playlists && !card.permanent) {
+                                    card.id.toLongOrNull()?.let { id -> playlists.firstOrNull { it.id == id } }
+                                } else null
+                                val albumSong = if (route.page == LibraryPage.Albums) card.artSong else null
+                                val artistSong = if (route.page == LibraryPage.Artists) card.artSong else null
+                                val cardClickModifier = when {
+                                    playlist != null -> Modifier.combinedClickable(
+                                        role = Role.Button,
+                                        onClick = card.onClick,
+                                        onLongClickLabel = "Playlist options",
+                                        onLongClick = { openPlaylistMenu = playlist.id },
+                                    )
+                                    albumSong != null -> Modifier.combinedClickable(
+                                        role = Role.Button,
+                                        onClick = card.onClick,
+                                        onLongClickLabel = "Album options",
+                                        onLongClick = { openAlbumMenu = card.id },
+                                    )
+                                    artistSong != null -> Modifier.combinedClickable(
+                                        role = Role.Button,
+                                        onClick = card.onClick,
+                                        onLongClickLabel = "Artist options",
+                                        onLongClick = { openArtistMenu = card.id },
+                                    )
+                                    else -> Modifier.clickable(onClick = card.onClick)
+                                }
+                                Row(Modifier.fillMaxWidth().then(cardClickModifier).padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                    val artworkModifier = Modifier.size(58.dp)
+                                        .then(if (artistCard) Modifier.clip(CircleShape) else Modifier)
                                     if (route.page == LibraryPage.Playlists) {
-                                        val playlistId = card.id.toLongOrNull()
-                                        Box {
-                                            Box(Modifier.size(36.dp).clickable { openPlaylistMenu = playlistId }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
-                                            DropdownMenu(expanded = openPlaylistMenu == playlistId, onDismissRequest = { openPlaylistMenu = null }) {
-                                                DropdownMenuItem(text = { Text("Edit playlist") }, onClick = { openPlaylistMenu = null; playlists.firstOrNull { it.id == playlistId }?.let(onRequestRenamePlaylist) })
-                                                DropdownMenuItem(text = { Text(if (playlistId?.let(pinnedPlaylistIds::contains) == true) "Unpin" else "Pin") }, onClick = { openPlaylistMenu = null; playlistId?.let(onTogglePin) })
-                                                DropdownMenuItem(text = { Text("Delete playlist") }, onClick = { openPlaylistMenu = null; playlists.firstOrNull { it.id == playlistId }?.let(onRequestDeletePlaylist) })
+                                        PlaylistArtwork(card.playlistSongs, card.artSong, artworkModifier, card.title, 10.dp)
+                                    } else {
+                                        AlbumArt(card.artSong?.albumArtUri, artworkModifier, card.title, 10.dp, card.artSong?.uri)
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Text(card.title, Modifier.weight(1f), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = expressiveFontFor(route.page), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            if (playlist != null || albumSong != null || artistSong != null) {
+                                                Box {
+                                                    Box(Modifier.size(36.dp).clickable(role = Role.Button) {
+                                                        when {
+                                                            playlist != null -> openPlaylistMenu = playlist.id
+                                                            albumSong != null -> openAlbumMenu = card.id
+                                                            artistSong != null -> openArtistMenu = card.id
+                                                        }
+                                                    }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
+                                                    if (playlist != null && openPlaylistMenu == playlist.id) {
+                                                        LibraryPlaylistActionsSheet(
+                                                            playlist = playlist,
+                                                            playlistSongs = card.playlistSongs,
+                                                            artworkSong = card.artSong ?: songs.firstOrNull(),
+                                                            pinned = playlist.id in pinnedPlaylistIds,
+                                                            onDismiss = { openPlaylistMenu = null },
+                                                            onRename = { openPlaylistMenu = null; onRequestRenamePlaylist(playlist) },
+                                                            onTogglePin = { openPlaylistMenu = null; onTogglePin(playlist.id) },
+                                                            onDelete = { openPlaylistMenu = null; onRequestDeletePlaylist(playlist) },
+                                                        )
+                                                    } else if (albumSong != null && openAlbumMenu == card.id) {
+                                                        LibraryAlbumActionsSheet(
+                                                            albumTitle = card.title,
+                                                            albumArtist = card.subtitle,
+                                                            song = albumSong,
+                                                            onDismiss = { openAlbumMenu = null },
+                                                            onPlayNext = onPlayNext,
+                                                            onAddToQueue = onAddToQueue,
+                                                        )
+                                                    } else if (artistSong != null && openArtistMenu == card.id) {
+                                                        LibraryArtistActionsSheet(
+                                                            artistName = card.title,
+                                                            songCount = card.subtitle,
+                                                            song = artistSong,
+                                                            onDismiss = { openArtistMenu = null },
+                                                            onPlayNext = onPlayNext,
+                                                            onAddToQueue = onAddToQueue,
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
+                                        if (!artistCard) Text(card.subtitle, color = Color.White.copy(.44f), fontSize = 12.sp)
                                     }
                                 }
                                 Hairline()
@@ -555,7 +919,9 @@ internal fun LibraryScreen(
                     songs = if (route == destination) collectionSongs else when (route.page) {
                         LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
                         LibraryPage.Songs -> songs
-                        LibraryPage.Playlist -> playlists.firstOrNull { it.id == route.itemId }?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
+                        LibraryPage.Playlist -> permanentPlaylistSongs[route.itemId]
+                            ?: playlists.firstOrNull { it.id == route.itemId }?.songIds.orEmpty()
+                                .mapNotNull { id -> songs.firstOrNull { it.id == id } }
                         LibraryPage.Artist -> songs.filter { item -> item.artistNames().any { it.equals(route.title, ignoreCase = true) } }
                         LibraryPage.Album -> songs.filter { it.album == route.title && (it.albumArtist ?: it.artist) == route.subtitle }
                     },
@@ -564,7 +930,7 @@ internal fun LibraryScreen(
                     personalizedRecommendations = personalizedRecommendations,
                     sortMode = sortMode,
                     hasNowPlaying = hasNowPlaying,
-                    isPlaylist = route.page == LibraryPage.Playlist,
+                    isPlaylist = route.page == LibraryPage.Playlist && route.itemId !in PERMANENT_PLAYLIST_IDS,
                     isDetail = route.isDetail,
                     onBack = onBack,
                     onPlay = onPlay,
@@ -590,7 +956,16 @@ internal fun LibraryScreen(
     }
 
     if (sortMenu) {
-        WavvBottomSheet(onDismissRequest = { sortMenu = false }, maxHeight = 320.dp) { close ->
+        val sortArtworkSong = if (destination.page == LibraryPage.Playlists) {
+            playlists.asSequence().flatMap { it.songIds.asSequence() }.mapNotNull(songsById::get).firstOrNull() ?: songs.firstOrNull()
+        } else {
+            collectionSongs.firstOrNull() ?: songs.firstOrNull()
+        }
+        WavvBottomSheet(
+            onDismissRequest = { sortMenu = false },
+            maxHeight = 320.dp,
+            artworkSong = sortArtworkSong,
+        ) { close ->
             Text("Sort by", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
             Spacer(Modifier.height(12.dp))
             val sortModes = listOf("Recently added", "Title A–Z", "Artist or creator") +
@@ -600,47 +975,83 @@ internal fun LibraryScreen(
                 } else {
                     emptyList()
                 }
-            sortModes.forEach { mode ->
+            sortModes.forEachIndexed { index, mode ->
                 val selected = sortMode == mode
                 Row(
-                    Modifier.fillMaxWidth().clip(CircleShape)
-                        .background(if (selected) WavvPink.copy(.16f) else Color.White.copy(.06f))
+                    Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp))
                         .clickable { sortMode = mode; close() }
-                        .padding(horizontal = 18.dp, vertical = 15.dp),
+                        .padding(horizontal = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(mode, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(mode, color = if (selected) WavvPink else Color.White.copy(.9f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     if (selected) Icon(Icons.Default.Check, contentDescription = "Selected", tint = WavvPink, modifier = Modifier.size(17.dp))
                 }
-                Spacer(Modifier.height(8.dp))
+                if (index != sortModes.lastIndex) {
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(1.dp).background(Color.White.copy(.07f)))
+                }
             }
         }
     }
-    songForPlaylist?.let { selected ->
-        AlertDialog(
-            onDismissRequest = { songForPlaylist = null },
-            title = { Text("Add to playlist") },
-            text = {
-                if (playlists.isEmpty()) Text("Create a playlist to save this song.")
-                else Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
-                    playlists.forEach { target ->
-                        TextButton(
-                            onClick = {
-                                onAddSongToPlaylist(target.id, listOf(selected.id)) { success ->
-                                    if (success) songForPlaylist = null
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(target.name, Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
-                        }
-                    }
-                }
+    mainMenuSong?.let { selected ->
+        LibrarySongActionsSheet(
+            song = selected,
+            isFavorite = selected.id in favoriteIds,
+            onDismiss = { mainMenuSong = null },
+            onPlayNext = onPlayNext,
+            onAddToQueue = onAddToQueue,
+            onToggleFavorite = { item -> onSetFavorites(setOf(item.id), item.id !in favoriteIds) },
+            onRequestAddToPlaylist = { item -> songForPlaylist = item },
+            onNavigateToAlbum = { item ->
+                onNavigate(LibraryDestination(LibraryPage.Album, title = item.album, subtitle = item.albumArtist ?: item.artist))
             },
-            confirmButton = { TextButton(onClick = { songForPlaylist = null; onRequestCreatePlaylist(selected.id) }) { Text("Create playlist") } },
-            dismissButton = { TextButton(onClick = { songForPlaylist = null }) { Text("Cancel") } },
+            onNavigateToArtist = { item ->
+                onNavigate(LibraryDestination(LibraryPage.Artist, title = item.mainArtistName()))
+            },
         )
+    }
+    songForPlaylist?.let { selected ->
+        AddToPlaylistSheet(
+            selectedSongs = listOf(selected),
+            allSongs = songs,
+            playlists = playlists,
+            onAddSongToPlaylist = onAddSongToPlaylist,
+            onCreatePlaylist = onRequestCreatePlaylist,
+            onDismiss = { songForPlaylist = null },
+        )
+    }
+}
+
+@Composable
+private fun LibrarySongActionsSheet(
+    song: Song,
+    isFavorite: Boolean,
+    onDismiss: () -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    onRequestAddToPlaylist: (Song) -> Unit,
+    onNavigateToAlbum: (Song) -> Unit,
+    onNavigateToArtist: (Song) -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = song) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+            AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
+            Column(Modifier.weight(1f)) {
+                Text("Song actions", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(song.artist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
+        SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
+        SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
+            close(); onToggleFavorite(song)
+        }
+        SheetActionRow(Icons.Default.Add, "Add to playlist") { close(); onRequestAddToPlaylist(song) }
+        SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
+        SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
     }
 }
 
@@ -748,12 +1159,45 @@ private data class LibraryCard(
     val subtitle: String,
     val artSong: Song?,
     val priority: Int = 0,
+    val permanent: Boolean = false,
+    val playlistSongs: List<Song> = emptyList(),
     val onClick: () -> Unit,
 )
 
 internal fun playlistArtworkSong(songIds: List<Long>, songsById: Map<Long, Song>): Song? =
     songIds.asSequence().mapNotNull(songsById::get).firstOrNull { !it.albumArtUri.isNullOrBlank() }
         ?: songIds.firstNotNullOfOrNull(songsById::get)
+
+@Composable
+private fun PlaylistArtwork(
+    songs: List<Song>,
+    fallbackSong: Song?,
+    modifier: Modifier,
+    contentDescription: String,
+    radius: Dp,
+) {
+    val quadrants = remember(songs) { songs.take(4) }
+    if (quadrants.size >= 4) {
+        Box(modifier.clip(RoundedCornerShape(radius))) {
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                    AlbumArt(quadrants[0], Modifier.weight(1f).fillMaxHeight(), contentDescription, 0.dp)
+                    AlbumArt(quadrants[1], Modifier.weight(1f).fillMaxHeight(), contentDescription, 0.dp)
+                }
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                    AlbumArt(quadrants[2], Modifier.weight(1f).fillMaxHeight(), contentDescription, 0.dp)
+                    AlbumArt(quadrants[3], Modifier.weight(1f).fillMaxHeight(), contentDescription, 0.dp)
+                }
+            }
+        }
+    } else if (fallbackSong != null) {
+        AlbumArt(fallbackSong, modifier, contentDescription, radius)
+    } else {
+        Box(modifier.clip(RoundedCornerShape(radius)).background(WavvPink.copy(.2f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = contentDescription, tint = WavvPink, modifier = Modifier.size(28.dp))
+        }
+    }
+}
 
 @Composable
 private fun LibraryBrowseHeader(
@@ -765,6 +1209,7 @@ private fun LibraryBrowseHeader(
     onToggleLayout: () -> Unit,
     showAdd: Boolean,
     showSort: Boolean,
+    groupActionsInPill: Boolean,
     onAdd: () -> Unit,
     onSort: () -> Unit,
 ) {
@@ -772,33 +1217,153 @@ private fun LibraryBrowseHeader(
         Modifier.fillMaxWidth().statusBarsPadding().padding(start = 14.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(.08f))) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Library", tint = Color.White)
-        }
+        LibrarySoftIconButton(
+            onClick = onBack,
+            contentDescription = "Back to Library",
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            modifier = Modifier.size(42.dp),
+            iconSize = 23.dp,
+            frosted = true,
+        )
         Text(title, Modifier.weight(1f).padding(start = 8.dp), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, fontFamily = fontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (showSort) IconButton(onClick = onSort, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Tune, contentDescription = "Sort", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp)) }
-        if (showLayout) IconButton(onClick = onToggleLayout, modifier = Modifier.size(38.dp)) {
-            Icon(if (layout == LibraryLayout.Grid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, contentDescription = if (layout == LibraryLayout.Grid) "Switch to list" else "Switch to grid", tint = Color.White.copy(.8f), modifier = Modifier.size(19.dp))
+        LibraryBrowseHeaderActions(
+            showSort = showSort,
+            showLayout = showLayout,
+            layout = layout,
+            showAdd = showAdd,
+            groupedInPill = groupActionsInPill,
+            onSort = onSort,
+            onToggleLayout = onToggleLayout,
+            onAdd = onAdd,
+        )
+    }
+}
+
+@Composable
+private fun LibraryBrowseHeaderActions(
+    showSort: Boolean,
+    showLayout: Boolean,
+    layout: LibraryLayout,
+    showAdd: Boolean,
+    groupedInPill: Boolean,
+    onSort: () -> Unit,
+    onToggleLayout: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    val buttonSize = if (groupedInPill) 36.dp else 38.dp
+    val content: @Composable RowScope.() -> Unit = {
+        if (showSort) LibrarySoftIconButton(
+            onClick = onSort,
+            contentDescription = "Sort",
+            icon = Icons.Default.Tune,
+            modifier = Modifier.size(buttonSize),
+            iconSize = 19.dp,
+            surfaceAlpha = if (groupedInPill) 0f else .085f,
+        )
+        if (showLayout) LibrarySoftIconButton(
+            onClick = onToggleLayout,
+            contentDescription = if (layout == LibraryLayout.Grid) "Switch to list" else "Switch to grid",
+            icon = if (layout == LibraryLayout.Grid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+            modifier = Modifier.size(buttonSize),
+            iconSize = 19.dp,
+            surfaceAlpha = if (groupedInPill) 0f else .085f,
+        )
+        if (showAdd) LibrarySoftIconButton(
+            onClick = onAdd,
+            contentDescription = "Create playlist",
+            icon = Icons.Default.Add,
+            modifier = Modifier.size(buttonSize),
+            iconSize = 21.dp,
+            tint = WavvPink,
+            surfaceAlpha = if (groupedInPill) 0f else .085f,
+        )
+    }
+    if (groupedInPill) {
+        Box(Modifier.clip(CircleShape)) {
+            FrostedBackdrop(
+                captureState = remember { AtomicBoolean(false) },
+                blurRadiusDp = 22f,
+                tint = Color(0x9923262D),
+                modifier = Modifier.matchParentSize().clip(CircleShape),
+                refreshEnabled = true,
+            )
+            Row(
+                Modifier.clip(CircleShape)
+                    .background(Color.White.copy(.045f))
+                    .padding(horizontal = 4.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = content,
+            )
         }
-        if (showAdd) IconButton(onClick = onAdd, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Add, contentDescription = "Create playlist", tint = WavvPink) }
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically, content = content)
     }
 }
 
 @Composable
 private fun LibraryHistoryAction(historyVisible: Boolean, onToggleHistory: () -> Unit) {
-    IconButton(
+    LibrarySoftIconButton(
         onClick = onToggleHistory,
-        modifier = Modifier.size(44.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = .075f))
-            .border(1.dp, Color.White.copy(alpha = .10f), CircleShape),
+        contentDescription = if (historyVisible) "Return to library" else "Listening history",
+        icon = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
+        modifier = Modifier.size(40.dp),
+        iconSize = 28.dp,
+    )
+}
+
+@Composable
+private fun LibrarySoftIconButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier.size(40.dp),
+    iconSize: Dp = 21.dp,
+    tint: Color = Color.White.copy(.9f),
+    surfaceAlpha: Float = .085f,
+    frosted: Boolean = false,
+) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val backdropCaptureState = remember { AtomicBoolean(false) }
+    Box(
+        modifier.clip(CircleShape)
+            .then(if (frosted) Modifier else Modifier.background(Color.White.copy(surfaceAlpha)))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
-            contentDescription = if (historyVisible) "Return to library" else "Listening history",
-            tint = Color.White.copy(alpha = .92f),
-            modifier = Modifier.size(28.dp),
-        )
+        if (frosted) {
+            FrostedBackdrop(
+                captureState = backdropCaptureState,
+                blurRadiusDp = 22f,
+                tint = Color(0x9923262D),
+                modifier = Modifier.matchParentSize().clip(CircleShape),
+                refreshEnabled = true,
+            )
+        }
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.align(Alignment.Center).size(iconSize))
+    }
+}
+
+@Composable
+private fun LibrarySoftMoreButton(onClick: () -> Unit, contentDescription: String) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Box(
+        Modifier.size(48.dp).clip(CircleShape)
+            .background(Color.White.copy(.12f))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        FigmaMoreIcon(23.dp)
     }
 }
 
@@ -815,6 +1380,7 @@ private fun LibraryEmpty(title: String, message: String) {
 internal fun WavvBottomSheet(
     onDismissRequest: () -> Unit,
     maxHeight: Dp = 520.dp,
+    artworkSong: Song? = null,
     content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
 ) {
     var visible by remember { mutableStateOf(false) }
@@ -827,6 +1393,17 @@ internal fun WavvBottomSheet(
         }
     }
     LaunchedEffect(Unit) { visible = true }
+    val density = LocalDensity.current
+    val view = LocalView.current
+    val dialogWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+    SideEffect {
+        if (artworkSong != null) {
+            dialogWindow?.setDimAmount(.46f)
+            if (Build.VERSION.SDK_INT >= 31) {
+                dialogWindow?.setBackgroundBlurRadius(with(density) { 20.dp.roundToPx() })
+            }
+        }
+    }
     LaunchedEffect(dismissing) {
         if (dismissing) {
             delay(240)
@@ -847,8 +1424,8 @@ internal fun WavvBottomSheet(
             ) {
                 Box(
                     Modifier.fillMaxSize()
-                        .background(Color.Black.copy(.5f))
-                    .clickable(onClick = requestClose),
+                        .background(if (artworkSong == null) Color.Black.copy(.5f) else Color.Transparent)
+                        .clickable(onClick = requestClose),
                 )
             }
             AnimatedVisibility(
@@ -857,23 +1434,315 @@ internal fun WavvBottomSheet(
                 enter = fadeIn(tween(180)) + slideInVertically(tween(280, easing = WavvMotionEasing)) { it },
                 exit = fadeOut(tween(150)) + slideOutVertically(tween(240, easing = WavvMotionEasing)) { it },
             ) {
-                Column(
+                Box(
                     Modifier.fillMaxWidth().heightIn(max = maxHeight)
                         .clip(RoundedCornerShape(32.dp))
-                        .background(Brush.verticalGradient(listOf(Color(0xF41C1419), Color(0xF20A0A0E))))
-                        .border(1.dp, Color.White.copy(.13f), RoundedCornerShape(32.dp))
-                        .clickable { }
-                        .navigationBarsPadding()
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
                 ) {
-                    Box(
-                        Modifier.fillMaxWidth().padding(bottom = 16.dp).clickable(onClick = requestClose),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(Modifier.width(42.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(.28f)))
+                    if (artworkSong == null) {
+                        Box(
+                            Modifier.matchParentSize().background(
+                                Brush.verticalGradient(listOf(Color(0xF41C1419), Color(0xF20A0A0E))),
+                            ),
+                        )
+                    } else {
+                        AlbumArt(
+                            artworkSong,
+                            Modifier.matchParentSize().scale(1.18f).blur(34.dp),
+                            null,
+                            0.dp,
+                        )
+                        Box(Modifier.matchParentSize().background(Color(0xE8171717)))
                     }
-                    content(requestClose)
+                    Column(
+                        Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 18.dp, vertical = 14.dp)
+                            .clickable { },
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(bottom = 16.dp).clickable(onClick = requestClose),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(Modifier.width(42.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(.28f)))
+                        }
+                        content(requestClose)
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun AddToPlaylistSheet(
+    selectedSongs: List<Song>,
+    allSongs: List<Song> = selectedSongs,
+    playlists: List<UserPlaylist>,
+    onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
+    onCreatePlaylist: (Long?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val songIds = remember(selectedSongs) { selectedSongs.map(Song::id).distinct() }
+    val allSongsById = remember(allSongs) { allSongs.associateBy(Song::id) }
+    val headerSong = selectedSongs.firstOrNull()
+    val configuration = LocalConfiguration.current
+    val maxSheetHeight = (configuration.screenHeightDp * .86f).dp.coerceAtLeast(440.dp)
+    var searchQuery by remember { mutableStateOf("") }
+    var sortAlphabetically by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf(false) }
+    var createPlaylistAfterClose by remember { mutableStateOf(false) }
+    var selectedPlaylistIds by remember(songIds) {
+        mutableStateOf(
+            playlists.filter { playlist -> songIds.isNotEmpty() && songIds.all(playlist.songIds::contains) }
+                .map(UserPlaylist::id)
+                .toSet(),
+        )
+    }
+    val selectedPlaylists = remember(playlists, selectedPlaylistIds) {
+        playlists.filter { it.id in selectedPlaylistIds }
+    }
+    val availablePlaylists = remember(playlists, selectedPlaylistIds, searchQuery, sortAlphabetically) {
+        val matching = playlists.filter { playlist ->
+            playlist.id !in selectedPlaylistIds && playlist.name.contains(searchQuery.trim(), ignoreCase = true)
+        }
+        if (sortAlphabetically) matching.sortedBy { it.name.lowercase() }
+        else matching.sortedByDescending(UserPlaylist::updatedAt)
+    }
+
+    WavvBottomSheet(
+        onDismissRequest = {
+            if (!isSaving) {
+                onDismiss()
+                if (createPlaylistAfterClose) onCreatePlaylist(songIds.firstOrNull())
+            }
+        },
+        maxHeight = maxSheetHeight,
+    ) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = close, enabled = !isSaving) {
+                Text("Cancel", color = Color.White.copy(.86f), fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(
+                enabled = !isSaving,
+                onClick = {
+                    val additions = selectedPlaylists.mapNotNull { playlist ->
+                        val missingIds = songIds.filterNot(playlist.songIds::contains)
+                        playlist.id to missingIds
+                    }.filter { it.second.isNotEmpty() }
+                    if (additions.isEmpty()) {
+                        close()
+                    } else {
+                        isSaving = true
+                        saveError = false
+                        var remaining = additions.size
+                        var failed = false
+                        additions.forEach { (playlistId, missingIds) ->
+                            onAddSongToPlaylist(playlistId, missingIds) { success ->
+                                if (!success) failed = true
+                                remaining -= 1
+                                if (remaining == 0) {
+                                    isSaving = false
+                                    saveError = failed
+                                    if (!failed) close()
+                                }
+                            }
+                        }
+                    }
+                },
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(Modifier.size(17.dp), color = WavvPink, strokeWidth = 2.dp)
+                } else {
+                    Text("Done", color = WavvPink, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Saved in", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold)
+            TextButton(
+                enabled = !isSaving,
+                onClick = {
+                    createPlaylistAfterClose = true
+                    close()
+                },
+            ) {
+                Text("New playlist", color = WavvPink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (headerSong != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AlbumArt(headerSong, Modifier.size(42.dp), headerSong.title, 10.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (selectedSongs.size == 1) headerSong.title else "${selectedSongs.size} songs",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (selectedSongs.size == 1) headerSong.artist else "Choose one or more playlists",
+                        color = Color.White.copy(.48f),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        if (saveError) {
+            Text("Some playlists could not be updated. Try again.", color = Color(0xFFFF8A80), fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+        }
+
+        LazyColumn(
+            Modifier.fillMaxWidth().weight(1f, fill = false),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            if (selectedPlaylists.isNotEmpty()) {
+                items(selectedPlaylists, key = { "saved-${it.id}" }) { playlist ->
+                    PlaylistPickerRow(
+                        playlist = playlist,
+                        allSongsById = allSongsById,
+                        fallbackSong = playlistArtworkSong(playlist.songIds, allSongsById) ?: headerSong,
+                        selected = true,
+                        enabled = !isSaving,
+                        onClick = { selectedPlaylistIds = selectedPlaylistIds - playlist.id },
+                    )
+                }
+            } else {
+                item(key = "saved-empty") {
+                    Text(
+                        "Not saved to a playlist yet",
+                        color = Color.White.copy(.48f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(start = 3.dp, top = 2.dp, bottom = 10.dp),
+                    )
+                }
+            }
+
+            item(key = "playlist-search") {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(16.dp))
+                            .background(Color.White.copy(.075f)).padding(horizontal = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = "Search playlists", tint = Color.White.copy(.72f), modifier = Modifier.size(21.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (searchQuery.isEmpty()) Text("Find playlist", color = Color.White.copy(.48f), fontSize = 14.sp)
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                enabled = !isSaving,
+                                singleLine = true,
+                                textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                                cursorBrush = SolidColor(WavvPink),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }, enabled = !isSaving, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White.copy(.62f), modifier = Modifier.size(17.dp))
+                            }
+                        }
+                    }
+                    TextButton(
+                        onClick = { sortAlphabetically = !sortAlphabetically },
+                        enabled = !isSaving,
+                        modifier = Modifier.height(48.dp).clip(RoundedCornerShape(15.dp)).background(Color.White.copy(.075f)),
+                    ) {
+                        Text(if (sortAlphabetically) "A–Z" else "Recent", color = Color.White.copy(.86f), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            if (availablePlaylists.isEmpty()) {
+                item(key = "playlist-empty") {
+                    Text(
+                        if (playlists.isEmpty()) "Create a playlist to save your music." else "No matching playlists",
+                        color = Color.White.copy(.5f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+            } else {
+                items(availablePlaylists, key = { "available-${it.id}" }) { playlist ->
+                    PlaylistPickerRow(
+                        playlist = playlist,
+                        allSongsById = allSongsById,
+                        fallbackSong = playlistArtworkSong(playlist.songIds, allSongsById) ?: headerSong,
+                        selected = playlist.id in selectedPlaylistIds,
+                        enabled = !isSaving,
+                        onClick = {
+                            selectedPlaylistIds = if (playlist.id in selectedPlaylistIds) {
+                                selectedPlaylistIds - playlist.id
+                            } else {
+                                selectedPlaylistIds + playlist.id
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistPickerRow(
+    playlist: UserPlaylist,
+    allSongsById: Map<Long, Song>,
+    fallbackSong: Song?,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val playlistSongs = remember(playlist.songIds, allSongsById) { playlist.songIds.mapNotNull(allSongsById::get) }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 2.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(13.dp),
+    ) {
+        PlaylistArtwork(playlistSongs, fallbackSong, Modifier.size(58.dp), playlist.name, 11.dp)
+        Column(Modifier.weight(1f)) {
+            Text(playlist.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${playlist.songIds.size} ${if (playlist.songIds.size == 1) "song" else "songs"}",
+                color = Color.White.copy(.5f),
+                fontSize = 13.sp,
+            )
+        }
+        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(42.dp)) {
+            Box(
+                Modifier.size(30.dp).clip(CircleShape)
+                    .background(if (selected) WavvPink else Color.Transparent),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (selected) Icons.Default.Check else Icons.Default.Add,
+                    contentDescription = if (selected) "Remove from ${playlist.name}" else "Add to ${playlist.name}",
+                    tint = if (selected) Color(0xFF151015) else Color.White.copy(.82f),
+                    modifier = Modifier.size(if (selected) 19.dp else 22.dp),
+                )
             }
         }
     }

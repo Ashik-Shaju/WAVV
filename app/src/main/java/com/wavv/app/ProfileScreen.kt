@@ -42,8 +42,6 @@ import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PrivacyTip
-import androidx.compose.material3.Button
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -235,7 +233,11 @@ internal fun YouScreen(
                 ProfileSettingContent.Standby -> 740.dp
                 else -> 460.dp
             }
-            WavvBottomSheet(onDismissRequest = { activeSetting = null }, maxHeight = sheetHeight) { _ ->
+            WavvBottomSheet(
+                onDismissRequest = { activeSetting = null },
+                maxHeight = sheetHeight,
+                artworkSong = songs.firstOrNull { it.id == activeTrackId } ?: songs.firstOrNull(),
+            ) { _ ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
                     Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(.09f)), contentAlignment = Alignment.Center) {
                         Icon(setting.icon, contentDescription = null, tint = Color.White.copy(.85f), modifier = Modifier.size(21.dp))
@@ -268,7 +270,6 @@ internal fun YouScreen(
                                     Row(
                                         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                                             .background(Color.White.copy(.065f))
-                                            .border(1.dp, Color.White.copy(.07f), RoundedCornerShape(16.dp))
                                             .padding(start = 14.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -386,6 +387,7 @@ internal fun YouScreen(
                     }
                     ProfileSettingContent.Equalizer -> EqualizerSettingsContent(
                         modifier = Modifier.weight(1f),
+                        artworkSong = songs.firstOrNull { it.id == activeTrackId } ?: songs.firstOrNull(),
                         enabled = equalizerEnabled,
                         profile = equalizerProfile,
                         savedProfiles = savedEqualizerProfiles,
@@ -499,24 +501,31 @@ internal fun YouScreen(
             }
         }
         if (confirmClearHistory) {
-            AlertDialog(
+            WavvBottomSheet(
                 onDismissRequest = { confirmClearHistory = false },
-                title = { Text("Clear listening history?") },
-                text = { Text("This removes listening activity and recently played items from this device. Favorites and playlists will stay.") },
-                confirmButton = {
+                maxHeight = 300.dp,
+                artworkSong = songs.firstOrNull { it.id == activeTrackId } ?: songs.firstOrNull(),
+            ) { close ->
+                Text("Clear listening history?", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    "This removes listening activity and recently played items from this device. Favorites and playlists will stay.",
+                    Modifier.padding(top = 10.dp),
+                    color = Color.White.copy(.72f),
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                )
+                Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = close) { Text("Cancel") }
                     TextButton(
                         onClick = {
                             confirmClearHistory = false
                             activeSetting = null
                             onClearListeningHistory()
+                            close()
                         },
                     ) { Text("Clear history", color = WavvPink) }
-                },
-                dismissButton = { TextButton(onClick = { confirmClearHistory = false }) { Text("Cancel") } },
-                containerColor = WavvSurface,
-                titleContentColor = Color.White,
-                textContentColor = Color.White.copy(.72f),
-            )
+                }
+            }
         }
     }
 }
@@ -524,6 +533,7 @@ internal fun YouScreen(
 @Composable
 private fun EqualizerSettingsContent(
     modifier: Modifier = Modifier,
+    artworkSong: Song?,
     enabled: Boolean,
     profile: EqualizerProfile,
     savedProfiles: List<SavedEqualizerProfile>,
@@ -604,18 +614,21 @@ private fun EqualizerSettingsContent(
     }
 
     if (showSaveDialog) {
-        AlertDialog(
+        WavvBottomSheet(
             onDismissRequest = { showSaveDialog = false },
-            title = { Text("Save equalizer profile") },
-            text = {
-                OutlinedTextField(
-                    value = profileName,
-                    onValueChange = { profileName = it.take(32) },
-                    label = { Text("Profile name") },
-                    singleLine = true,
-                )
-            },
-            confirmButton = {
+            maxHeight = 320.dp,
+            artworkSong = artworkSong,
+        ) { close ->
+            Text("Save equalizer profile", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+            OutlinedTextField(
+                value = profileName,
+                onValueChange = { profileName = it.take(32) },
+                label = { Text("Profile name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = close) { Text("Cancel") }
                 TextButton(
                     enabled = profileName.isNotBlank(),
                     onClick = {
@@ -626,40 +639,47 @@ private fun EqualizerSettingsContent(
                             onSaveProfile(normalizedName)
                         }
                         showSaveDialog = false
+                        close()
                     },
                 ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } },
-            containerColor = WavvSurface,
-            titleContentColor = Color.White,
-            textContentColor = Color.White.copy(.72f),
-        )
+            }
+        }
     }
 
     overwriteProfileName?.let { name ->
-        AlertDialog(
+        WavvBottomSheet(
             onDismissRequest = {
                 overwriteProfileName = null
                 showSaveDialog = true
             },
-            title = { Text("Replace saved profile?") },
-            text = { Text("A profile named \"$name\" already exists. Replace its saved equalizer curve?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    onSaveProfile(name)
-                    overwriteProfileName = null
-                }) { Text("Replace", color = WavvPink) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    overwriteProfileName = null
-                    showSaveDialog = true
-                }) { Text("Cancel") }
-            },
-            containerColor = WavvSurface,
-            titleContentColor = Color.White,
-            textContentColor = Color.White.copy(.72f),
-        )
+            maxHeight = 300.dp,
+            artworkSong = artworkSong,
+        ) { close ->
+            Text("Replace saved profile?", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+            Text(
+                "A profile named \"$name\" already exists. Replace its saved equalizer curve?",
+                Modifier.padding(top = 10.dp),
+                color = Color.White.copy(.72f),
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(
+                    onClick = {
+                        overwriteProfileName = null
+                        showSaveDialog = true
+                        close()
+                    },
+                ) { Text("Cancel") }
+                TextButton(
+                    onClick = {
+                        onSaveProfile(name)
+                        overwriteProfileName = null
+                        close()
+                    },
+                ) { Text("Replace", color = WavvPink) }
+            }
+        }
     }
 }
 
@@ -766,7 +786,6 @@ private fun StatCard(value: String, label: String, modifier: Modifier) {
 private fun SettingInfoRow(title: String, value: String, trailing: String?) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White.copy(.065f))
-            .border(1.dp, Color.White.copy(.07f), RoundedCornerShape(22.dp))
             .padding(horizontal = 17.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -810,8 +829,7 @@ private fun SheetActionRowLayout(
 ) {
     Row(
         Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(CircleShape)
-            .background(Color.White.copy(.07f))
-            .border(1.dp, Color.White.copy(.08f), CircleShape)
+            .background(Color.White.copy(.09f))
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,

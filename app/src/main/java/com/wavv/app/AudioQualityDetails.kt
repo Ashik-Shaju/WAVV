@@ -152,6 +152,10 @@ private fun audioFormatName(mime: String?, indexedCodec: String?, uri: String): 
         else -> null
     }
     if (fromMime != null) return fromMime
+    val indexedLosslessFormat = indexedCodec?.uppercase(Locale.ROOT)?.takeIf {
+        it in setOf("FLAC", "ALAC", "PCM", "APE", "WAVPACK", "WAV", "AIFF")
+    }
+    if (indexedLosslessFormat != null) return indexedLosslessFormat
     val ext = uri.substringBefore('?').substringAfterLast('.', "").lowercase(Locale.ROOT)
     return when (ext) {
         "flac" -> "FLAC"
@@ -168,6 +172,12 @@ private fun isLosslessFormat(mime: String?, format: String): Boolean {
     if (mime in setOf(UHQ_AAC_MIME_TYPE, "audio/aac", "audio/aac-adts", "audio/mpeg", "audio/opus", "audio/ogg")) return false
     return format in setOf("FLAC", "ALAC", "PCM", "APE", "WAVPACK", "WAV", "AIFF") ||
         mime in setOf("audio/flac", "audio/x-flac", "audio/alac", "audio/raw", "audio/wav", "audio/x-wav", "audio/pcm", "audio/ape")
+}
+
+internal fun isLosslessAudioSource(song: Song): Boolean {
+    val mime = song.container?.lowercase(Locale.ROOT)
+    val format = audioFormatName(mime, song.codec, song.uri)
+    return !isKnownLossyFormat(mime, format) && isLosslessFormat(mime, format)
 }
 
 private fun isKnownLossyFormat(mime: String?, format: String): Boolean {

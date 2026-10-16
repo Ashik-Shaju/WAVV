@@ -188,7 +188,7 @@ class MediaLibraryRepository(context: Context) {
                                 val displayName = cursor.getStringOrNull(displayNameColumn).orEmpty()
                                 when {
                                     displayName.endsWith(".flac", ignoreCase = true) || mime.contains("flac", ignoreCase = true) -> "flac"
-                                    displayName.endsWith(".m4a", ignoreCase = true) || displayName.endsWith(".alac", ignoreCase = true) -> "alac"
+                                    displayName.endsWith(".alac", ignoreCase = true) || mime.contains("alac", ignoreCase = true) -> "alac"
                                     else -> mime.substringAfterLast('/').ifBlank { null }
                                 }
                             },
@@ -407,7 +407,7 @@ class MediaLibraryRepository(context: Context) {
             container = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
             codec = when {
                 displayName.endsWith(".flac", ignoreCase = true) -> "flac"
-                displayName.endsWith(".m4a", ignoreCase = true) || displayName.endsWith(".alac", ignoreCase = true) -> "alac"
+                displayName.endsWith(".alac", ignoreCase = true) || container.orEmpty().contains("alac", ignoreCase = true) -> "alac"
                 else -> container?.substringAfterLast('/')?.ifBlank { null }
             }
             sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
