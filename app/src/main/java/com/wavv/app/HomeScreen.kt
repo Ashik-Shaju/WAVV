@@ -217,6 +217,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.platform.LocalConfiguration
@@ -242,6 +243,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.Dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -542,12 +544,19 @@ internal fun HomeScreen(
     onCloseHomeMixArtwork: (Song, PlayerArtworkFrame?) -> Unit,
     onPlayHomeMix: (Song, List<Song>, String) -> Unit,
     onMixDetailVisibilityChange: (Boolean) -> Unit,
+    onCarouselBottomChange: (Float) -> Unit,
     homeReselectSignal: Int,
     statusChips: List<HomeStatusChip> = emptyList(),
 ) {
     val orderedSongs = remember(songs) { songs.sortedByDescending(Song::modifiedAt) }
     val carouselSongs = remember(songs, personalizedRecommendations, recentSongs, orderedSongs) {
         homeCarouselSongs(songs, personalizedRecommendations, recentSongs, orderedSongs)
+    }
+    var carouselContainerTopPx by remember { mutableFloatStateOf(0f) }
+    var carouselContentHeightPx by remember { mutableIntStateOf(0) }
+    val latestOnCarouselBottomChange = rememberUpdatedState(onCarouselBottomChange)
+    LaunchedEffect(carouselContainerTopPx, carouselContentHeightPx) {
+        latestOnCarouselBottomChange.value(carouselContainerTopPx + carouselContentHeightPx)
     }
     val sections = remember(songs, favoriteIds, recentSongs, personalizedRecommendations, smartMixes) {
         val recentlyAdded = orderedSongs
@@ -682,9 +691,23 @@ internal fun HomeScreen(
                 EmptyLibraryCard(onChooseSource)
             }
         } else {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            BoxWithConstraints(
+                Modifier.weight(1f).fillMaxWidth()
+                    .onGloballyPositioned { carouselContainerTopPx = it.boundsInRoot().top },
+            ) {
+                val density = LocalDensity.current
+                val navigationBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+                val carouselChromeHeight = 28.dp // outer spacer, pager-to-dots spacing, and indicator
+                val playerAndStackGap = 84.dp // player lane, followed by the stack breathing gap
+                val stackCardHeight = 144.dp
+                val nextCardPeek = 24.dp
+                val footerClearance = 76.dp // keep the stack above the 60dp bottom bar and its padding
+                val maxHeroCardHeight = (
+                    maxHeight - navigationBottom - carouselChromeHeight - playerAndStackGap -
+                        stackCardHeight - nextCardPeek - footerClearance
+                    ).coerceAtLeast(0.dp)
                 Column(
-                    Modifier.fillMaxWidth().graphicsLayer {
+                    Modifier.fillMaxWidth().onSizeChanged { carouselContentHeightPx = it.height }.graphicsLayer {
                         val progress = stackExpansionProgress.value
                         translationY = -size.height * progress
                         alpha = 1f - progress
@@ -693,6 +716,7 @@ internal fun HomeScreen(
                     Spacer(Modifier.height(10.dp))
                     HeroCarousel(
                         mixes = heroMixes,
+                        maxCardHeight = maxHeroCardHeight,
                         onCurrentSongChanged = { backdropSong = it },
                         onPlay = onPlay,
                         mixDetailVisible = mixDetailVisible,
@@ -734,6 +758,7 @@ internal fun HomeScreen(
                     onRequestAddToPlaylist = onRequestAddToPlaylist,
                     onNavigateToAlbum = onNavigateToAlbum,
                     onNavigateToArtist = onNavigateToArtist,
+                    carouselContentHeightPx = carouselContentHeightPx,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -807,6 +832,7 @@ private fun HomeStackPanel(
     stackListExpanded: Boolean,
     expansionProgress: State<Float>,
     hasNowPlaying: Boolean,
+    carouselContentHeightPx: Int,
     onIndexChange: (Int) -> Unit,
     onStackListExpandedChange: (Boolean) -> Unit,
     onExpandPlayer: () -> Unit,
@@ -857,24 +883,76 @@ private fun HomeStackPanel(
     val cardGap = 12.dp
     val rowHeight = cardHeight + cardGap
     val stackPeek = 40.dp
-    val compactHeight = 184.dp
+    val miniPlayerSlotHeight = 60.dp
+    val carouselGap = 12.dp
     val cardHeightPx = with(density) { cardHeight.toPx() }
     val rowHeightPx = with(density) { rowHeight.toPx() }
     val stackPeekPx = with(density) { stackPeek.toPx() }
     val topInsetPx = with(density) { topInset.toPx() }
-    val stackBottomClearance = 80.dp
+    val carouselGapPx = with(density) { carouselGap.toPx() }
+    val miniPlayerSlotHeightPx = with(density) { miniPlayerSlotHeight.toPx() }
+    val preferredStackBottomClearance = 80.dp
+    val minimumStackBottomClearance = 76.dp
+    val minimumNextCardReveal = 24.dp
+    val minimumNextCardRevealPx = with(density) { minimumNextCardReveal.toPx() }
+    val preferredStackBottomClearancePx = with(density) { preferredStackBottomClearance.toPx() }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val parentHeight = maxHeight
-        val compactTop = (parentHeight - navigationBottom - stackBottomClearance - compactHeight).coerceAtLeast(0.dp)
-        val expandedHeight = (parentHeight - navigationBottom - stackBottomClearance).coerceAtLeast(compactHeight)
-        val expandedHeightPx = with(density) { expandedHeight.toPx() }
-        val compactTopPx = with(density) { compactTop.toPx() }
+        val parentHeightPx = with(density) { parentHeight.toPx() }
+        val navigationBottomPx = with(density) { navigationBottom.toPx() }
+        // Reserve the mini-player lane under the carousel, then place the first stack card
+        // where the expanded player belongs. This keeps the stack attached to the carousel
+        // instead of anchoring it to the bottom of a variable-height screen.
+        val compactTopPx = carouselContentHeightPx + carouselGapPx * 2f + miniPlayerSlotHeightPx
+        // On short screens, reclaim bottom padding before sacrificing the space between the
+        // carousel and the player/card lanes. This keeps a real, nonzero peek of card two in
+        // the viewport, so the connected stack still reads as scrollable.
+        val stackSpaceBeforeClearancePx = parentHeightPx - navigationBottomPx - compactTopPx
+        val clearanceThatStillAllowsPeekPx = (
+            stackSpaceBeforeClearancePx - cardHeightPx - minimumNextCardRevealPx
+            ).coerceAtLeast(0f)
+        val minimumStackBottomClearancePx = with(density) { minimumStackBottomClearance.toPx() }
+        val stackBottomClearancePx = minOf(preferredStackBottomClearancePx, clearanceThatStillAllowsPeekPx)
+            .coerceAtLeast(minimumStackBottomClearancePx)
+        val expandedHeightPx = (parentHeightPx - navigationBottomPx - stackBottomClearancePx).coerceAtLeast(0f)
+        val expandedHeight = with(density) { expandedHeightPx.toDp() }.coerceAtMost(parentHeight)
+        val compactAvailablePx = (expandedHeightPx - compactTopPx).coerceAtLeast(0f)
+        val playerStackPushPx by animateFloatAsState(
+            targetValue = if (playerExpanded && !stackListExpanded) with(density) { 40.dp.toPx() } else 0f,
+            animationSpec = tween(540, easing = WavvMotionEasing),
+            label = "home stack yielding to expanded player",
+        )
+        val compactVisibleCardCount = when {
+            orderedSections.isEmpty() -> 0
+            orderedSections.size == 1 -> 1
+            else -> (
+                2 + ((compactAvailablePx - cardHeightPx - minimumNextCardRevealPx) / stackPeekPx)
+                    .toInt().coerceAtLeast(0)
+                ).coerceAtMost(orderedSections.size)
+        }
         // Keep the tucked card's lower edge clear of the opaque footer/navbar extension.
         // Moving the handoff boundary up makes the card finish its curve before that layer.
         val stackPathClearancePx = with(density) { 24.dp.toPx() }
         val stackBoundaryPx = expandedHeightPx - cardHeightPx - stackPeekPx - stackPathClearancePx
-        Box(Modifier.fillMaxWidth().height(expandedHeight).clipToBounds()) {
+        Box(
+            Modifier.fillMaxWidth().height(expandedHeight)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val featherStartY = (size.height - with(density) { 72.dp.toPx() }).coerceAtLeast(0f)
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Color.White,
+                            1f to Color.Transparent,
+                            startY = featherStartY,
+                            endY = size.height,
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                .clipToBounds(),
+        ) {
             val listGestureModifier = if (stackListExpanded) {
                 Modifier.nestedScroll(collapseAtTop)
                     .verticalScroll(scrollState, enabled = true, overscrollEffect = null)
@@ -886,23 +964,19 @@ private fun HomeStackPanel(
                 orderedSections.forEachIndexed { displayIndex, section ->
                     val actualIndex = if (sections.isEmpty()) 0 else (displayIndex + stackIndex).mod(sections.size)
                     val active = actualIndex == stackIndex
-                    val next = actualIndex == stackIndex + 1 && !playerExpanded
-                    val leaving = actualIndex == stackIndex - 1 && !playerExpanded
-                    val compactVisible = active || next || leaving
+                    val compactVisible = displayIndex < compactVisibleCardCount
+                    val compactAlpha by animateFloatAsState(
+                        targetValue = if (compactVisible) 1f else 0f,
+                        animationSpec = tween(220, easing = WavvMotionEasing),
+                        label = "home compact stack card visibility",
+                    )
                     val contentVisible by remember(expansionProgress, stackListExpanded, compactVisible) {
                         derivedStateOf {
                             homeStackContentVisible(stackListExpanded, compactVisible, expansionProgress.value)
                         }
                     }
-                    val compactY = when {
-                        active -> if (playerExpanded) 40.dp else 0.dp
-                        next -> 40.dp
-                        leaving -> (-144).dp
-                        else -> (displayIndex * 144).dp
-                    }
-                    val compactScale = if (active && !playerExpanded) 1f else .94f
-                    val compactAlpha = if (compactVisible) 1f else 0f
-                    val compactTopForCard = with(density) { compactY.toPx() }
+                    val compactTopForCard = compactTopPx + playerStackPushPx + displayIndex * stackPeekPx
+                    val compactScaleX = (1f - displayIndex.coerceAtMost(5) * .035f).coerceAtLeast(.82f)
                     val shape = RoundedCornerShape(28.dp)
                     Box(
                         Modifier.fillMaxWidth().height(rowHeight)
@@ -925,14 +999,11 @@ private fun HomeStackPanel(
                                 val expandedTop = if (naturalTop > stackBoundaryPx) {
                                     naturalTop + (tuckedTop - naturalTop) * easedTuck
                                 } else naturalTop
-                                val compactTopForCard = with(density) { compactY.toPx() }
-                                val collapsedTop = compactTopPx + compactTopForCard
-                                val desiredTop = collapsedTop * (1f - progress) + expandedTop * progress
+                                val desiredTop = compactTopForCard * (1f - progress) + expandedTop * progress
                                 val expandedScale = 1f - .06f * easedTuck
-                                val targetScale = compactScale + (expandedScale - compactScale) * progress
                                 alpha = compactAlpha + (1f - compactAlpha) * progress
-                                scaleX = targetScale
-                                scaleY = targetScale
+                                scaleX = compactScaleX + (expandedScale - compactScaleX) * progress
+                                scaleY = 1f + (expandedScale - 1f) * progress
                                 translationY = desiredTop - naturalTop
                             }.pointerInput(
                                 compactVisible,
@@ -1390,6 +1461,7 @@ private fun EmptyLibraryCard(onChooseSource: () -> Unit) {
 @Composable
 private fun HeroCarousel(
     mixes: List<HomeSongMix>,
+    maxCardHeight: Dp,
     onCurrentSongChanged: (Song) -> Unit,
     onPlay: (Song) -> Unit,
     onOpenMix: (HomeSongMix, PlayerArtworkFrame?) -> Unit,
@@ -1419,9 +1491,12 @@ private fun HeroCarousel(
     }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val naturalCardWidth = (maxWidth - 56.dp).coerceAtLeast(0.dp)
+            val responsiveCardWidth = minOf(naturalCardWidth, maxCardHeight * .95f)
+            val responsiveCardHeight = responsiveCardWidth / .95f
             HorizontalPager(
                 state = pagerState,
-                pageSize = androidx.compose.foundation.pager.PageSize.Fixed((maxWidth - 56.dp).coerceAtLeast(0.dp)),
+                pageSize = androidx.compose.foundation.pager.PageSize.Fixed(responsiveCardWidth),
                 contentPadding = PaddingValues(start = 20.dp, end = 36.dp),
                 pageSpacing = 12.dp,
                 modifier = Modifier.fillMaxWidth(),
@@ -1430,6 +1505,7 @@ private fun HeroCarousel(
                 val song = mix.seed
                 HeroCard(
                     song = song,
+                    cardHeight = responsiveCardHeight,
                     onPlay = onPlay,
                     onOpenMix = { sourceFrame -> onOpenMix(mix, sourceFrame) },
                     hideArtwork = song.id == hiddenArtworkSongId,
@@ -1460,6 +1536,7 @@ private fun HeroCarousel(
 @Composable
 private fun HeroCard(
     song: Song,
+    cardHeight: Dp,
     onPlay: (Song) -> Unit,
     onOpenMix: (PlayerArtworkFrame?) -> Unit,
     hideArtwork: Boolean,
@@ -1489,7 +1566,7 @@ private fun HeroCard(
     )
     val cardShape = RoundedCornerShape(20.dp)
     Box(
-        Modifier.fillMaxWidth().aspectRatio(.95f)
+        Modifier.fillMaxWidth().height(cardHeight)
             .onGloballyPositioned { cardBounds = it.boundsInRoot() }
             .combinedClickable(
                 enabled = interactive,

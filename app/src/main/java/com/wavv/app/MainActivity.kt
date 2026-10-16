@@ -827,6 +827,7 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
                     onChooseSource = libraryViewModel::clearSource,
                     onPlayWithRecommendations = playbackController::play,
                     onTogglePlayback = playbackController::toggle,
+                    onDismissPlayback = playbackController::dismissCurrentPlayback,
                     onNext = playbackController::next,
                     onPrevious = playbackController::previous,
                     onSeek = playbackController::seekTo,
@@ -937,6 +938,7 @@ internal data class WavvContentActions(
     val onChooseSource: () -> Unit,
     val onPlayWithRecommendations: (Song, List<Song>, List<Song>, String, String?, String?) -> Unit,
     val onTogglePlayback: () -> Unit,
+    val onDismissPlayback: () -> Unit,
     val onNext: () -> Unit,
     val onPrevious: () -> Unit,
     val onSeek: (Long) -> Unit,
@@ -1139,6 +1141,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var fullPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var homeMixArtworkSourceFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var homeMixArtworkRootBounds by remember { mutableStateOf<Rect?>(null) }
+    var homeCarouselBottomPx by remember { mutableFloatStateOf(0f) }
     var artworkFlight by remember { mutableStateOf<PlayerArtworkFlight?>(null) }
     var artworkFlightTracksFinger by remember { mutableStateOf(false) }
     var artworkFlightAwaitingTarget by remember { mutableStateOf(false) }
@@ -1528,6 +1531,21 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
         showPlayer = false
         showQueue = false
     }
+    fun dismissNowPlaying() {
+        artworkFlight = null
+        artworkFlightTracksFinger = false
+        artworkFlightAwaitingTarget = false
+        artworkFlightOwnedByLyrics = false
+        gestureArtworkProgress.floatValue = 0f
+        artworkFlightScope.launch { artworkFlightProgress.snapTo(0f) }
+        showPlayer = false
+        showQueue = false
+        playerExpanded = false
+        playerPositionInitialized = false
+        homeStackListExpanded = false
+        homeStackIndex = 0
+        actions.onDismissPlayback()
+    }
     val startPlayback: (Song, String) -> Unit = { song, selectionSource ->
         playerExpanded = true
         playerPositionInitialized = true
@@ -1638,6 +1656,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         onHomeMixArtworkFrameChange = { frame -> updateHomeMixArtworkTarget(frame) },
                         onCloseHomeMixArtwork = { song, frame -> closeHomeMixArtworkFlight(song, frame) },
                         onMixDetailVisibilityChange = { homeMixDetailOpen = it },
+                        onCarouselBottomChange = { homeCarouselBottomPx = it },
                         homeReselectSignal = homeReselectSignal,
                         onPlayHomeMix = { song, mixSongs, mixTitle ->
                             playerExpanded = false
@@ -1732,6 +1751,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
                 bottomClearance = if (tab == Tab.Search) 80.dp else 96.dp,
+                homeCarouselBottomPx = homeCarouselBottomPx.takeIf { tab == Tab.Home && !homeMixDetailOpen },
                 liked = activeSong.id in favoriteIds,
                 accentColor = playbackAccentColor,
                 songChangeDirection = songChangeDirection,
@@ -1751,6 +1771,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     }
                 },
                 onEnterStandby = enterStandby,
+                onDismiss = ::dismissNowPlaying,
                 // Only hide the mini-player cover while it participates in a player flight.
                 // Carousel-to-mix flights are independent and should leave this cover mounted.
                 artworkFlightActive = artworkFlight != null &&
@@ -2428,6 +2449,8 @@ private fun BottomNav(
     onReselect: (Tab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val navigationBarInset = WindowInsets.navigationBars.getBottom(LocalDensity.current)
+    val footerBottomPadding = if (navigationBarInset == 0) 16.dp else 4.dp
     val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
     val activeIndex = tabs.indexOfFirst { it.first == active }
     val currentOnChange by rememberUpdatedState(onChange)
@@ -2452,7 +2475,7 @@ private fun BottomNav(
         stiffness = 520f,
     )
     Box(
-        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 4.dp).height(60.dp)
+        modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = footerBottomPadding).height(60.dp)
             .shadow(12.dp, CircleShape)
             .clip(CircleShape),
     ) {
@@ -2576,7 +2599,7 @@ private fun BottomNav(
 }
 
 @Composable
-private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, accentColor: Color, songChangeDirection: Int, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, bottomClearance: Dp = 96.dp, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
+private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateFlow<PlaybackProgress>, accentColor: Color, songChangeDirection: Int, expanded: Boolean, stacked: Boolean, stackDockEnabled: Boolean, stackDockProgress: State<Float>, modifier: Modifier = Modifier, bottomClearance: Dp = 96.dp, homeCarouselBottomPx: Float? = null, liked: Boolean, onToggle: () -> Unit, onLike: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onOpen: () -> Unit, onCollapse: () -> Unit, onExpand: () -> Unit, onEnterStandby: () -> Unit, onDismiss: () -> Unit, artworkFlightActive: Boolean, onArtworkFrameChange: (PlayerArtworkFrame) -> Unit) {
     val barMode = when { expanded -> NowPlayingBarMode.Expanded; stacked -> NowPlayingBarMode.Stacked; else -> NowPlayingBarMode.Docked }
     val barTransition = updateTransition(barMode, label = "now playing bar mode")
     val height by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player bar height") {
@@ -2600,6 +2623,8 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
     val artworkCorner by barTransition.animateDp(transitionSpec = { tween(540, easing = WavvMotionEasing) }, label = "player artwork corners") {
         if (it == NowPlayingBarMode.Expanded) 11.dp else 10.dp
     }
+    val horizontalDismissOffset = remember(song.id) { Animatable(0f) }
+    val horizontalDismissScope = rememberCoroutineScope()
     val shape = RoundedCornerShape(cornerRadius)
     val density = LocalDensity.current
     val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
@@ -2608,10 +2633,18 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
     val dockProgress = if (stackDockEnabled) stackDockProgress.value.coerceIn(0f, 1f) else 0f
     val bottomPosition = maxHeight - navigationBarBottom - bottomClearance - height + barOffset
     val topPosition = statusBarTop + 70.dp
-    val barPosition = bottomPosition * (1f - dockProgress) + topPosition * dockProgress
+    val carouselBottom = homeCarouselBottomPx?.takeIf { it > 0f }?.let { with(density) { it.toDp() } }
+    val compactHomePosition = carouselBottom?.plus(12.dp)
+    val expandedHomePosition = compactHomePosition?.plus(60.dp + 12.dp)
+    val restingPosition = when {
+        expanded -> expandedHomePosition
+        stacked -> compactHomePosition
+        else -> null
+    } ?: bottomPosition
+    val barPosition = restingPosition * (1f - dockProgress) + topPosition * dockProgress
     Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).offset(y = barPosition).height(height)
-        .pointerInput(expanded, stacked, onCollapse, onExpand, onEnterStandby) {
-            if (!expanded && !stacked) return@pointerInput
+        .graphicsLayer { translationX = horizontalDismissOffset.value }
+        .pointerInput(expanded, stacked, onCollapse, onExpand, onEnterStandby, onDismiss) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 var swiped = false
@@ -2620,7 +2653,27 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (!change.pressed) break
                     val delta = change.position - down.position
-                    if (!swiped && kotlin.math.abs(delta.y) > viewConfiguration.touchSlop && kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x)) {
+                    val crossedTouchSlop = kotlin.math.max(kotlin.math.abs(delta.x), kotlin.math.abs(delta.y)) > viewConfiguration.touchSlop
+                    if (
+                        !swiped && crossedTouchSlop &&
+                        kotlin.math.abs(delta.x) > kotlin.math.abs(delta.y) * 1.15f
+                    ) {
+                        swiped = true
+                        change.consume()
+                        val direction = if (delta.x < 0f) -1f else 1f
+                        val dismissTarget = size.width * direction
+                        horizontalDismissScope.launch {
+                            horizontalDismissOffset.animateTo(
+                                targetValue = dismissTarget,
+                                animationSpec = tween(180, easing = WavvMotionEasing),
+                            )
+                            onDismiss()
+                        }
+                        break
+                    } else if (
+                        !swiped && (expanded || stacked) && crossedTouchSlop &&
+                        kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x) * 1.15f
+                    ) {
                         if (expanded && delta.y < 0f) {
                             swiped = true
                             change.consume()

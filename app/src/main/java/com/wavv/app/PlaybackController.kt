@@ -323,6 +323,26 @@ class PlaybackController(context: Context) {
         if (currentController.isPlaying) currentController.pause() else currentController.play()
     }
 
+    fun dismissCurrentPlayback() {
+        val wasAutoplayEnabled = _state.value.autoplayEnabled
+        playbackStartConfirmation.cancel()
+        pendingPlay = null
+        controller?.run {
+            stop()
+            clearMediaItems()
+        }
+        managedQueue = emptyList()
+        lastShuffleOrder = null
+        dismissedAutoplayIds.clear()
+        consumedAutoplayStageIds.clear()
+        autoplayManuallyOrdered = false
+        autoplayCandidates = emptyList()
+        advancingAutoplay = false
+        playingFrom = null
+        _state.value = PlaybackState(autoplayEnabled = wasAutoplayEnabled)
+        _progress.value = PlaybackProgress()
+    }
+
     fun next() {
         val player = controller ?: return
         when (nextPlaybackAction(player.hasNextMediaItem(), _state.value.autoplayEnabled, autoplayCandidates.isNotEmpty())) {
