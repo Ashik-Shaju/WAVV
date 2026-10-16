@@ -321,7 +321,7 @@ internal fun LibraryScreen(
             LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
             LibraryPage.Songs -> songs
             LibraryPage.Playlist -> playlist?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
-            LibraryPage.Artist -> songs.filter { it.artist == destination.title }
+            LibraryPage.Artist -> songs.filter { item -> item.artistNames().any { it.equals(destination.title, ignoreCase = true) } }
             LibraryPage.Album -> songs.filter { it.album == destination.title && (it.albumArtist ?: it.artist) == destination.subtitle }
             else -> emptyList()
         }
@@ -424,7 +424,7 @@ internal fun LibraryScreen(
             LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums -> {
                 val libraryBrowseSongs = remember(songs, route.page, sortMode, personalizedRecommendations) {
                     val alphabetic = when (route.page) {
-                        LibraryPage.Artists -> songs.sortedBy { it.artist.lowercase() }
+                        LibraryPage.Artists -> songs.sortedBy { it.mainArtistName().lowercase() }
                         LibraryPage.Albums -> songs.sortedWith(compareBy<Song> { it.album.lowercase() }.thenBy { (it.albumArtist ?: it.artist).lowercase() })
                         else -> songs
                     }
@@ -436,17 +436,38 @@ internal fun LibraryScreen(
                     LibraryPage.Playlists -> playlists.sortedWith(
                         compareByDescending<UserPlaylist> { it.id in pinnedPlaylistIds }.thenByDescending(UserPlaylist::updatedAt),
                     ).map { item ->
+                        val playlistTracks = item.songIds.mapNotNull(songsById::get)
+                        val priority = when {
+                            item.id in pinnedPlaylistIds -> 2
+                            playlistTracks.isNotEmpty() && playlistTracks.all { it.id in favoriteIds } -> 1
+                            else -> 0
+                        }
                         LibraryCard(
                             item.id.toString(), item.name, "${item.songIds.size} songs",
                             playlistArtworkSong(item.songIds, songsById),
+                            priority = priority,
                         ) { onNavigate(LibraryDestination(LibraryPage.Playlist, item.id, item.name)) }
                     }
-                    LibraryPage.Artists -> libraryBrowseSongs.groupBy(Song::artist).entries
-                        .map { (artist, tracks) -> LibraryCard(artist, artist, "${tracks.size} songs", tracks.firstOrNull()) {
+                    LibraryPage.Artists -> libraryBrowseSongs
+                        .flatMap { item -> item.artistNames().map { artist -> artist to item } }
+                        .groupBy({ it.first }, { it.second }).entries
+                        .map { (artist, tracks) -> LibraryCard(
+                            artist,
+                            artist,
+                            "${tracks.size} songs",
+                            tracks.firstOrNull(),
+                            priority = if (tracks.isNotEmpty() && tracks.all { it.id in favoriteIds }) 1 else 0,
+                        ) {
                             onNavigate(LibraryDestination(LibraryPage.Artist, title = artist))
                         } }
                     else -> libraryBrowseSongs.groupBy { it.album to (it.albumArtist ?: it.artist) }.entries
-                        .map { (key, tracks) -> LibraryCard("${key.first}\u0000${key.second}", key.first, key.second, tracks.firstOrNull()) {
+                        .map { (key, tracks) -> LibraryCard(
+                            "${key.first}\u0000${key.second}",
+                            key.first,
+                            key.second,
+                            tracks.firstOrNull(),
+                            priority = if (tracks.isNotEmpty() && tracks.all { it.id in favoriteIds }) 1 else 0,
+                        ) {
                             onNavigate(LibraryDestination(LibraryPage.Album, title = key.first, subtitle = key.second))
                         } }
                 }
@@ -465,9 +486,9 @@ internal fun LibraryScreen(
                     )
                     val orderedCards = remember(cards, sortMode, personalizedRecommendations) {
                         when (sortMode) {
-                            "Title A–Z" -> cards.sortedBy { it.title.lowercase() }
-                            "Artist or creator" -> cards.sortedBy { it.subtitle.lowercase() }
-                            else -> cards
+                            "Title A–Z" -> cards.sortedWith(compareByDescending<LibraryCard> { it.priority }.thenBy { it.title.lowercase() })
+                            "Artist or creator" -> cards.sortedWith(compareByDescending<LibraryCard> { it.priority }.thenBy { it.subtitle.lowercase() })
+                            else -> cards.sortedByDescending { it.priority }
                         }
                     }
                     val cardRows = remember(orderedCards) { orderedCards.chunked(2) }
@@ -535,14 +556,13 @@ internal fun LibraryScreen(
                         LibraryPage.Liked -> songs.filter { it.id in favoriteIds }
                         LibraryPage.Songs -> songs
                         LibraryPage.Playlist -> playlists.firstOrNull { it.id == route.itemId }?.songIds.orEmpty().mapNotNull { id -> songs.firstOrNull { it.id == id } }
-                        LibraryPage.Artist -> songs.filter { it.artist == route.title }
+                        LibraryPage.Artist -> songs.filter { item -> item.artistNames().any { it.equals(route.title, ignoreCase = true) } }
                         LibraryPage.Album -> songs.filter { it.album == route.title && (it.albumArtist ?: it.artist) == route.subtitle }
                     },
                     playlists = playlists,
                     favoriteIds = favoriteIds,
                     personalizedRecommendations = personalizedRecommendations,
                     sortMode = sortMode,
-                    playAsText = route.page == LibraryPage.Liked || route.page == LibraryPage.Songs || route.page == LibraryPage.Playlist,
                     hasNowPlaying = hasNowPlaying,
                     isPlaylist = route.page == LibraryPage.Playlist,
                     isDetail = route.isDetail,
@@ -560,7 +580,7 @@ internal fun LibraryScreen(
                     onAddSongToPlaylist = onAddSongToPlaylist,
                     onRemoveSongFromPlaylist = { id -> playlist?.let { onRemoveSongFromPlaylist(it.id, id) } },
                     onNavigateToAlbum = { item -> onNavigate(LibraryDestination(LibraryPage.Album, title = item.album, subtitle = item.albumArtist ?: item.artist)) },
-                    onNavigateToArtist = { item -> onNavigate(LibraryDestination(LibraryPage.Artist, title = item.artist)) },
+                    onNavigateToArtist = { item -> onNavigate(LibraryDestination(LibraryPage.Artist, title = item.mainArtistName())) },
                     onSort = { sortMenu = true },
                 )
             }
@@ -722,7 +742,14 @@ private fun historyDayLabel(dayStart: Long): String {
 private fun historyTimeLabel(timestamp: Long): String =
     SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
 
-private data class LibraryCard(val id: String, val title: String, val subtitle: String, val artSong: Song?, val onClick: () -> Unit)
+private data class LibraryCard(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val artSong: Song?,
+    val priority: Int = 0,
+    val onClick: () -> Unit,
+)
 
 internal fun playlistArtworkSong(songIds: List<Long>, songsById: Map<Long, Song>): Song? =
     songIds.asSequence().mapNotNull(songsById::get).firstOrNull { !it.albumArtUri.isNullOrBlank() }
@@ -863,7 +890,6 @@ private fun LibraryCollectionScreen(
     favoriteIds: Set<Long>,
     personalizedRecommendations: List<Song>,
     sortMode: String,
-    playAsText: Boolean,
     hasNowPlaying: Boolean,
     isPlaylist: Boolean,
     isDetail: Boolean,
@@ -885,6 +911,7 @@ private fun LibraryCollectionScreen(
     onSort: () -> Unit,
 ) {
     var featureOffset by remember(title, songs) { mutableStateOf(0) }
+    var favoriteSparkleTrigger by remember(title, songs) { mutableIntStateOf(0) }
     var menuSong by remember { mutableStateOf<Song?>(null) }
     var addToPlaylist by remember { mutableStateOf(false) }
     val displaySongs = remember(songs, sortMode, personalizedRecommendations) {
@@ -946,29 +973,40 @@ private fun LibraryCollectionScreen(
                         Text(subtitle, Modifier.padding(top = 3.dp), color = Color.White.copy(.58f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         featured?.let { Text("${it.title} · ${it.artist}", Modifier.padding(top = 4.dp), color = Color.White.copy(.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            IconButton(onClick = { onShuffle(displaySongs, title); featureOffset = displaySongs.indices.filterNot { it == featureOffset }.randomOrNull() ?: 0 }, enabled = displaySongs.isNotEmpty(), modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)).border(1.dp, Color.White.copy(.16f), CircleShape)) {
+                            IconButton(onClick = { onShuffle(displaySongs, title); featureOffset = displaySongs.indices.filterNot { it == featureOffset }.randomOrNull() ?: 0 }, enabled = displaySongs.isNotEmpty(), modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f))) {
                                 Image(androidx.compose.ui.res.painterResource(R.drawable.queue_mode_shuffle), "Shuffle $title", Modifier.size(23.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White))
                             }
                             Button(
                                 onClick = { displaySongs.firstOrNull()?.let { onPlay(it, displaySongs, title) } },
                                 enabled = displaySongs.isNotEmpty(),
+                                modifier = Modifier.size(48.dp).semantics { contentDescription = "Play $title" },
                                 shape = CircleShape,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF111111)),
+                                contentPadding = PaddingValues(0.dp),
                             ) {
-                                Image(androidx.compose.ui.res.painterResource(R.drawable.play_solid), null, Modifier.size(13.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color(0xFF111111)))
-                                if (playAsText) Text("Play", Modifier.padding(start = 3.dp), fontWeight = FontWeight.ExtraBold)
+                                Image(androidx.compose.ui.res.painterResource(R.drawable.play_solid), null, Modifier.size(19.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color(0xFF111111)))
                             }
-                            IconButton(
-                                onClick = { onSetFavorites(displaySongs.map(Song::id).toSet(), !displaySongs.all { it.id in favoriteIds }) },
-                                enabled = displaySongs.isNotEmpty(),
-                                modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f)).border(1.dp, Color.White.copy(.16f), CircleShape)
-                                    .semantics {
-                                        val allFavorites = displaySongs.isNotEmpty() && displaySongs.all { it.id in favoriteIds }
-                                        contentDescription = if (allFavorites) "Remove $title from favorites" else "Add $title to favorites"
-                                        stateDescription = if (allFavorites) "All tracks liked" else "Not all tracks liked"
+                            if (page != LibraryPage.Songs) {
+                                val allFavorites = displaySongs.isNotEmpty() && displaySongs.all { it.id in favoriteIds }
+                                IconButton(
+                                    onClick = {
+                                        if (!allFavorites) favoriteSparkleTrigger++
+                                        onSetFavorites(displaySongs.map(Song::id).toSet(), !allFavorites)
                                     },
-                            ) {
-                            FigmaFavouriteIcon(displaySongs.isNotEmpty() && displaySongs.all { it.id in favoriteIds }, 36.dp)
+                                    enabled = displaySongs.isNotEmpty(),
+                                    modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(.12f))
+                                        .semantics {
+                                            contentDescription = if (allFavorites) "Remove $title from favorites" else "Add $title to favorites"
+                                            stateDescription = if (allFavorites) "All tracks liked" else "Not all tracks liked"
+                                        },
+                                ) {
+                                    FigmaFavouriteIcon(
+                                        allFavorites,
+                                        24.dp,
+                                        showIconSurface = false,
+                                        sparkleTrigger = favoriteSparkleTrigger,
+                                    )
+                                }
                             }
                         }
                     }
@@ -992,8 +1030,28 @@ private fun LibraryCollectionScreen(
                     Box {
                         Box(Modifier.size(36.dp).clickable { menuSong = item }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
                         DropdownMenu(expanded = menuSong?.id == item.id, onDismissRequest = { menuSong = null }) {
-                            DropdownMenuItem(text = { Text("Play next") }, onClick = { menuSong = null; onPlayNext(item) })
-                            DropdownMenuItem(text = { Text("Add to queue") }, onClick = { menuSong = null; onAddToQueue(item) })
+                            DropdownMenuItem(
+                                text = { Text("Play next") },
+                                leadingIcon = {
+                                    Icon(
+                                        androidx.compose.ui.res.painterResource(R.drawable.action_play_next),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = { menuSong = null; onPlayNext(item) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Add to queue") },
+                                leadingIcon = {
+                                    Icon(
+                                        androidx.compose.ui.res.painterResource(R.drawable.action_add_to_queue),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = { menuSong = null; onAddToQueue(item) },
+                            )
                             DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { menuSong = null; onRequestAddToPlaylist(item) })
                             DropdownMenuItem(text = { Text("Go to album") }, onClick = { menuSong = null; onNavigateToAlbum(item) })
                             DropdownMenuItem(text = { Text("Go to artist") }, onClick = { menuSong = null; onNavigateToArtist(item) })
@@ -1026,8 +1084,28 @@ private fun LibraryCollectionScreen(
                             DropdownMenuItem(text = { Text("Delete playlist") }, onClick = { expanded = false; onRequestDeletePlaylist() })
                         }
                         displaySongs.firstOrNull()?.let { first ->
-                            DropdownMenuItem(text = { Text("Play next") }, onClick = { expanded = false; onPlayNext(first) })
-                            DropdownMenuItem(text = { Text("Add to queue") }, onClick = { expanded = false; onAddToQueue(first) })
+                            DropdownMenuItem(
+                                text = { Text("Play next") },
+                                leadingIcon = {
+                                    Icon(
+                                        androidx.compose.ui.res.painterResource(R.drawable.action_play_next),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = { expanded = false; onPlayNext(first) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Add to queue") },
+                                leadingIcon = {
+                                    Icon(
+                                        androidx.compose.ui.res.painterResource(R.drawable.action_add_to_queue),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = { expanded = false; onAddToQueue(first) },
+                            )
                         }
                     }
                 }

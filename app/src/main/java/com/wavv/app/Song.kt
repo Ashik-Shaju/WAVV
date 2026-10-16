@@ -33,6 +33,21 @@ data class Song(
     val trackCount: Int? = null,
 )
 
+private val artistCreditSeparator = Regex("\\s*[,/]\\s*")
+private val featuredArtistSeparator = Regex("(?i)\\s+(?:feat(?:uring)?\\.?|ft\\.?)\\s+")
+
+internal fun String.splitArtistCredit(): List<String> = split(artistCreditSeparator)
+    .flatMap { credit -> credit.split(featuredArtistSeparator) }
+    .map(String::trim)
+    .filter(String::isNotEmpty)
+    .distinctBy { it.lowercase() }
+
+internal fun Song.artistNames(): List<String> = artist.splitArtistCredit()
+
+internal fun Song.mainArtistName(): String = artistNames().firstOrNull().orEmpty()
+
+internal fun Song.contributingArtistNames(): List<String> = artistNames().drop(1)
+
 data class UserPlaylist(
     val id: Long,
     val name: String,

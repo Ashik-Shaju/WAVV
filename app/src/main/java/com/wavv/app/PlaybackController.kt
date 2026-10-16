@@ -366,7 +366,15 @@ class PlaybackController(context: Context) {
     internal fun playNext(song: Song, fromAutoplay: Boolean = false): QueueActionResult {
         val player = controller ?: return QueueActionResult.Unavailable
         val currentId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: return QueueActionResult.Unavailable
-        if (song.id == currentId) return QueueActionResult.AlreadyPlaying
+        if (song.id == currentId) {
+            val insertionIndex = (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
+            player.addMediaItem(insertionIndex, mediaItem(song, "queue"))
+            managedQueue = readQueue(player)
+            lastShuffleOrder = null
+            syncAutoplayStaging(player)
+            syncQueue(player)
+            return QueueActionResult.Added
+        }
         val currentIndex = (0 until player.mediaItemCount).firstOrNull {
             player.getMediaItemAt(it).mediaId.toLongOrNull() == currentId
         } ?: return QueueActionResult.Unavailable
@@ -393,10 +401,7 @@ class PlaybackController(context: Context) {
         } ?: return QueueActionResult.Unavailable
         val insertionIndex = (updatedCurrentIndex + 1).coerceAtMost(player.mediaItemCount)
         player.addMediaItem(insertionIndex, mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"))
-        val managed = managedQueue.filterNot { it.id == song.id }.toMutableList()
-        val managedCurrentIndex = managed.indexOfFirst { it.id == currentId }
-        managed.add(if (managedCurrentIndex < 0) managed.size else managedCurrentIndex + 1, song)
-        managedQueue = managed
+        managedQueue = readQueue(player)
         lastShuffleOrder = null
         syncAutoplayStaging(player)
         syncQueue(player)
@@ -408,15 +413,17 @@ class PlaybackController(context: Context) {
         val currentId = player.currentMediaItem?.mediaId?.toLongOrNull()
         val cameFromAutoplay = fromAutoplay || autoplayCandidates.any { it.id == song.id }
         if (currentId == song.id) {
-            if (cameFromAutoplay) {
-                removeAutoplayCandidate(song.id)
-                promoteStagedAutoplay(song.id, player)
-                managedQueue = readQueue(player)
-                lastShuffleOrder = null
-                syncAutoplayStaging(player)
-                syncQueue(player)
-            }
-            return QueueActionResult.AlreadyPlaying
+            if (cameFromAutoplay) removeAutoplayCandidate(song.id)
+            val insertionIndex = pendingAutoplayStageIndex(player) ?: player.mediaItemCount
+            player.addMediaItem(
+                insertionIndex,
+                mediaItem(song, if (cameFromAutoplay) "autoplay_recommendation" else "queue"),
+            )
+            managedQueue = readQueue(player)
+            lastShuffleOrder = null
+            syncAutoplayStaging(player)
+            syncQueue(player)
+            return QueueActionResult.Added
         }
         val existing = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id }
         if (existing != null) {
@@ -483,10 +490,10 @@ class PlaybackController(context: Context) {
         val player = controller ?: return
         val absoluteIndex = index
         if (absoluteIndex !in 0 until player.mediaItemCount || absoluteIndex == player.currentMediaItemIndex) return
-        val removedId = player.getMediaItemAt(absoluteIndex).mediaId.toLongOrNull() ?: return
+        player.getMediaItemAt(absoluteIndex).mediaId.toLongOrNull() ?: return
         player.removeMediaItem(absoluteIndex)
-        managedQueue = managedQueue.filterNot { it.id == removedId }
-        lastShuffleOrder = lastShuffleOrder?.filterNot { it == removedId }
+        managedQueue = readQueue(player)
+        lastShuffleOrder = null
         syncQueue(player)
     }
 
@@ -539,9 +546,14 @@ class PlaybackController(context: Context) {
         val upcoming = currentOrder.drop(currentIndex + 1)
         if (mode == QueueMode.Shuffle) {
             val cachedOrder = lastShuffleOrder.orEmpty().filter { id -> upcoming.any { it.id == id } }
-            val cachedIsComplete = cachedOrder.size == upcoming.size && cachedOrder.toSet() == upcoming.mapTo(mutableSetOf(), Song::id)
+            val cachedIsComplete = cachedOrder.size == upcoming.size &&
+                cachedOrder.groupingBy { it }.eachCount() == upcoming.groupingBy(Song::id).eachCount()
             val shuffled = if (cachedIsComplete) {
-                cachedOrder.mapNotNull { id -> upcoming.firstOrNull { it.id == id } }
+                val remaining = upcoming.toMutableList()
+                cachedOrder.mapNotNull { id ->
+                    val index = remaining.indexOfFirst { it.id == id }
+                    if (index < 0) null else remaining.removeAt(index)
+                }
             } else {
                 upcoming.shuffled(Random(System.nanoTime())).also { lastShuffleOrder = it.map(Song::id) }
             }
@@ -551,9 +563,11 @@ class PlaybackController(context: Context) {
             val currentId = player.currentMediaItem?.mediaId?.toLongOrNull()
             val managedCurrentIndex = managedQueue.indexOfFirst { it.id == currentId }
             val preferred = if (managedCurrentIndex >= 0) managedQueue.drop(managedCurrentIndex + 1) else emptyList()
-            val upcomingIds = upcoming.mapTo(mutableSetOf(), Song::id)
-            val restored = preferred.filter { it.id in upcomingIds } +
-                upcoming.filter { candidate -> preferred.none { it.id == candidate.id } }
+            val remaining = upcoming.toMutableList()
+            val restored = preferred.mapNotNull { preferredSong ->
+                val index = remaining.indexOfFirst { it.id == preferredSong.id }
+                if (index < 0) null else remaining.removeAt(index)
+            } + remaining
             applyQueueOrder(stablePrefix + restored)
         }
         _state.value = _state.value.copy(
@@ -781,7 +795,9 @@ class PlaybackController(context: Context) {
     private fun applyQueueOrder(order: List<Song>) {
         val player = controller ?: return
         val currentOrder = readQueue(player)
-        if (order.size != currentOrder.size || order.map(Song::id).toSet() != currentOrder.map(Song::id).toSet()) return
+        if (order.size != currentOrder.size ||
+            order.groupingBy(Song::id).eachCount() != currentOrder.groupingBy(Song::id).eachCount()
+        ) return
         order.forEachIndexed { targetIndex, song ->
             val currentIndex = (targetIndex until player.mediaItemCount).firstOrNull {
                 player.getMediaItemAt(it).mediaId.toLongOrNull() == song.id

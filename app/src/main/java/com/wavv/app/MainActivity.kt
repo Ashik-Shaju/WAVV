@@ -68,9 +68,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.IndicationNodeFactory
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.MarqueeSpacing
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.gestures.Orientation
@@ -145,6 +148,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -179,6 +183,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -235,6 +241,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.node.DelegatableNode
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -336,7 +343,7 @@ internal val WavvFontFamily = FontFamily(
     Font(R.font.nunito_variable, FontWeight.W900, variationSettings = FontVariation.Settings(FontVariation.weight(900))),
 )
 internal val WavvBrandFontFamily = FontFamily(Font(R.font.galaxie_copernicus_book, FontWeight.W400))
-internal val WavvAppNameFontFamily = FontFamily(Font(R.font.awesome, FontWeight.W400))
+internal val WavvAppNameFontFamily = FontFamily(Font(R.font.luckiest_guy, FontWeight.W400))
 internal val WavvSurfaceGradient = Brush.verticalGradient(
     listOf(Color(0xFF282832), Color(0xFF17171D)),
 )
@@ -349,7 +356,7 @@ private enum class NowPlayingBarMode { Expanded, Stacked, Docked }
 
 private enum class PlayerArtworkFlightDirection { Opening, Closing }
 
-private enum class ArtworkFlightDestination { MiniPlayer, FullPlayer, Lyrics, HomeMixDetail }
+private enum class ArtworkFlightDestination { MiniPlayer, FullPlayer, Queue, Lyrics, HomeMixDetail }
 
 internal const val HOME_MIX_ARTWORK_TRANSITION_MS = 480
 internal const val HOME_MIX_ARTWORK_CLOSE_TRANSITION_MS = HOME_MIX_ARTWORK_TRANSITION_MS
@@ -649,6 +656,14 @@ private fun LoopMode.toPlayerRepeatMode() = when (this) {
     LoopMode.One -> androidx.media3.common.Player.REPEAT_MODE_ONE
 }
 
+private object NoPressIndication : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode = object : Modifier.Node() {}
+
+    override fun hashCode(): Int = 0
+
+    override fun equals(other: Any?): Boolean = other === this
+}
+
 class MainActivity : ComponentActivity() {
     private lateinit var playbackController: PlaybackController
 
@@ -706,6 +721,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: PlaybackController) {
     val context = LocalContext.current
@@ -807,7 +823,11 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
     }
 
     MaterialTheme(colorScheme = darkColorScheme(background = WavvBackground, surface = WavvSurface)) {
-        CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = WavvFontFamily)) {
+        CompositionLocalProvider(
+            LocalTextStyle provides TextStyle(fontFamily = WavvFontFamily),
+            LocalIndication provides NoPressIndication,
+            LocalRippleConfiguration provides null,
+        ) {
             WavvContent(
                 state = WavvContentState(
                     libraryState,
@@ -1139,6 +1159,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
     var miniPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var fullPlayerArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
+    var queueArtworkFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var homeMixArtworkSourceFrame by remember { mutableStateOf<PlayerArtworkFrame?>(null) }
     var homeMixArtworkRootBounds by remember { mutableStateOf<Rect?>(null) }
     var homeCarouselBottomPx by remember { mutableFloatStateOf(0f) }
@@ -1358,6 +1379,61 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             flight.copy(to = frame)
         }
     }
+    fun openQueueArtworkFlight(sourceFrame: PlayerArtworkFrame?) {
+        val song = activeSong
+        val source = sourceFrame ?: fullPlayerArtworkFrame
+        artworkFlightDestination = ArtworkFlightDestination.Queue
+        artworkFlightOwnedByLyrics = false
+        if (song != null && source != null && source.bounds.width > 0f && source.bounds.height > 0f) {
+            artworkFlight = newArtworkFlight(song, PlayerArtworkFlightDirection.Opening, source, source)
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = true
+            gestureArtworkProgress.floatValue = 0f
+        } else {
+            artworkFlight = null
+            artworkFlightAwaitingTarget = false
+        }
+        showQueue = true
+    }
+    fun closeQueueArtworkFlight() {
+        val openingFlight = artworkFlight?.takeIf {
+            artworkFlightDestination == ArtworkFlightDestination.Queue &&
+                it.direction == PlayerArtworkFlightDirection.Opening
+        }
+        val openingProgress = openingFlight?.let { flight ->
+            val rawProgress = if (artworkFlightAwaitingTarget) 0f else artworkFlightProgress.value.coerceIn(0f, 1f)
+            normalizedArtworkFlightProgress(flight, rawProgress)
+        }
+        val source = openingFlight?.let { flight ->
+            interpolateArtworkFrame(flight.from, flight.to, openingProgress ?: 0f)
+        } ?: queueArtworkFrame
+        val target = fullPlayerArtworkFrame
+        val song = activeSong ?: openingFlight?.song
+        artworkFlightDestination = ArtworkFlightDestination.Queue
+        artworkFlightOwnedByLyrics = false
+        if (song != null && source != null && target != null &&
+            source.bounds.width > 0f && source.bounds.height > 0f &&
+            target.bounds.width > 0f && target.bounds.height > 0f
+        ) {
+            val closingFlight = newArtworkFlight(
+                song,
+                PlayerArtworkFlightDirection.Closing,
+                source,
+                target,
+            )
+            artworkFlight = closingFlight
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = false
+            gestureArtworkProgress.floatValue = 0f
+            showQueue = false
+            animateArtworkFlight(closingFlight)
+        } else {
+            artworkFlight = null
+            artworkFlightTracksFinger = false
+            artworkFlightAwaitingTarget = false
+            showQueue = false
+        }
+    }
     fun openHomeMixArtworkFlight(song: Song, sourceFrame: PlayerArtworkFrame?) {
         artworkFlightDestination = ArtworkFlightDestination.HomeMixDetail
         artworkFlightOwnedByLyrics = false
@@ -1572,6 +1648,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     BackHandler(enabled = showStandby || showPlayer || (tab == Tab.Home && homeStackListExpanded) || (showLibrary && tab != Tab.Home)) {
         when {
             showStandby -> Unit
+            showPlayer && showQueue -> closeQueueArtworkFlight()
             showPlayer -> closePlayer()
             tab == Tab.Home && homeStackListExpanded -> {
                 homeStackListExpanded = false
@@ -1628,7 +1705,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             tab = Tab.Library
                         },
                         onNavigateToArtist = { song ->
-                            navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist))
+                            navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.mainArtistName()))
                             tab = Tab.Library
                         },
                         recentSongs = recentlyPlayed,
@@ -1750,7 +1827,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                 stackDockEnabled = tab == Tab.Home && !homeMixDetailOpen,
                 stackDockProgress = homeStackExpansionProgress,
                 modifier = Modifier.fillMaxSize(),
-                bottomClearance = if (tab == Tab.Search) 80.dp else 96.dp,
+                bottomClearance = if (tab == Tab.Home) 96.dp else 72.dp,
                 homeCarouselBottomPx = homeCarouselBottomPx.takeIf { tab == Tab.Home && !homeMixDetailOpen },
                 liked = activeSong.id in favoriteIds,
                 accentColor = playbackAccentColor,
@@ -1854,8 +1931,8 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onSeek = onSeek,
                     loopMode = loopMode,
                     onCycleLoop = { loopMode = loopMode.next(); onRepeatMode(loopMode.toPlayerRepeatMode()) },
-                    onShowQueue = { showQueue = true },
-                    onHideQueue = { showQueue = false },
+                    onShowQueue = ::openQueueArtworkFlight,
+                    onHideQueue = ::closeQueueArtworkFlight,
                     onPlaySong = onPlayQueuedSong,
                     onAddToQueue = onAddToQueue,
                     queueMode = playbackState.queueMode,
@@ -1873,7 +1950,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onSetAutoplayEnabled = onSetAutoplayEnabled,
                     onSetTrackUHQ = actions.onSetTrackUHQ,
                     playlists = playlists,
-                    artworkFlightActive = artworkFlight != null,
+                    artworkFlightActive = artworkFlight != null &&
+                        (artworkFlightDestination != ArtworkFlightDestination.Queue || !artworkFlightAwaitingTarget),
+                    queueArtworkFlightActive = artworkFlight != null &&
+                        artworkFlightDestination == ArtworkFlightDestination.Queue && !artworkFlightAwaitingTarget,
                     lyricsArtworkFlightActive = artworkFlightOwnedByLyrics,
                     onOpenLyricsArtwork = { frame -> openLyricsArtworkFlight(frame) },
                     onCloseLyricsArtwork = { frame -> closeLyricsArtworkFlight(frame) },
@@ -1892,10 +1972,32 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                                 artworkFlight = retargetArtworkFlight(flight, frame)
                             }
                         } else if (flight?.direction == PlayerArtworkFlightDirection.Closing &&
-                            artworkFlightDestination == ArtworkFlightDestination.FullPlayer &&
+                            (artworkFlightDestination == ArtworkFlightDestination.FullPlayer ||
+                                artworkFlightDestination == ArtworkFlightDestination.Queue) &&
                             !artworkFlightTracksFinger && !artworkFlightAwaitingTarget && flight.to != frame
                         ) {
                             artworkFlight = retargetArtworkFlight(flight, frame)
+                        }
+                    },
+                    onQueueArtworkFrameChange = { frame ->
+                        queueArtworkFrame = frame
+                        val flight = artworkFlight
+                        if (flight?.direction == PlayerArtworkFlightDirection.Opening &&
+                            artworkFlightDestination == ArtworkFlightDestination.Queue
+                        ) {
+                            val target = frame.copy(
+                                alpha = 1f,
+                                regularArtworkAlpha = 1f,
+                                maskedArtworkAlpha = 0f,
+                                shadowElevationPx = 0f,
+                            )
+                            if (artworkFlightAwaitingTarget) {
+                                val openingFlight = flight.copy(to = target)
+                                artworkFlight = openingFlight
+                                animateArtworkFlight(openingFlight)
+                            } else if (!artworkFlightTracksFinger && flight.to != target) {
+                                artworkFlight = retargetArtworkFlight(flight, target)
+                            }
                         }
                     },
                     onLyricsArtworkFrameChange = { frame ->
@@ -1919,7 +2021,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     onAddSongToPlaylist = onAddSongToPlaylist,
                     onCreatePlaylist = { songId -> createPlaylistSongId = songId; createPlaylistName = ""; showCreatePlaylist = true },
                     onNavigateToAlbum = { song -> navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.albumArtist ?: song.artist)); tab = Tab.Library; closePlayer() },
-                    onNavigateToArtist = { song -> navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.artist)); tab = Tab.Library; closePlayer() },
+                    onNavigateToArtist = { song -> navigateLibrary(LibraryDestination(LibraryPage.Artist, title = song.mainArtistName())); tab = Tab.Library; closePlayer() },
                 )
             }
         }
@@ -2104,6 +2206,7 @@ internal fun ScreenHeader(
                 fontSize = if (brandHome) 33.sp else 32.sp,
                 fontWeight = if (isBrandTitle) FontWeight.Normal else if (brandHome) FontWeight.Black else FontWeight.ExtraBold,
                 letterSpacing = if (brandHome) (-1.15).sp else (-1).sp,
+                lineHeight = if (brandHome) 38.sp else TextUnit.Unspecified,
                 fontFamily = titleFontFamily ?: if (isBrandTitle) WavvBrandFontFamily else if (brandHome) FontFamily.SansSerif else FontFamily.Default,
             )
             if (waveform) {
@@ -2451,7 +2554,7 @@ private fun BottomNav(
 ) {
     val navigationBarInset = WindowInsets.navigationBars.getBottom(LocalDensity.current)
     val footerBottomPadding = if (navigationBarInset == 0) 16.dp else 4.dp
-    val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "You")
+    val tabs = listOf(Tab.Home to "Home", Tab.Search to "Search", Tab.Library to "Library", Tab.You to "Settings")
     val activeIndex = tabs.indexOfFirst { it.first == active }
     val currentOnChange by rememberUpdatedState(onChange)
     val currentOnReselect by rememberUpdatedState(onReselect)
@@ -2578,7 +2681,7 @@ private fun BottomNav(
                                     Tab.Home -> R.drawable.nav_home
                                     Tab.Search -> R.drawable.nav_search
                                     Tab.Library -> if (selected) R.drawable.nav_library_active else R.drawable.nav_library_inactive
-                                    Tab.You -> R.drawable.nav_you
+                                    Tab.You -> R.drawable.nav_settings
                                 },
                             ),
                             contentDescription = null,
@@ -2917,17 +3020,56 @@ private fun PlaybackButtons(isPlaying: Boolean, onToggle: () -> Unit, onPrevious
 }
 
 @Composable
-internal fun FigmaFavouriteIcon(filled: Boolean, iconSize: Dp, showIconSurface: Boolean = true) {
+internal fun FigmaFavouriteIcon(
+    filled: Boolean,
+    iconSize: Dp,
+    showIconSurface: Boolean = true,
+    sparkleTrigger: Int = 0,
+) {
     val fillProgress by animateFloatAsState(
         targetValue = if (filled) 1f else 0f,
         animationSpec = tween(durationMillis = 280),
         label = "favorite icon transition",
     )
+    val sparkleProgress = remember { Animatable(1f) }
+    LaunchedEffect(sparkleTrigger) {
+        if (sparkleTrigger > 0) {
+            sparkleProgress.snapTo(0f)
+            sparkleProgress.animateTo(1f, tween(durationMillis = 380, easing = WavvScreenEasing))
+        }
+    }
     Canvas(Modifier.size(iconSize)) {
         val unit = size.minDimension / 24f
         val fillAlpha = fillProgress.coerceIn(0f, 1f)
         val buttonRadius = 11.8f * unit
         if (showIconSurface) drawCircle(Color.White.copy(alpha = .15f), radius = buttonRadius)
+
+        val burstProgress = sparkleProgress.value
+        if (sparkleTrigger > 0 && burstProgress < 1f) {
+            val alpha = (1f - burstProgress).coerceIn(0f, 1f)
+            val distance = (6.4f + 4.4f * burstProgress) * unit
+            val radius = (1.18f - .42f * burstProgress) * unit
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val sparkleOffsets = listOf(
+                Offset(0f, -distance),
+                Offset(distance, 0f),
+                Offset(0f, distance),
+                Offset(-distance, 0f),
+                Offset(-distance * .7f, -distance * .7f),
+                Offset(distance * .7f, -distance * .7f),
+                Offset(-distance * .7f, distance * .7f),
+                Offset(distance * .7f, distance * .7f),
+            )
+            sparkleOffsets.forEachIndexed { index, offset ->
+                val point = center + offset
+                val glint = if (index % 2 == 0) Color(0xFFFF76AD) else Color(0xFFFFEAF2)
+                drawCircle(glint.copy(alpha = alpha * .34f), radius = radius * 2.1f, center = point)
+                drawCircle(glint.copy(alpha = alpha), radius = radius, center = point)
+                val ray = radius * 2.05f
+                drawLine(glint.copy(alpha = alpha), Offset(point.x - ray, point.y), Offset(point.x + ray, point.y), strokeWidth = unit * .72f)
+                drawLine(glint.copy(alpha = alpha), Offset(point.x, point.y - ray), Offset(point.x, point.y + ray), strokeWidth = unit * .72f)
+            }
+        }
 
         val iconScale = .72f
         fun inset(value: Float) = 12f + (value - 12f) * iconScale
@@ -2963,16 +3105,20 @@ private fun FavouriteButton(
     iconSize: Dp = 30.dp,
     showIconSurface: Boolean = true,
 ) {
+    var sparkleTrigger by remember { mutableIntStateOf(0) }
     Box(
         modifier.size(buttonSize)
             .semantics(mergeDescendants = true) {
                 contentDescription = if (liked) "Remove from favorites" else "Add to favorites"
                 stateDescription = if (liked) "Liked" else "Not liked"
             }
-            .clickable(role = Role.Button, onClick = onClick),
+            .clickable(role = Role.Button) {
+                if (!liked) sparkleTrigger++
+                onClick()
+            },
         contentAlignment = Alignment.Center,
     ) {
-        FigmaFavouriteIcon(liked, iconSize, showIconSurface)
+        FigmaFavouriteIcon(liked, iconSize, showIconSurface, sparkleTrigger)
     }
 }
 
@@ -3008,7 +3154,7 @@ private fun FullPlayer(
     loopMode: LoopMode,
     onCycleLoop: () -> Unit,
     onQueueMode: (QueueMode) -> Unit,
-    onShowQueue: () -> Unit,
+    onShowQueue: (PlayerArtworkFrame?) -> Unit,
     onHideQueue: () -> Unit,
     onPlaySong: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
@@ -3028,10 +3174,12 @@ private fun FullPlayer(
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
     artworkFlightActive: Boolean,
+    queueArtworkFlightActive: Boolean,
     lyricsArtworkFlightActive: Boolean,
     onOpenLyricsArtwork: (PlayerArtworkFrame?) -> Unit,
     onCloseLyricsArtwork: (PlayerArtworkFrame?) -> Unit,
     onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onQueueArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
     onLyricsArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
     onArtworkDragStart: (PlayerArtworkFrame) -> Unit,
     onArtworkDragProgress: (Float) -> Unit,
@@ -3055,6 +3203,8 @@ private fun FullPlayer(
     var currentLyricsArtworkFrame by remember(song.id) { mutableStateOf<PlayerArtworkFrame?>(null) }
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
+    var showTrackCredits by remember(song.id) { mutableStateOf(false) }
+    val trackCredits = remember(song) { songCreditDetails(song) }
     var playlistSong by remember(song.id) { mutableStateOf<Song?>(null) }
     var showNextTitle by remember(song.id) { mutableStateOf(false) }
     val nextUpOffset = remember(song.id) { Animatable(0f) }
@@ -3111,6 +3261,17 @@ private fun FullPlayer(
         val artworkShadow by animateDpAsState(if (state.isPlaying) 0.dp else 20.dp, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "player artwork shadow")
         val regularArtAlpha by animateFloatAsState(if (state.isPlaying) 0f else 1f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "regular artwork fade")
         val maskedArtAlpha by animateFloatAsState(if (state.isPlaying) 1f else 0f, tween(780, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)), label = "masked artwork fade")
+        val latestArtworkFlightFrame = {
+            currentArtworkFrame?.let { frame ->
+                frame.copy(
+                    bounds = artworkCoordinates?.boundsInRoot() ?: frame.bounds,
+                    alpha = 1f,
+                    regularArtworkAlpha = regularArtAlpha,
+                    maskedArtworkAlpha = maskedArtAlpha,
+                    shadowElevationPx = with(density) { artworkShadow.toPx() },
+                )
+            }
+        }
         val dismissPlayer: () -> Unit = {
             if (!isDismissing) {
                 val measuredFrame = currentArtworkFrame
@@ -3200,7 +3361,7 @@ private fun FullPlayer(
                     } else if (!showQueue && playerDragOffset > 100f) {
                         dismissPlayer()
                     } else if (total < -80 && !downwardDragStarted && playerDragOffset <= 0f && !showQueue) {
-                        onShowQueue()
+                        onShowQueue(latestArtworkFlightFrame())
                     } else {
                         settlePlayer()
                     }
@@ -3270,39 +3431,44 @@ private fun FullPlayer(
                 if (qualityLabel != null) QualityStatusChip(qualityLabel) { showQualityDetails = true }
             }
             PlaybackButtons(state.isPlaying, onToggle, onPrevious, onNext, iconSize = 48.dp)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = {
-                    onOpenLyricsArtwork(currentArtworkFrame)
-                    showLyrics = true
-                }) { Image(androidx.compose.ui.res.painterResource(R.drawable.song_lyrics), "Lyrics", Modifier.size(24.dp).alpha(.7f), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)) }
-                AudioOutputButton(audioOutputState, onClick = { showOutputs = true })
-                IconButton(onClick = onCycleLoop) {
-                    Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
-                }
-            }
             Column(
-                Modifier.fillMaxWidth().clickable(onClick = onShowQueue),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                Modifier.fillMaxWidth().offset(y = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                AnimatedContent(
-                    targetState = showNextTitle && nextTitle != null,
-                    transitionSpec = {
-                        fadeIn(tween(500, easing = WavvEaseInOut)) togetherWith
-                            fadeOut(tween(500, easing = WavvEaseInOut))
-                    },
-                    label = "next up and song title",
-                ) { showSongTitle ->
-                    Text(
-                        if (showSongTitle) nextTitle.orEmpty() else "Next Up",
-                        Modifier.fillMaxWidth()
-                            .graphicsLayer { translationY = nextUpOffset.value }
-                            .padding(top = 2.dp, bottom = 8.dp),
-                        color = Color.White.copy(.82f), fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = {
+                        onOpenLyricsArtwork(currentArtworkFrame)
+                        showLyrics = true
+                    }) { Image(androidx.compose.ui.res.painterResource(R.drawable.song_lyrics), "Lyrics", Modifier.size(24.dp).alpha(.7f), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)) }
+                    AudioOutputButton(audioOutputState, onClick = { showOutputs = true })
+                    IconButton(onClick = onCycleLoop) {
+                        Icon(if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = "Loop " + loopMode.name, tint = if (loopMode == LoopMode.Off) Color.White.copy(.4f) else Color.White.copy(.8f))
+                    }
+                }
+                Column(
+                    Modifier.fillMaxWidth().clickable(onClick = { onShowQueue(latestArtworkFlightFrame()) }),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    AnimatedContent(
+                        targetState = showNextTitle && nextTitle != null,
+                        transitionSpec = {
+                            fadeIn(tween(500, easing = WavvEaseInOut)) togetherWith
+                                fadeOut(tween(500, easing = WavvEaseInOut))
+                        },
+                        label = "next up and song title",
+                    ) { showSongTitle ->
+                        Text(
+                            if (showSongTitle) nextTitle.orEmpty() else "Next Up",
+                            Modifier.fillMaxWidth()
+                                .graphicsLayer { translationY = nextUpOffset.value }
+                                .padding(top = 2.dp, bottom = 8.dp),
+                            color = Color.White.copy(.82f), fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -3314,6 +3480,7 @@ private fun FullPlayer(
             QueuePanel(
                 song = song,
                 queue = state.queue,
+                currentQueueIndex = currentQueueIndex,
                 autoplaySongs = state.autoplaySongs,
                 autoplayEnabled = state.autoplayEnabled,
                 playingFrom = state.playingFrom,
@@ -3321,6 +3488,9 @@ private fun FullPlayer(
                 queueMode = queueMode,
                 loopMode = loopMode,
                 playlists = playlists,
+                artworkFlightActive = queueArtworkFlightActive,
+                onArtworkFrameChange = onQueueArtworkFrameChange,
+                onAddToQueue = onAddToQueue,
                 onLike = onLike,
                 onClose = onHideQueue,
                 onCycleLoop = onCycleLoop,
@@ -3390,27 +3560,80 @@ private fun FullPlayer(
         )
         if (showTrackOptions) {
             WavvBottomSheet(onDismissRequest = { showTrackOptions = false }) { close ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-                    AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
-                    Column(Modifier.weight(1f)) {
-                        Text("Track options", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(song.artist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
-                SheetActionRow(Icons.Default.SkipNext, "Play next") { close(); onPlayNext(song) }
-                SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") { close(); onAddToQueue(song) }
-                SheetActionRow(Icons.Default.Add, "Add to playlist") { playlistSong = song; close() }
-                SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
-                SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
-                if (state.isUHQEnhanced || audioDetails?.uhqEligible == true) {
-                    SheetActionRow(
-                        Icons.Default.GraphicEq,
-                        if (state.isUHQEnhanced) "Play original" else "Upgrade quality · UHQ",
-                    ) {
-                        close()
-                        onSetTrackUHQ(song.id, !state.isUHQEnhanced)
+                AnimatedContent(
+                    targetState = showTrackCredits,
+                    transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
+                    label = "track options and credits",
+                ) { showingCredits ->
+                    if (showingCredits) {
+                        Column(
+                            Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { showTrackCredits = false }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to track options", tint = Color.White)
+                                }
+                                Text("Credits", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
+                            }
+                            Row(
+                                Modifier.fillMaxWidth().padding(start = 5.dp, end = 5.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(13.dp),
+                            ) {
+                                AlbumArt(song, Modifier.size(56.dp), song.title, 12.dp)
+                                Column(Modifier.weight(1f)) {
+                                    Text(song.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(song.artist, color = Color.White.copy(.55f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            if (trackCredits.isEmpty()) {
+                                Text(
+                                    "No additional credits are available for this track.",
+                                    Modifier.padding(horizontal = 5.dp, vertical = 10.dp),
+                                    color = Color.White.copy(.6f),
+                                    fontSize = 14.sp,
+                                )
+                            } else {
+                                trackCredits.forEachIndexed { index, (label, value) ->
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 11.dp),
+                                        verticalAlignment = Alignment.Top,
+                                    ) {
+                                        Text(label, Modifier.width(126.dp), color = Color.White.copy(.48f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                        Text(value, Modifier.weight(1f), color = Color.White.copy(.92f), fontSize = 14.sp)
+                                    }
+                                    if (index != trackCredits.lastIndex) Hairline()
+                                }
+                            }
+                        }
+                    } else {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+                                AlbumArt(song, Modifier.size(58.dp), song.title, 12.dp)
+                                Column(Modifier.weight(1f)) {
+                                    Text("Track options", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(song.artist, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            Spacer(Modifier.height(14.dp))
+                            SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
+                            SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
+                            SheetActionRow(Icons.Default.Info, "Show credits") { showTrackCredits = true }
+                            SheetActionRow(Icons.Default.Add, "Add to playlist") { playlistSong = song; close() }
+                            SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
+                            SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
+                            if (state.isUHQEnhanced || audioDetails?.uhqEligible == true) {
+                                SheetActionRow(
+                                    Icons.Default.GraphicEq,
+                                    if (state.isUHQEnhanced) "Play original" else "Upgrade quality · UHQ",
+                                ) {
+                                    close()
+                                    onSetTrackUHQ(song.id, !state.isUHQEnhanced)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3607,6 +3830,38 @@ private fun QualityDetailRow(label: String, value: String) {
         Spacer(Modifier.width(12.dp))
         Text(value, color = Color.White.copy(.91f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
+}
+
+private fun songCreditDetails(song: Song): List<Pair<String, String>> = buildList {
+    fun addCredit(label: String, value: String?) {
+        val clean = value?.trim()?.takeIf {
+            it.isNotEmpty() && !it.equals("unknown", ignoreCase = true) &&
+                !it.equals("unknown artist", ignoreCase = true) &&
+                !it.equals("unknown album", ignoreCase = true)
+        } ?: return
+        add(label to clean)
+    }
+
+    addCredit("Main artist", song.mainArtistName())
+    addCredit("Contributing artists", song.contributingArtistNames().takeIf(List<String>::isNotEmpty)?.joinToString(", "))
+    addCredit("Album", song.album)
+    addCredit(
+        "Album artist",
+        song.albumArtist?.takeIf { albumArtist -> song.artistNames().none { it.equals(albumArtist.trim(), ignoreCase = true) } },
+    )
+    addCredit("Genre", song.fileGenreNames().takeIf(List<String>::isNotEmpty)?.joinToString(" · "))
+    addCredit("Year", song.year?.toString())
+    if (song.year == null) addCredit("Recording date", song.recordingDate)
+    addCredit("Composer", song.composer)
+    addCredit("Writer", song.writer)
+    addCredit("Author", song.author)
+    val track = when {
+        song.trackNumber != null && song.trackCount != null -> "${song.trackNumber} of ${song.trackCount}"
+        song.trackNumber != null -> song.trackNumber.toString()
+        else -> null
+    }
+    addCredit("Track", track)
+    addCredit("Disc", song.discNumber?.toString())
 }
 
 @Composable
@@ -4257,6 +4512,16 @@ private enum class QueueListSection { Queue, AutoPlay }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
+private fun QueueActionMenuIcon(iconRes: Int) {
+    Icon(
+        androidx.compose.ui.res.painterResource(iconRes),
+        contentDescription = null,
+        tint = Color.White.copy(.82f),
+        modifier = Modifier.size(18.dp),
+    )
+}
+
+@Composable
 private fun QueueSongRow(
     modifier: Modifier,
     song: Song,
@@ -4300,6 +4565,18 @@ private fun QueueSongRow(
         }
     }
 
+    fun dismissSwipe(direction: Float, onDismiss: () -> Unit) {
+        swipeAnimationJob?.cancel()
+        val start = swipeOffsetPx
+        val target = if (direction >= 0f) rowWidthPx else -rowWidthPx
+        swipeAnimationJob = scope.launch {
+            animate(start, target, animationSpec = tween(140, easing = WavvMotionEasing)) { value, _ ->
+                swipeOffsetPx = value
+            }
+            onDismiss()
+        }
+    }
+
     LaunchedEffect(canRemove, enabled) {
         if (!canRemove || !enabled) settleSwipe(0f)
     }
@@ -4324,12 +4601,12 @@ private fun QueueSongRow(
                     orientation = Orientation.Horizontal,
                     enabled = enabled && canRemove,
                     onDragStopped = { _ ->
-                        val removeThreshold = max(revealWidthPx * 2f, rowWidthPx * .38f)
+                        val removeThreshold = max(revealWidthPx * 1.5f, rowWidthPx * .3f)
                         val draggedFarEnough = kotlin.math.abs(swipeOffsetPx) >= removeThreshold
                         if (!latestSwipeEnabled.value) {
                             settleSwipe(0f)
                         } else if (draggedFarEnough) {
-                            onRemove()
+                            dismissSwipe(if (swipeOffsetPx > 0f) 1f else -1f, onRemove)
                         } else if (kotlin.math.abs(swipeOffsetPx) >= revealWidthPx * .72f) {
                             settleSwipe(if (swipeOffsetPx > 0f) revealWidthPx else -revealWidthPx)
                         } else {
@@ -4378,10 +4655,29 @@ private fun QueueSongRow(
         }
         DropdownMenu(expanded = menuExpanded, onDismissRequest = onDismissMenu) {
             if (isAutoplay) {
-                DropdownMenuItem(text = { Text("Play next") }, onClick = { onDismissMenu(); onPlayNext() })
-                DropdownMenuItem(text = { Text("Add to queue") }, onClick = { onDismissMenu(); onAddToQueue() })
+                DropdownMenuItem(
+                    text = { Text("Play next") },
+                    leadingIcon = { QueueActionMenuIcon(R.drawable.action_play_next) },
+                    onClick = { onDismissMenu(); onPlayNext() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Add to queue") },
+                    leadingIcon = { QueueActionMenuIcon(R.drawable.action_add_to_queue) },
+                    onClick = { onDismissMenu(); onAddToQueue() },
+                )
             } else {
-                DropdownMenuItem(text = { Text("Play next") }, onClick = { onDismissMenu(); onPlayNext() })
+                DropdownMenuItem(
+                    text = { Text("Play next") },
+                    leadingIcon = { QueueActionMenuIcon(R.drawable.action_play_next) },
+                    onClick = { onDismissMenu(); onPlayNext() },
+                )
+                if (isCurrent) {
+                    DropdownMenuItem(
+                        text = { Text("Add to queue") },
+                        leadingIcon = { QueueActionMenuIcon(R.drawable.action_add_to_queue) },
+                        onClick = { onDismissMenu(); onAddToQueue() },
+                    )
+                }
                 if (canRemove) {
                     DropdownMenuItem(text = { Text("Remove from queue") }, onClick = { onDismissMenu(); onRemove() })
                 }
@@ -4411,6 +4707,7 @@ private fun QueueSwipeDeleteAction(modifier: Modifier, enabled: Boolean, onRemov
 private fun QueuePanel(
     song: Song,
     queue: List<Song>,
+    currentQueueIndex: Int,
     autoplaySongs: List<Song>,
     autoplayEnabled: Boolean,
     playingFrom: String?,
@@ -4418,6 +4715,9 @@ private fun QueuePanel(
     queueMode: QueueMode,
     loopMode: LoopMode,
     playlists: List<UserPlaylist>,
+    artworkFlightActive: Boolean,
+    onArtworkFrameChange: (PlayerArtworkFrame) -> Unit,
+    onAddToQueue: (Song) -> Unit,
     onLike: () -> Unit,
     onClose: () -> Unit,
     onCycleLoop: () -> Unit,
@@ -4462,6 +4762,7 @@ private fun QueuePanel(
     var settlingTargetReady by remember { mutableStateOf(false) }
     val queueListState = rememberLazyListState()
     val density = LocalDensity.current
+    val queueArtworkCornerRadiusPx = with(density) { 10.dp.toPx() }
     val rowStepPx = with(density) { 84.dp.toPx() }
     val edgeZonePx = with(density) { 84.dp.toPx() }
     val maxAutoScrollPxPerSecond = with(density) { 1_100.dp.toPx() }
@@ -4856,17 +5157,38 @@ private fun QueuePanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            AlbumArt(song, Modifier.size(52.dp), song.title, 10.dp)
+            AlbumArt(
+                song,
+                Modifier.size(52.dp)
+                    .onGloballyPositioned { coordinates ->
+                        onArtworkFrameChange(
+                            PlayerArtworkFrame(
+                                bounds = coordinates.boundsInRoot(),
+                                cornerRadiusPx = queueArtworkCornerRadiusPx,
+                            ),
+                        )
+                    }
+                    .alpha(if (artworkFlightActive) 0f else 1f),
+                song.title,
+                10.dp,
+            )
             TrackText(song, Modifier.weight(1f), 15.sp, titleColor = WavvPink, subtitleColor = WavvPink.copy(alpha = .68f))
-            Box(Modifier.size(36.dp).clickable(onClick = onLike), contentAlignment = Alignment.Center) {
-                FigmaFavouriteIcon(liked, 29.dp)
-            }
+            FavouriteButton(liked, onLike, buttonSize = 36.dp, iconSize = 29.dp)
             Box {
                 Box(Modifier.size(36.dp).clickable { currentSongMenuExpanded = true }, contentAlignment = Alignment.Center) {
                     FigmaMoreIcon(28.dp)
                 }
                 DropdownMenu(expanded = currentSongMenuExpanded, onDismissRequest = { currentSongMenuExpanded = false }) {
-                    DropdownMenuItem(text = { Text("Play next") }, onClick = { currentSongMenuExpanded = false; onPlayNext(song) })
+                    DropdownMenuItem(
+                        text = { Text("Play next") },
+                        leadingIcon = { QueueActionMenuIcon(R.drawable.action_play_next) },
+                        onClick = { currentSongMenuExpanded = false; onPlayNext(song) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Add to queue") },
+                        leadingIcon = { QueueActionMenuIcon(R.drawable.action_add_to_queue) },
+                        onClick = { currentSongMenuExpanded = false; onAddToQueue(song) },
+                    )
                     DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { currentSongMenuExpanded = false; playlistSong = song })
                     DropdownMenuItem(text = { Text("Go to album") }, onClick = { currentSongMenuExpanded = false; onNavigateToAlbum(song) })
                     DropdownMenuItem(text = { Text("Go to artist") }, onClick = { currentSongMenuExpanded = false; onNavigateToArtist(song) })
@@ -4902,7 +5224,7 @@ private fun QueuePanel(
             itemsIndexed(displayedQueueEntries, key = { _, entry -> entry.key }) { index, entry ->
                 val item = entry.song
                 val rowKey = entry.key
-                val isCurrent = item.id == song.id
+                val isCurrent = index == currentQueueIndex
                 val isBeingDragged = rowKey == draggingSongKey
                 val isSettling = rowKey == settlingSongKey
                 val rowAlpha = when {
@@ -4944,7 +5266,7 @@ private fun QueuePanel(
                     onDismissMenu = { menuKey = null },
                     onRemove = { onRemoveQueueItem(index) },
                     onPlayNext = { onPlayNext(item) },
-                    onAddToQueue = {},
+                    onAddToQueue = { if (isCurrent) onAddToQueue(item) },
                     onAddToPlaylist = { playlistSong = item },
                     onNavigateToAlbum = { onNavigateToAlbum(item) },
                     onNavigateToArtist = { onNavigateToArtist(item) },
@@ -6224,8 +6546,8 @@ private fun LyricsTrackActionsMenu(
                     AlbumArt(song, Modifier.matchParentSize().scale(1.16f).blur(25.dp), null, 0.dp)
                     Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color(0xE934363B), Color(0xED24262B)))))
                     Column(Modifier.width(IntrinsicSize.Max).padding(vertical = 5.dp)) {
-                        LyricsMenuItem(Icons.Default.SkipNext, "Play next", onClick = onPlayNext)
-                        LyricsMenuItem(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue", onClick = onAddToQueue)
+                        LyricsMenuItem(R.drawable.action_play_next, "Play next", onClick = onPlayNext)
+                        LyricsMenuItem(R.drawable.action_add_to_queue, "Add to queue", onClick = onAddToQueue)
                         LyricsMenuItem(Icons.Default.Add, "Add to playlist", onClick = onAddToPlaylist)
                         LyricsMenuItem(Icons.Default.Album, "Go to album", onClick = onNavigateToAlbum)
                         LyricsMenuItem(Icons.Default.Mic, "Go to artist", onClick = onNavigateToArtist)
@@ -6250,13 +6572,40 @@ private fun LyricsMenuItem(
     enabled: Boolean = true,
     selected: Boolean = false,
     onClick: () -> Unit,
+) = LyricsMenuItemLayout(label, enabled, selected, onClick) {
+    Icon(icon, contentDescription = null, tint = Color.White.copy(if (enabled) .78f else .32f), modifier = Modifier.size(18.dp))
+}
+
+@Composable
+private fun LyricsMenuItem(
+    iconRes: Int,
+    label: String,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) = LyricsMenuItemLayout(label, enabled, selected, onClick) {
+    Icon(
+        androidx.compose.ui.res.painterResource(iconRes),
+        contentDescription = null,
+        tint = Color.White.copy(if (enabled) .78f else .32f),
+        modifier = Modifier.size(18.dp),
+    )
+}
+
+@Composable
+private fun LyricsMenuItemLayout(
+    label: String,
+    enabled: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().height(46.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = Color.White.copy(if (enabled) .78f else .32f), modifier = Modifier.size(18.dp))
+        icon()
         Text(
             label,
             Modifier.weight(1f),

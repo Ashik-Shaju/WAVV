@@ -5,7 +5,6 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,7 +38,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
@@ -50,7 +48,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -129,7 +126,7 @@ internal fun YouScreen(
     val automaticLyricsSearchEnabled by AutomaticLyricsSearchPreference.state(context).collectAsStateWithLifecycle()
     val trackCount = songs.size
     val artistCount = songs.asSequence()
-        .map { it.artist.trim() }
+        .flatMap { it.artistNames().asSequence() }
         .filter(String::isNotEmpty)
         .distinctBy { it.lowercase(Locale.ROOT) }
         .count()
@@ -199,33 +196,10 @@ internal fun YouScreen(
     var confirmClearHistory by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            ScreenHeader("You")
+            ScreenHeader("Settings")
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 160.dp)) {
                 item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 30.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    ) {
-                        Box(Modifier.size(96.dp).shadow(24.dp, CircleShape).clip(CircleShape).background(Color(0xFF6250D6)).border(3.dp, Color(0x667B3FF5), CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Person, contentDescription = "You", tint = Color.White, modifier = Modifier.size(46.dp))
-                        }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("You", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-.6).sp, lineHeight = 29.sp)
-                            Text("Your library, on this device", color = Color.White.copy(.62f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Surface(
-                                Modifier.padding(top = 8.dp),
-                                shape = CircleShape,
-                                color = Color.White.copy(.12f),
-                                border = BorderStroke(1.dp, Color.White.copy(.18f)),
-                            ) {
-                                Text("NO ACCOUNT REQUIRED", Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-                item {
-                    Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.padding(start = 20.dp, top = 16.dp, end = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         ShelfLabel("On this device")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             StatCard(trackCount.toString(), "Tracks", Modifier.weight(1f))
@@ -810,6 +784,29 @@ internal fun SheetActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     onClick: () -> Unit,
+) = SheetActionRowLayout(title, onClick) {
+    Icon(icon, contentDescription = null, tint = Color.White.copy(.82f), modifier = Modifier.size(21.dp))
+}
+
+@Composable
+internal fun SheetActionRow(
+    iconRes: Int,
+    title: String,
+    onClick: () -> Unit,
+) = SheetActionRowLayout(title, onClick) {
+    Icon(
+        androidx.compose.ui.res.painterResource(iconRes),
+        contentDescription = null,
+        tint = Color.White.copy(.82f),
+        modifier = Modifier.size(21.dp),
+    )
+}
+
+@Composable
+private fun SheetActionRowLayout(
+    title: String,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(CircleShape)
@@ -820,7 +817,7 @@ internal fun SheetActionRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = Color.White.copy(.82f), modifier = Modifier.size(21.dp))
+        icon()
         Text(title, Modifier.weight(1f), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(.3f), modifier = Modifier.size(16.dp))
     }

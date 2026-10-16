@@ -1667,8 +1667,8 @@ private fun SongActionsSheet(
             }
         }
         Spacer(Modifier.height(14.dp))
-        SheetActionRow(Icons.Default.SkipNext, "Play next") { close(); onPlayNext(song) }
-        SheetActionRow(Icons.AutoMirrored.Filled.PlaylistPlay, "Add to queue") { close(); onAddToQueue(song) }
+        SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
+        SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
         SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
             close(); onToggleFavorite(song)
         }
