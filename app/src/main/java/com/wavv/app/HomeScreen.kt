@@ -526,6 +526,7 @@ internal fun HomeScreen(
     stackListExpanded: Boolean,
     onStackListExpandedChange: (Boolean) -> Unit,
     hasNowPlaying: Boolean,
+    isNowPlayingOpen: Boolean,
     onExpandPlayer: () -> Unit,
     recentSongs: List<Song> = emptyList(),
     personalizedRecommendations: List<Song> = emptyList(),
@@ -635,7 +636,10 @@ internal fun HomeScreen(
     LaunchedEffect(homeReselectSignal) {
         if (homeReselectSignal > 0) closeHomeMixDetail()
     }
-    BackHandler(enabled = mixDetailVisible) { closeHomeMixDetail() }
+    // The full player is layered above this screen and owns the first Back press.
+    // Leave the mix detail open until the full player has returned to the mini-player;
+    // the next Back press then closes the mix with its carousel artwork flight.
+    BackHandler(enabled = mixDetailVisible && !isNowPlayingOpen) { closeHomeMixDetail() }
     var backdropSong by remember(carouselSongs) { mutableStateOf(carouselSongs.firstOrNull()) }
     var acrylicChipColor by remember { mutableStateOf(Color(0xFF26385D)) }
     val context = LocalContext.current

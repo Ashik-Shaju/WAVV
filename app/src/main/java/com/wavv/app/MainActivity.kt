@@ -1625,6 +1625,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             if (!expanded) homeStackIndex = 0
                         },
                         hasNowPlaying = activeSong != null,
+                        isNowPlayingOpen = showPlayer,
                         smartMixes = smartMixes,
                         onPlayMix = startMix,
                         homeMixArtworkFlightActive = artworkFlightDestination == ArtworkFlightDestination.HomeMixDetail && artworkFlight != null,
