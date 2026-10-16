@@ -18,9 +18,11 @@ internal data class MusicQueryIntent(
     val artist: String? = null,
     val album: String? = null,
     val composer: String? = null,
+    val lexicalText: String = semanticText,
+    val genreFilter: Boolean = false,
 ) {
     val hasMetadataFilters: Boolean
-        get() = languageCode != null || genre != null || year != null || artist != null || album != null || composer != null
+        get() = languageCode != null || genreFilter || year != null || artist != null || album != null || composer != null
 }
 
 internal data class LocalListeningEvent(
@@ -76,10 +78,12 @@ internal fun parseMusicQuery(query: String, songs: List<Song>): MusicQueryIntent
         }
     }
 
+    val lexicalRemainder = remainder
     val knownGenres = songs.flatMap(Song::genreNames).distinctBy(String::normalized)
         .sortedByDescending(String::length)
     genre = knownGenres.firstOrNull(remainder::containsWordPhrase)
-    if (genre != null) remainder = remainder.replacePhrase(genre)
+    val genreFilter = genre?.let { remainder.containsWordPhrase("in $it") } == true
+    genre?.takeIf { genreFilter }?.let { remainder = remainder.replacePhrase(it) }
 
     year = YEAR.find(remainder)?.groupValues?.getOrNull(1)?.toIntOrNull()
         ?.takeIf { target -> songs.any { it.year == target } }
@@ -98,7 +102,22 @@ internal fun parseMusicQuery(query: String, songs: List<Song>): MusicQueryIntent
         .replace(REQUEST_WORDS, " ")
         .replace(WHITESPACE, " ")
         .trim()
-    return MusicQueryIntent(remainder, languageCode, genre, year, artist, album, composer)
+    val lexicalText = lexicalRemainder
+        .replace(COMPOSED_BY, " ")
+        .replace(REQUEST_WORDS, " ")
+        .replace(WHITESPACE, " ")
+        .trim()
+    return MusicQueryIntent(
+        semanticText = remainder,
+        languageCode = languageCode,
+        genre = genre,
+        year = year,
+        artist = artist,
+        album = album,
+        composer = composer,
+        lexicalText = lexicalText,
+        genreFilter = genreFilter,
+    )
 }
 
 internal fun rankLocalSearch(
@@ -112,7 +131,7 @@ internal fun rankLocalSearch(
     if (limit <= 0) return emptyList()
     val candidates = songs.distinctBy(Song::id).filter { song ->
         (intent.languageCode == null || song.languageTags.any { languageCode(it) == intent.languageCode }) &&
-            (intent.genre == null || song.genreNames().any { it.equals(intent.genre, ignoreCase = true) }) &&
+            (!intent.genreFilter || intent.genre == null || song.genreNames().any { it.equals(intent.genre, ignoreCase = true) }) &&
             (intent.year == null || song.year == intent.year) &&
             (intent.artist == null || song.artist.equals(intent.artist, true) || song.albumArtist.equals(intent.artist, true)) &&
             (intent.album == null || song.album.equals(intent.album, true)) &&
@@ -123,11 +142,21 @@ internal fun rankLocalSearch(
     val semantic = semanticMatches.asSequence()
         .filter { it.cosineSimilarity.isFinite() }
         .associate { it.songId to it.cosineSimilarity.toDouble() }
-    val semanticValues = candidates.mapNotNull { semantic[it.id] }
-    val tokens = intent.semanticText.tokens()
+    val tokens = intent.lexicalText.tokens()
     val lexical = candidates.associate { song -> song.id to lexicalScore(song, tokens, tagsBySong[song.id].orEmpty()) }
-    val hasSemantic = semanticValues.isNotEmpty()
-    val hasTextMatch = lexical.values.any { it > 0.0 }
+    val genreVocabulary = songs.flatMap(Song::genreNames) + tagsBySong.values.flatten()
+        .filter { it.isGenreTag() && it.isAboveThreshold() }
+        .map(MusicTag::label)
+    val vocabularyTokens = genreVocabulary.flatMap(String::tokens).toSet()
+    val genreTokens = if (intent.genre != null) intent.genre.tokens().toSet() else tokens.filter { it in vocabularyTokens }.toSet()
+    val genreScores = candidates.associate { song ->
+        song.id to genreScore(song, genreTokens, tagsBySong[song.id].orEmpty())
+    }
+    val hasLexical = lexical.values.any { it > 0.0 }
+    val hasGenre = genreTokens.isNotEmpty()
+    val hasSearchText = intent.semanticText.isNotBlank() || intent.lexicalText.isNotBlank()
+    val semanticWeight = if (hasGenre) SEARCH_GENRE_SEMANTIC_WEIGHT else SEARCH_SEMANTIC_WEIGHT
+    val lexicalWeight = if (hasGenre) SEARCH_GENRE_LEXICAL_WEIGHT else SEARCH_LEXICAL_WEIGHT
     val preferencePositions = preferenceOrder.asSequence()
         .distinctBy(Song::id)
         .take(SEARCH_PREFERENCE_LIMIT)
@@ -135,18 +164,28 @@ internal fun rankLocalSearch(
         .toMap()
     val scored = candidates.mapNotNull { song ->
         val lexicalScore = lexical.getValue(song.id)
-        val semanticScore = semantic[song.id]?.let { score -> ((score + 1.0) / 2.0).coerceIn(0.0, 1.0) } ?: 0.0
+        val semanticScore = semantic[song.id]?.coerceIn(0.0, 1.0)
+        val genreScore = genreScores.getValue(song.id)
+        val hasPositiveSemantic = semanticScore != null && semanticScore > 0.0 && intent.semanticText.isNotBlank()
         if (
-            !intent.hasMetadataFilters && intent.semanticText.isNotBlank() && hasSemantic &&
-            song.id !in semantic && lexicalScore == 0.0
+            !intent.hasMetadataFilters && hasSearchText &&
+            !hasPositiveSemantic && lexicalScore == 0.0 && genreScore == 0.0
         ) return@mapNotNull null
-        if (!intent.hasMetadataFilters && intent.semanticText.isNotBlank() && !hasSemantic && lexicalScore == 0.0) return@mapNotNull null
-        if (!intent.hasMetadataFilters && intent.semanticText.isNotBlank() && !hasTextMatch && !hasSemantic) return@mapNotNull null
-        val score = when {
-            intent.semanticText.isBlank() -> lexicalScore
-            hasSemantic -> semanticScore * 0.72 + lexicalScore * 0.28
-            else -> lexicalScore
-        } + preferencePositions[song.id]?.let { index ->
+        var weightedScore = 0.0
+        var totalWeight = 0.0
+        if (intent.semanticText.isNotBlank() && semanticScore != null) {
+            weightedScore += semanticWeight * semanticScore
+            totalWeight += semanticWeight
+        }
+        if (hasLexical) {
+            weightedScore += lexicalWeight * lexicalScore
+            totalWeight += lexicalWeight
+        }
+        if (hasGenre) {
+            weightedScore += SEARCH_GENRE_WEIGHT * genreScore
+            totalWeight += SEARCH_GENRE_WEIGHT
+        }
+        val score = (weightedScore / totalWeight.coerceAtLeast(1e-9)) + preferencePositions[song.id]?.let { index ->
             SEARCH_PREFERENCE_BOOST * (1.0 - index.toDouble() / SEARCH_PREFERENCE_LIMIT)
         }.orZero()
         song to score
@@ -212,8 +251,13 @@ internal fun buildSeededRecommendations(
         val audioMatch = audioScore >= MIN_COLD_START_AUDIO_AFFINITY
         val creatorMatch = seedCreators.any { it in song.creatorKeys() }
         if (!audioMatch && genreScore == 0.0 && tagScore == 0.0 && !creatorMatch) return@mapNotNull null
-        val creatorScore = if (creatorMatch) COLD_START_CREATOR_MATCH_SCORE else 0.0
-        song to maxOf(if (audioMatch) audioScore else 0.0, genreScore, tagScore, creatorScore)
+        val metadataScore = metadataSimilarity(seed, song)
+        val score = COLD_START_AUDIO_WEIGHT * (if (audioMatch) audioScore.coerceIn(0.0, 1.0) else 0.0) +
+            COLD_START_GENRE_WEIGHT * genreScore +
+            COLD_START_TAG_WEIGHT * tagScore +
+            COLD_START_CREATOR_WEIGHT * (if (creatorMatch) 1.0 else 0.0) +
+            COLD_START_METADATA_WEIGHT * metadataScore
+        song to score
     }
     return diverseOrder(ranked, limit)
 }
@@ -248,6 +292,7 @@ internal fun buildPersonalizedDiscovery(
     val sessionArtists = mutableMapOf<String, Double>()
     val longTermTags = mutableMapOf<String, Double>()
     val sessionTags = mutableMapOf<String, Double>()
+    val longTermMetadata = mutableMapOf<String, Double>()
     val recentPlays = mutableMapOf<Long, Long>()
     val positiveByGenre = mutableMapOf<String, Double>()
     val timeWeights = timeOfDayPreferenceWeights(usableEvents, nowMs, timeZone)
@@ -281,6 +326,12 @@ internal fun buildPersonalizedDiscovery(
         if (event.eventType in PLAY_EVENTS) recentPlays[event.songId] = maxOf(recentPlays[event.songId] ?: 0L, event.timestampMs)
         if (baseWeight > 0.0) {
             val tags = tagsBySong[event.songId].orEmpty()
+            song.personalizationMetadata().forEach { (field, values) ->
+                values.forEach { value ->
+                    val key = metadataDiscoveryKey(field, value)
+                    longTermMetadata[key] = (longTermMetadata[key] ?: 0.0) + longWeight
+                }
+            }
             tags.asSequence()
                 .filter { it.isAboveThreshold() && !it.isGenreTag() }
                 .forEach { tag ->
@@ -307,6 +358,12 @@ internal fun buildPersonalizedDiscovery(
         val song = songById.getValue(id)
         val tags = tagsBySong[id].orEmpty()
         longTermWeights[id] = (longTermWeights[id] ?: 0.0) + 2.8
+        song.personalizationMetadata().forEach { (field, values) ->
+            values.forEach { value ->
+                val key = metadataDiscoveryKey(field, value)
+                longTermMetadata[key] = (longTermMetadata[key] ?: 0.0) + 2.8
+            }
+        }
         song.genreNames().forEach { genre ->
             val confidence = song.genreConfidence(genre, tags)
             if (confidence <= 0.0) return@forEach
@@ -360,6 +417,9 @@ internal fun buildPersonalizedDiscovery(
     val timeGenreMax = timeGenres.values.maxOrNull() ?: 0.0
     val timeArtistMax = timeArtists.values.maxOrNull() ?: 0.0
     val timeTagMax = timeTags.values.maxOrNull() ?: 0.0
+    val longMetadataFields = longTermMetadata.keys.mapTo(mutableSetOf()) {
+        it.substringBefore(METADATA_KEY_SEPARATOR)
+    }
     val ranked = catalog.mapNotNull { song ->
         val vector = audioVectors[song.id]?.takeIf { it.isValidVector() }
         val longContent = vector?.let { cosine(it, longVector) } ?: 0.0
@@ -391,13 +451,25 @@ internal fun buildPersonalizedDiscovery(
             .filter { it.isAboveThreshold() && !it.isGenreTag() }
             .maxOfOrNull { tag -> timeTags[tag.discoveryKey()].orZero().normalizedBy(timeTagMax) * tag.probability }
             ?: 0.0
+        val candidateMetadata = song.personalizationMetadata()
+        val metadataComponents = PERSONALIZATION_METADATA_WEIGHTS.mapNotNull { (field, weight) ->
+            val candidateValues = candidateMetadata[field] ?: return@mapNotNull null
+            if (field !in longMetadataFields) return@mapNotNull null
+            val match = candidateValues.maxOfOrNull { value ->
+                longTermMetadata[metadataDiscoveryKey(field, value)].orZero().normalizedBy(METADATA_PROFILE_NORMALIZER)
+            } ?: 0.0
+            weight to match
+        }
+        val metadataScore = metadataComponents.sumOf { (weight, value) -> weight * value } /
+            metadataComponents.sumOf { it.first }.coerceAtLeast(1e-9)
         val lastPlay = recentPlays[song.id]
         val daysSincePlay = lastPlay?.let { (nowMs - it).coerceAtLeast(0L) / DAY_MS }
         val repeatPenalty = if (daysSincePlay == null) 0.0 else (0.26 * exp(-daysSincePlay.toDouble() / 5.0))
         val score = longContent * .34 + genreScore * .17 + artistScore * .13 +
             sessionContent * .18 + sessionGenreScore * .08 + sessionArtistScore * .04 +
             tagScore * .04 + sessionTagScore * .03 + timeContent * .08 + timeGenreScore * .03 +
-            timeArtistScore * .01 + timeTagScore * .01 + (if (song.id in favoriteIds) .12 else 0.0) - repeatPenalty
+            timeArtistScore * .01 + timeTagScore * .01 + metadataScore * PERSONALIZATION_METADATA_WEIGHT +
+            (if (song.id in favoriteIds) .12 else 0.0) - repeatPenalty
         val hasContentEvidence = vector != null && (longVector.isNotEmpty() || sessionVector.isNotEmpty())
         val hasPreferenceEvidence = song.id in favoriteIds || hasContentEvidence || genreScore > 0.0 ||
             sessionGenreScore > 0.0 || artistScore > 0.0 || sessionArtistScore > 0.0 || tagScore > 0.0 ||
@@ -685,7 +757,8 @@ private fun lexicalScore(song: Song, tokens: List<String>, tags: List<MusicTag>)
         song.albumArtist to .8,
         song.album to .75,
         song.composer to .72,
-        song.genre to .8,
+        song.durationMs.takeIf { it > 0L }?.toString() to .15,
+        song.fileSizeBytes.takeIf { it > 0L }?.toString() to .08,
         song.year?.toString() to .7,
         song.trackNumber?.toString() to .5,
         song.discNumber?.toString() to .4,
@@ -698,8 +771,10 @@ private fun lexicalScore(song: Song, tokens: List<String>, tags: List<MusicTag>)
         song.sampleRate?.toString() to .2,
         song.channels?.toString() to .2,
         song.trackCount?.toString() to .1,
-    ) + song.fileGenreNames().map { it to .8 } + song.languageTags.map { it to .6 } +
-        tags.filter(MusicTag::isAboveThreshold).map { "${it.label} ${it.taxonomy} ${it.task}" to it.probability.toDouble() }
+        song.isCompilation?.takeIf { it }?.let { "compilation" to .2 },
+    ) + song.languageTags.map { it to .6 } +
+        tags.filter { it.isAboveThreshold() && !it.isGenreTag() }
+            .map { "${it.label} ${it.taxonomy} ${it.task}" to it.probability.toDouble() }
     val values = fields.mapNotNull { (value, weight) -> value?.lowercase(Locale.ROOT)?.let { it to weight } }
     val perToken = tokens.map { token ->
         values.maxOfOrNull { (value, weight) ->
@@ -712,6 +787,19 @@ private fun lexicalScore(song: Song, tokens: List<String>, tags: List<MusicTag>)
         } ?: 0.0
     }
     return perToken.average()
+}
+
+private fun genreScore(song: Song, queryTokens: Set<String>, tags: List<MusicTag>): Double {
+    if (queryTokens.isEmpty()) return 0.0
+    val genres = song.fileGenreNames().map { it to 1.0 } +
+        song.inferredGenres.map { it to song.genreConfidence(it, tags) } +
+        tags.filter { it.isGenreTag() && it.isAboveThreshold() }
+            .map { it.label to it.probability.toDouble() }
+    return genres.maxOfOrNull { (label, confidence) ->
+        val labelTokens = label.tokens().toSet()
+        val coverage = queryTokens.count { it in labelTokens }.toDouble() / queryTokens.size
+        coverage * confidence.coerceIn(0.0, 1.0)
+    } ?: 0.0
 }
 
 private fun takeKnownField(query: String, values: List<String>, marker: String): String? {
@@ -767,6 +855,46 @@ private fun diverseOrder(ranked: List<Pair<Song, Double>>, limit: Int): List<Son
 }
 
 private fun longArtistsScore(key: String, weights: Map<String, Double>, maximum: Double) = weights[key].orZero().normalizedBy(maximum)
+private fun metadataDiscoveryKey(field: String, value: String) = "$field$METADATA_KEY_SEPARATOR$value"
+
+// Keep catalog facts separate from creator, genre, and model-tag profiles; IDs and storage locations are not taste signals.
+private fun Song.personalizationMetadata(): Map<String, List<String>> = buildMap {
+    fun add(field: String, value: String?) {
+        value?.trim()?.takeIf(String::isNotEmpty)?.let { put(field, listOf(it.normalized())) }
+    }
+    add("album", album)
+    fileSizeBytes.takeIf { it > 0L }?.let { put("fileSize", listOf(when { it < 5_000_000L -> "small"; it < 20_000_000L -> "medium"; else -> "large" })) }
+    year?.let { put("year", listOf((it / 10 * 10).toString())) }
+    trackNumber?.let { put("trackNumber", listOf(it.toString())) }
+    discNumber?.let { put("discNumber", listOf(it.toString())) }
+    val languages = languageTags.mapNotNull(::languageCode).distinct()
+    if (languages.isNotEmpty()) put("language", languages)
+    recordingDate?.take(4)?.toIntOrNull()?.let { put("recordingDate", listOf((it / 10 * 10).toString())) }
+    isCompilation?.let { put("isCompilation", listOf(it.toString())) }
+    durationMs.takeIf { it > 0L }?.let {
+        put("duration", listOf(when (it) { in 1L..179_999L -> "short"; in 180_000L..359_999L -> "medium"; else -> "long" }))
+    }
+    add("codec", codec)
+    add("container", container)
+    bitrate?.takeIf { it > 0 }?.let { put("bitrate", listOf(when { it < 160_000 -> "low"; it < 320_000 -> "medium"; else -> "high" })) }
+    sampleRate?.takeIf { it > 0 }?.let { put("sampleRate", listOf(when { it <= 44_100 -> "standard"; it <= 48_000 -> "high"; else -> "hi-res" })) }
+    channels?.takeIf { it > 0 }?.let { put("channels", listOf(when (it) { 1 -> "mono"; 2 -> "stereo"; else -> "multi" })) }
+    trackCount?.takeIf { it > 0 }?.let { put("trackCount", listOf(it.toString())) }
+}
+
+private fun metadataSimilarity(left: Song, right: Song): Double {
+    val leftMetadata = left.personalizationMetadata()
+    val rightMetadata = right.personalizationMetadata()
+    val sharedFields = PERSONALIZATION_METADATA_WEIGHTS.mapNotNull { (field, weight) ->
+        val leftValues = leftMetadata[field].orEmpty()
+        val rightValues = rightMetadata[field].orEmpty()
+        if (leftValues.isEmpty() || rightValues.isEmpty()) null
+        else weight to if (leftValues.any { it in rightValues }) 1.0 else 0.0
+    }
+    return sharedFields.sumOf { (weight, match) -> weight * match } /
+        sharedFields.sumOf { it.first }.coerceAtLeast(1e-9)
+}
+
 private fun Song.creatorKeys(): List<String> = listOfNotNull(
     artist.takeUnless { it.equals("Unknown artist", ignoreCase = true) },
     albumArtist,
@@ -781,7 +909,7 @@ private fun Double?.orZero() = this ?: 0.0
 private fun Double.normalizedBy(maximum: Double) = if (maximum <= 0.0) 0.0 else (this / maximum).coerceIn(0.0, 1.0)
 private fun String.normalized() = trim().lowercase(Locale.ROOT)
 private fun String.tokens() = lowercase(Locale.ROOT).split(WORD_BREAKS)
-    .filter { it.length > 1 }
+    .filter { it.length > 1 || it.any(Char::isDigit) }
     .distinct()
 private fun String.containsWordPhrase(phrase: String): Boolean = Regex("(?i)(?<![\\p{L}\\p{N}])${Regex.escape(phrase)}(?![\\p{L}\\p{N}])").containsMatchIn(this)
 private fun String.replacePhrase(phrase: String) = replace(Regex("(?i)(?<![\\p{L}\\p{N}])${Regex.escape(phrase)}(?![\\p{L}\\p{N}])"), " ")
@@ -831,11 +959,41 @@ private const val LONG_LISTEN_SKIP_SECONDS = 60L
 private const val REDISCOVER_AFTER_MS = 30L * DAY_MS
 private const val MIX_SIZE = 12
 private const val MIN_MIX_SIZE = 3
+private const val SEARCH_SEMANTIC_WEIGHT = .60
+private const val SEARCH_LEXICAL_WEIGHT = .40
+private const val SEARCH_GENRE_SEMANTIC_WEIGHT = .45
+private const val SEARCH_GENRE_LEXICAL_WEIGHT = .30
+private const val SEARCH_GENRE_WEIGHT = .25
 private const val SEARCH_PREFERENCE_LIMIT = 20
 private const val SEARCH_PREFERENCE_BOOST = 0.035
+private const val COLD_START_AUDIO_WEIGHT = .50
+private const val COLD_START_GENRE_WEIGHT = .22
+private const val COLD_START_TAG_WEIGHT = .15
+private const val COLD_START_CREATOR_WEIGHT = .08
+private const val COLD_START_METADATA_WEIGHT = .05
+private const val PERSONALIZATION_METADATA_WEIGHT = .08
+private const val METADATA_KEY_SEPARATOR = "\u001f"
+private const val METADATA_PROFILE_NORMALIZER = 2.8
+// shortcut: hand-set weights have not been calibrated against held-out listener judgments.
+private val PERSONALIZATION_METADATA_WEIGHTS = mapOf(
+    "album" to .20,
+    "fileSize" to .01,
+    "year" to .10,
+    "trackNumber" to .02,
+    "discNumber" to .01,
+    "language" to .15,
+    "recordingDate" to .08,
+    "isCompilation" to .03,
+    "duration" to .08,
+    "codec" to .04,
+    "container" to .04,
+    "bitrate" to .08,
+    "sampleRate" to .07,
+    "channels" to .04,
+    "trackCount" to .02,
+)
 // shortcut: this is an uncalibrated DCLAP closeness gate; retune only with held-out listening judgments.
 private const val MIN_COLD_START_AUDIO_AFFINITY = 0.75
-private const val COLD_START_CREATOR_MATCH_SCORE = 0.6
 private val PLAY_EVENTS = setOf("play", "completion", "complete", "replay")
 private val TASTE_SIGNAL_EVENTS = setOf("play", "completion", "complete", "replay", "playlist_add", "queue_add")
 private val LANGUAGE_METADATA_KEYS = setOf("tlan", "lang", "language", "languagecode", "txxxlanguage")

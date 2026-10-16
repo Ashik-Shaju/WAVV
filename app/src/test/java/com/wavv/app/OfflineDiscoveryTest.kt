@@ -91,6 +91,25 @@ class OfflineDiscoveryTest {
     }
 
     @Test
+    fun plainGenreWordsUseTheirOwnRankingSignal() {
+        val fileGenre = song(21, "Quiet Harbor", "Jazz", null)
+        val modelGenre = song(22, "Blue Room", "", null).copy(inferredGenres = listOf("Jazz"))
+        val unrelated = song(23, "Unrelated", "Rock", null)
+        val tags = mapOf(modelGenre.id to listOf(MusicTag("genre:jazz", "genre", "Jazz", "model", .85f, .5f)))
+
+        val results = rankLocalSearch(
+            songs = listOf(unrelated, modelGenre, fileGenre),
+            intent = parseMusicQuery("jazz", listOf(unrelated, modelGenre, fileGenre)),
+            semanticMatches = emptyList(),
+            tagsBySong = tags,
+        )
+
+        assertEquals(fileGenre.id, results.first().id)
+        assertTrue(results.any { it.id == modelGenre.id })
+        assertFalse(results.any { it.id == unrelated.id })
+    }
+
+    @Test
     fun semanticRankingDoesNotChangeWhenAnUnrelatedLowSimilarityTrackIsIndexed() {
         val unrelated = tracks[0].copy(id = 11L, title = "Unrelated", genre = null, genres = emptyList())
         val lexical = tracks[0].copy(id = 12L, title = "Happy", genre = null, genres = emptyList())
@@ -167,6 +186,53 @@ class OfflineDiscoveryTest {
                 semanticMatches = emptyList(),
                 tagsBySong = mapOf(2L to listOf(MusicTag("mood", "mood", "calm", "model", .9f, .5f))),
             ).first().id == 2L,
+        )
+    }
+
+    @Test
+    fun searchableMetadataFieldsEachContributeLexicalEvidence() {
+        val control = song(40, "Control", "", null).copy(durationMs = 0L)
+        val base = song(41, "Candidate", "", null).copy(durationMs = 0L)
+        val cases = listOf(
+            "needle" to base.copy(title = "needle"),
+            "needle" to base.copy(artist = "needle"),
+            "needle" to base.copy(albumArtist = "needle"),
+            "needle" to base.copy(album = "needle"),
+            "needle" to base.copy(composer = "needle"),
+            "1984" to base.copy(year = 1984),
+            "4" to base.copy(trackNumber = 4),
+            "2" to base.copy(discNumber = 2),
+            "needle" to base.copy(languageTags = listOf("needle")),
+            "needle" to base.copy(author = "needle"),
+            "needle" to base.copy(writer = "needle"),
+            "needle" to base.copy(recordingDate = "needle"),
+            "flac" to base.copy(codec = "flac"),
+            "m4a" to base.copy(container = "m4a"),
+            "128000" to base.copy(bitrate = 128_000),
+            "44100" to base.copy(sampleRate = 44_100),
+            "2" to base.copy(channels = 2),
+            "12" to base.copy(trackCount = 12),
+            "compilation" to base.copy(isCompilation = true),
+            "180000" to base.copy(durationMs = 180_000L),
+            "42000000" to base.copy(fileSizeBytes = 42_000_000L),
+        )
+
+        cases.forEachIndexed { index, (query, match) ->
+            val candidate = match.copy(id = 100L + index)
+            val results = rankLocalSearch(
+                songs = listOf(control, candidate),
+                intent = MusicQueryIntent(query),
+                semanticMatches = emptyList(),
+            )
+
+            assertEquals("Metadata field for query '$query' should contribute", candidate.id, results.firstOrNull()?.id)
+        }
+
+        val titleMatch = control.copy(id = 200L, title = "needle")
+        val codecMatch = control.copy(id = 201L, title = "Other", codec = "needle")
+        assertEquals(
+            titleMatch.id,
+            rankLocalSearch(listOf(codecMatch, titleMatch), MusicQueryIntent("needle"), emptyList()).first().id,
         )
     }
 
@@ -303,6 +369,88 @@ class OfflineDiscoveryTest {
         assertTrue(recommendations.any { it.id == vectorMatch.id })
         assertTrue(recommendations.any { it.id == calmMatch.id })
         assertFalse(recommendations.any { it.id == seed.id || it.id == weakVectorOnly.id })
+    }
+
+    @Test
+    fun seededRecommendationsBlendAudioGenreTagsCreatorsAndOtherMetadataByWeight() {
+        val seed = song(20, "Seed", "Rock", null).copy(artist = "")
+        val audioOnly = song(21, "Audio", "", null).copy(artist = "")
+        val combined = song(22, "Combined", "Rock", null).copy(artist = "")
+        val genreOnly = song(23, "Genre", "Rock", null).copy(artist = "")
+        val tagOnly = song(24, "Tag", "Pop", null).copy(artist = "")
+        val tags = mapOf(
+            seed.id to listOf(MusicTag("mood", "mood", "calm", "model", .9f, .5f)),
+            combined.id to listOf(MusicTag("mood", "mood", "calm", "model", .8f, .5f)),
+            tagOnly.id to listOf(MusicTag("mood", "mood", "calm", "model", .8f, .5f)),
+        )
+        val vectors = mapOf(seed.id to floatArrayOf(1f, 0f), audioOnly.id to floatArrayOf(.85f, .53f))
+
+        val recommendations = buildSeededRecommendations(
+            songs = listOf(seed, audioOnly, combined, genreOnly, tagOnly),
+            seedSongId = seed.id,
+            audioVectors = vectors,
+            tagsBySong = tags,
+        )
+
+        val positions = recommendations.map(Song::id).withIndex().associate { it.value to it.index }
+        assertTrue(positions.getValue(audioOnly.id) < positions.getValue(combined.id))
+        assertTrue(positions.getValue(combined.id) < positions.getValue(genreOnly.id))
+        assertTrue(positions.getValue(genreOnly.id) < positions.getValue(tagOnly.id))
+    }
+
+    @Test
+    fun eachAdditionalMusicMetadataFieldHasAWeightedPersonalizationSignal() {
+        data class FieldCase(
+            val name: String,
+            val preferredValue: String,
+            val otherValue: String,
+            val update: (Song, String) -> Song,
+        )
+
+        val fields = listOf(
+            FieldCase("album", "shared", "different") { song, value -> song.copy(album = value) },
+            FieldCase("file size", "42000000", "1000000") { song, value -> song.copy(fileSizeBytes = value.toLong()) },
+            FieldCase("year", "1984", "1972") { song, value -> song.copy(year = value.toInt()) },
+            FieldCase("track number", "4", "5") { song, value -> song.copy(trackNumber = value.toInt()) },
+            FieldCase("disc number", "2", "1") { song, value -> song.copy(discNumber = value.toInt()) },
+            FieldCase("language", "en", "ta") { song, value -> song.copy(languageTags = listOf(value)) },
+            FieldCase("recording date", "1984-05", "1972-02") { song, value -> song.copy(recordingDate = value) },
+            FieldCase("compilation", "true", "false") { song, value -> song.copy(isCompilation = value.toBoolean()) },
+            FieldCase("duration", "180000", "450000") { song, value -> song.copy(durationMs = value.toLong()) },
+            FieldCase("codec", "flac", "aac") { song, value -> song.copy(codec = value) },
+            FieldCase("container", "flac", "m4a") { song, value -> song.copy(container = value) },
+            FieldCase("bitrate", "128000", "320000") { song, value -> song.copy(bitrate = value.toInt()) },
+            FieldCase("sample rate", "44100", "96000") { song, value -> song.copy(sampleRate = value.toInt()) },
+            FieldCase("channels", "2", "1") { song, value -> song.copy(channels = value.toInt()) },
+            FieldCase("track count", "12", "8") { song, value -> song.copy(trackCount = value.toInt()) },
+        )
+        val nowMs = 2_000_000_000_000L
+        val plainSong = { id: Long ->
+            Song(id, "Track $id", "", "", 0L, "content://music/$id", null, genre = "Rock")
+        }
+        val historySong = plainSong(4L).copy(genre = "")
+
+        fields.forEach { field ->
+            val seed = plainSong(1L)
+            val matching = field.update(plainSong(2L), field.preferredValue)
+            val other = field.update(plainSong(3L), field.otherValue)
+            val metadataSource = field.update(historySong, field.preferredValue)
+            val discovery = buildPersonalizedDiscovery(
+                songs = listOf(seed, matching, other, metadataSource),
+                events = listOf(LocalListeningEvent(metadataSource.id, nowMs - 1_000L, "completion", "history", completionRatio = .95f)),
+                favoriteIds = setOf(seed.id),
+                audioVectors = emptyMap(),
+                tagsBySong = emptyMap(),
+                currentSessionId = "session",
+                nowMs = nowMs,
+            )
+
+            assertTrue(
+                "${field.name} should break the tie between genre-equivalent recommendations",
+                discovery.recommendations.indexOfFirst { it.id == matching.id } <
+                    discovery.recommendations.indexOfFirst { it.id == other.id },
+            )
+        }
     }
 
     @Test
