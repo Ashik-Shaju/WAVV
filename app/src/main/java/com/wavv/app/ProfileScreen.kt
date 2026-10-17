@@ -33,11 +33,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
@@ -173,20 +180,20 @@ internal fun YouScreen(
         ProfileSetting(Icons.Outlined.Palette, "Theme", "Dark", "Dark appearance is currently the only theme available.", ProfileSettingContent.Theme),
         ProfileSetting(Icons.Outlined.Notifications, "Notifications", if (notificationsEnabled) "Allowed" else "Blocked", "Notification access is controlled by Android for this app.", ProfileSettingContent.Notifications),
         ProfileSetting(Icons.Default.Folder, "Music Folders", source.sourceSummary(), "Choose one or more folders that Wavv scans for audio and adds to your playback library.", ProfileSettingContent.Folders),
-        ProfileSetting(Icons.Default.LibraryMusic, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
-        ProfileSetting(Icons.Default.LibraryMusic, "UHQ AAC", uhqPlaybackLabel, "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
-        ProfileSetting(Icons.Default.Equalizer, "Crossfade", if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s", "Blend into the next queued track. Temporarily bypassed while bit-perfect mode is active; the saved duration is preserved.", ProfileSettingContent.Crossfade),
-        ProfileSetting(Icons.Default.Equalizer, "Bit-perfect mode", bitPerfectPlaybackLabel, "Requests Android's bit-perfect mixer mode only when a connected USB output supports the active PCM format.", ProfileSettingContent.BitPerfect),
+        ProfileSetting(Icons.Default.Storage, "Storage Used", storageUsed, "Storage reported for the audio files currently indexed in your library.", ProfileSettingContent.Storage),
+        ProfileSetting(Icons.Default.HighQuality, "UHQ AAC", uhqPlaybackLabel, "Experimental AAC enhancement with a cached copy. Original music files are never changed.", ProfileSettingContent.UHQ),
+        ProfileSetting(Icons.Default.SwapHoriz, "Crossfade", if (crossfadeSeconds == 0) "Off" else "${crossfadeSeconds}s", "Blend into the next queued track. Temporarily bypassed while bit-perfect mode is active; the saved duration is preserved.", ProfileSettingContent.Crossfade),
+        ProfileSetting(Icons.Default.Verified, "Bit-perfect mode", bitPerfectPlaybackLabel, "Requests Android's bit-perfect mixer mode only when a connected USB output supports the active PCM format.", ProfileSettingContent.BitPerfect),
         ProfileSetting(Icons.Default.Equalizer, "Equalizer", equalizerPlaybackLabel, "Ten-band EQ and session gain with local profiles.", ProfileSettingContent.Equalizer),
-        ProfileSetting(Icons.Default.LibraryMusic, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
+        ProfileSetting(Icons.Default.Bedtime, "Standby", if (standbyEnabledState) "On" else "Off", "Clock and music artwork while your device is docked or resting.", ProfileSettingContent.Standby),
         ProfileSetting(
-            Icons.Default.LibraryMusic,
+            Icons.Default.Subtitles,
             "Automatically check for lyrics",
             if (automaticLyricsSearchEnabled) "On" else "Off",
             "When a track starts playing without embedded lyrics, look for a matching .ttml or .lrc file. Wavv searches selected music folders, or Downloads only when Android grants all-files access.",
             ProfileSettingContent.AutomaticLyrics,
         ),
-        ProfileSetting(Icons.Outlined.PrivacyTip, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
+        ProfileSetting(Icons.Default.History, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
         ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. Open Android app settings to manage permissions. No in-app support contact is configured."),
     )
@@ -775,7 +782,7 @@ private fun MusicAnalysisCard(
 
 @Composable
 private fun StatCard(value: String, label: String, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(.06f)).border(1.dp, Color.White.copy(.07f), RoundedCornerShape(12.dp)).padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(.06f)).padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(3.dp))
         Text(label, color = Color.White.copy(.4f), fontSize = 11.sp)
@@ -845,7 +852,7 @@ private fun SheetActionRowLayout(
 private fun SettingsBlock(settings: List<ProfileSetting>, onSelect: (ProfileSetting) -> Unit) {
     Column(Modifier.padding(horizontal = 20.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ShelfLabel("Settings")
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(.05f)).border(1.dp, Color.White.copy(.07f), RoundedCornerShape(14.dp))) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(.05f))) {
             settings.forEachIndexed { index, setting ->
                 Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = { onSelect(setting) }).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(.06f)), contentAlignment = Alignment.Center) {

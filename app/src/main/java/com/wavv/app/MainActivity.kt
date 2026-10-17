@@ -145,7 +145,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -252,7 +252,9 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -786,6 +788,10 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
     val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
     val source by libraryViewModel.source.collectAsStateWithLifecycle()
     val playbackState by playbackController.state.collectAsStateWithLifecycle()
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val analysisIsComplete = (libraryState as? LibraryUiState.Ready)?.analysisProgress?.status == MusicAnalysisStatus.COMPLETE
+        if (granted && analysisIsComplete) MusicInsightsNotification.notifyFirstCompletionIfNeeded(context)
+    }
     val automaticLyricsSearchEnabled by AutomaticLyricsSearchPreference.state(context).collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     var lyricsSearchRefreshToken by remember { mutableStateOf(0) }
@@ -824,6 +830,13 @@ private fun WavvApp(libraryViewModel: LibraryViewModel, playbackController: Play
             null -> libraryViewModel.showSourceSelection()
             LibrarySource.AllDevice -> if (hasPermission) libraryViewModel.loadSongs() else libraryViewModel.showPermissionRequired()
             is LibrarySource.Files, is LibrarySource.Folder, is LibrarySource.Folders -> libraryViewModel.loadSongs()
+        }
+    }
+    val setupHasMusicSource = source != null && (source != LibrarySource.AllDevice || hasPermission)
+    LaunchedEffect(setupHasMusicSource) {
+        if (setupHasMusicSource && MusicInsightsNotification.shouldRequestPermission(context)) {
+            MusicInsightsNotification.markPermissionPrompted(context)
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
     LaunchedEffect(playbackState.isPlaying, playbackState.song?.id) {
@@ -1011,6 +1024,7 @@ internal data class WavvContentActions(
 @Composable
 internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val libraryState = state.libraryState
     val playbackState = state.playbackState
     val playbackProgress by state.progressFlow.collectAsStateWithLifecycle()
@@ -1079,18 +1093,10 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val onRemoveSongFromPlaylist = actions.onRemoveSongFromPlaylist
     val onClearListeningHistory = actions.onClearListeningHistory
     val context = LocalContext.current
-    val insightsNotificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) MusicInsightsNotification.notifyFirstCompletionIfNeeded(context)
-    }
     val hasIndexedMusic = (libraryState as? LibraryUiState.Ready)?.songs?.isNotEmpty() == true
     LaunchedEffect(analysisProgress?.status, notificationResumeToken, hasIndexedMusic) {
         if (hasIndexedMusic && analysisProgress?.status == MusicAnalysisStatus.COMPLETE) {
-            if (MusicInsightsNotification.shouldRequestPermission(context)) {
-                MusicInsightsNotification.markPermissionPrompted(context)
-                insightsNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                MusicInsightsNotification.notifyFirstCompletionIfNeeded(context)
-            }
+            MusicInsightsNotification.notifyFirstCompletionIfNeeded(context)
         }
     }
     val bluetoothOutput = rememberBluetoothOutputStatus(context)
@@ -1160,6 +1166,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var homeMixDetailOpen by rememberSaveable { mutableStateOf(false) }
     var homeReselectSignal by remember { mutableIntStateOf(0) }
     var searchActivationSignal by remember { mutableIntStateOf(0) }
+    var searchReselectSignal by remember { mutableIntStateOf(0) }
     var searchBrowseSignal by remember { mutableIntStateOf(0) }
     var restoreSearchKeyboardAfterPlayer by remember { mutableStateOf(false) }
     var libraryNavigation by rememberSaveable { mutableStateOf(LibraryNavigationState()) }
@@ -1172,6 +1179,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
     var createPlaylistName by rememberSaveable { mutableStateOf("") }
     var createPlaylistSongId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var addToPlaylistSong by remember { mutableStateOf<Song?>(null) }
     var renamePlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
     var renamePlaylistName by rememberSaveable { mutableStateOf("") }
     var deletePlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
@@ -1308,6 +1316,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val openPlayer: () -> Unit = {
         if (tab == Tab.Search && (searchImeVisible || restoreSearchKeyboardAfterPlayer)) {
             restoreSearchKeyboardAfterPlayer = true
+            focusManager.clearFocus(force = true)
         }
         keyboardController?.hide()
         val song = activeSong
@@ -1803,9 +1812,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         onAddToQueue = onAddToQueue,
                         onToggleFavorite = { song -> onToggleFavorite(song.id) },
                         onRequestAddToPlaylist = { song ->
-                            createPlaylistSongId = song.id
-                            createPlaylistName = ""
-                            showCreatePlaylist = true
+                            addToPlaylistSong = song
                         },
                         onNavigateToAlbum = { song ->
                             navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.albumArtist ?: song.artist))
@@ -1857,6 +1864,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         searchError = searchError,
                         searchNotice = searchNotice,
                         searchActivationSignal = searchActivationSignal,
+                        searchReselectSignal = searchReselectSignal,
                         searchBrowseSignal = searchBrowseSignal,
                         onQueryChange = onSearch,
                         onPlay = { song, sourceLabel -> startPlayback(song, sourceLabel) },
@@ -1868,9 +1876,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         onAddToQueue = onAddToQueue,
                         onToggleFavorite = onToggleFavorite,
                         onRequestAddToPlaylist = { song ->
-                            createPlaylistSongId = song.id
-                            createPlaylistName = ""
-                            showCreatePlaylist = true
+                            addToPlaylistSong = song
                         },
                         onNavigateToAlbum = { song ->
                             navigateLibrary(LibraryDestination(LibraryPage.Album, title = song.album, subtitle = song.albumArtist ?: song.artist))
@@ -1890,6 +1896,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         historyVisible = libraryHistoryVisible,
                         onToggleHistory = { libraryHistoryVisible = !libraryHistoryVisible },
                         hasNowPlaying = activeSong != null,
+                        activeSong = activeSong,
                         favoriteIds = favoriteIds,
                         playlists = playlists,
                         layout = libraryLayout,
@@ -2030,7 +2037,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                             libraryHistoryVisible = false
                             libraryNavigation = LibraryNavigationState()
                         }
-                        Tab.Search -> searchActivationSignal += 1
+                        Tab.Search -> searchReselectSignal += 1
                         else -> Unit
                     }
                 },
@@ -2185,6 +2192,20 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     closing = flight.direction == PlayerArtworkFlightDirection.Closing,
                 )
             }
+        addToPlaylistSong?.let { selectedSong ->
+            AddToPlaylistSheet(
+                selectedSongs = listOf(selectedSong),
+                allSongs = songs,
+                playlists = playlists,
+                onAddSongToPlaylist = onAddSongToPlaylist,
+                onCreatePlaylist = { songId ->
+                    createPlaylistSongId = songId
+                    createPlaylistName = ""
+                    showCreatePlaylist = true
+                },
+                onDismiss = { addToPlaylistSong = null },
+            )
+        }
         if (showCreatePlaylist) {
             AlertDialog(
                 onDismissRequest = { showCreatePlaylist = false },
@@ -3261,11 +3282,19 @@ private fun FavouriteButton(
 }
 
 @Composable
-internal fun FigmaMoreIcon(iconSize: Dp) {
+internal fun FigmaMoreIcon(
+    iconSize: Dp,
+    showSurface: Boolean = true,
+    dotRadiusScale: Float = 1f,
+    dotSpacingScale: Float = 1f,
+) {
     Canvas(Modifier.size(iconSize)) {
         val unit = size.minDimension / 24f
-        drawCircle(Color.White.copy(.15f), radius = 12f * unit)
-        listOf(7.5f, 12f, 16.5f).forEach { x -> drawCircle(Color.White, radius = 1.5f * unit, center = Offset(x * unit, 12f * unit)) }
+        if (showSurface) drawCircle(Color.White.copy(.15f), radius = 12f * unit)
+        val dotOffset = 4.5f * dotSpacingScale
+        listOf(12f - dotOffset, 12f, 12f + dotOffset).forEach { x ->
+            drawCircle(Color.White, radius = 1.5f * unit * dotRadiusScale, center = Offset(x * unit, 12f * unit))
+        }
     }
 }
 
@@ -3343,8 +3372,8 @@ private fun FullPlayer(
     var showOutputs by remember(song.id) { mutableStateOf(false) }
     var showTrackOptions by remember(song.id) { mutableStateOf(false) }
     var showTrackCredits by remember(song.id) { mutableStateOf(false) }
+    var showTrackPlaylist by remember(song.id) { mutableStateOf(false) }
     val trackCredits = remember(song) { songCreditDetails(song) }
-    var playlistSong by remember(song.id) { mutableStateOf<Song?>(null) }
     var showNextTitle by remember(song.id) { mutableStateOf(false) }
     val nextUpOffset = remember(song.id) { Animatable(0f) }
     val nextUpLiftPx = with(LocalDensity.current) { 6.dp.toPx() }
@@ -3700,24 +3729,40 @@ private fun FullPlayer(
             onClose = { showOutputs = false },
         )
         if (showTrackOptions) {
-            WavvBottomSheet(onDismissRequest = { showTrackOptions = false }, artworkSong = song) { close ->
+            val trackOptionsMaxHeight = (LocalConfiguration.current.screenHeightDp * .86f).dp.coerceAtLeast(440.dp)
+            WavvBottomSheet(
+                onDismissRequest = {
+                    showTrackOptions = false
+                    showTrackCredits = false
+                    showTrackPlaylist = false
+                },
+                maxHeight = trackOptionsMaxHeight,
+                artworkSong = song,
+            ) { close ->
                 AnimatedContent(
-                    targetState = showTrackCredits,
+                    targetState = when {
+                        showTrackCredits -> "credits"
+                        showTrackPlaylist -> "playlist"
+                        else -> "options"
+                    },
                     transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
-                    label = "track options and credits",
-                ) { showingCredits ->
-                    if (showingCredits) {
+                    label = "track options, credits, and playlist picker",
+                ) { submenu ->
+                    if (submenu == "credits") {
                         Column(
                             Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
                                 LibrarySoftIconButton(
                                     onClick = { showTrackCredits = false },
                                     contentDescription = "Back to track options",
                                     icon = Icons.AutoMirrored.Filled.ArrowBack,
-                                    modifier = Modifier.size(48.dp),
-                                    iconSize = 24.dp,
+                                    modifier = Modifier.size(40.dp),
+                                    iconSize = 20.dp,
                                     frosted = true,
                                 )
                                 Text("Credits", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
@@ -3753,6 +3798,16 @@ private fun FullPlayer(
                                 }
                             }
                         }
+                    } else if (submenu == "playlist") {
+                        AddToPlaylistSheet(
+                            selectedSongs = listOf(song),
+                            allSongs = allSongs,
+                            playlists = playlists,
+                            onAddSongToPlaylist = onAddSongToPlaylist,
+                            onCreatePlaylist = { onCreatePlaylist(it ?: song.id) },
+                            onDismiss = { showTrackPlaylist = false },
+                            embedded = true,
+                        )
                     } else {
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -3767,15 +3822,14 @@ private fun FullPlayer(
                             SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
                             SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
                             SheetActionRow(Icons.Default.Add, "Add to playlist") {
-                                showTrackOptions = false
-                                playlistSong = song
+                                showTrackPlaylist = true
                             }
                             SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
                             SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
                             SheetActionRow(Icons.Default.Info, "Show credits") { showTrackCredits = true }
                             if (state.isUHQEnhanced || audioDetails?.uhqEligible == true) {
                                 SheetActionRow(
-                                    Icons.Default.GraphicEq,
+                                    Icons.Default.HighQuality,
                                     if (state.isUHQEnhanced) "Play original" else "Upgrade quality · UHQ",
                                 ) {
                                     close()
@@ -3820,16 +3874,6 @@ private fun FullPlayer(
                     }
                 },
                 confirmButton = { TextButton(onClick = { showQualitySettings = false }) { Text("Done") } },
-            )
-        }
-        playlistSong?.let { selectedSong ->
-            AddToPlaylistSheet(
-                selectedSongs = listOf(selectedSong),
-                allSongs = allSongs,
-                playlists = playlists,
-                onAddSongToPlaylist = onAddSongToPlaylist,
-                onCreatePlaylist = { onCreatePlaylist(it ?: selectedSong.id) },
-                onDismiss = { playlistSong = null },
             )
         }
         }
@@ -6650,7 +6694,7 @@ private fun LyricsTrackActionsMenu(
                         LyricsMenuItem(Icons.Default.Mic, "Go to artist", onClick = onNavigateToArtist)
                         if (showUHQOption) {
                             LyricsMenuItem(
-                                Icons.Default.GraphicEq,
+                                Icons.Default.HighQuality,
                                 if (isUHQEnhanced) "Play original" else "Upgrade quality · UHQ",
                                 onClick = onSetTrackUHQ,
                             )

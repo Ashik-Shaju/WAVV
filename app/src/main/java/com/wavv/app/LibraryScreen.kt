@@ -130,7 +130,6 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
@@ -148,7 +147,6 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.SmartDisplay
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Notifications
@@ -401,6 +399,7 @@ internal fun LibraryScreen(
     historyVisible: Boolean,
     onToggleHistory: () -> Unit,
     hasNowPlaying: Boolean,
+    activeSong: Song?,
     favoriteIds: Set<Long>,
     personalizedRecommendations: List<Song>,
     smartMixes: List<SmartMix>,
@@ -432,7 +431,21 @@ internal fun LibraryScreen(
     var artistsLayout by rememberSaveable { mutableStateOf(LibraryLayout.Grid) }
     val context = LocalContext.current
     val appContext = remember(context) { context.applicationContext }
-    var audioQualitySongs by remember { mutableStateOf<Map<String, List<Song>>>(emptyMap()) }
+    val losslessCandidates = remember(songs) {
+        songs.filter(::isLosslessAudioSource).sortedByDescending { it.sampleRate ?: 0 }
+    }
+    val immediatelyKnownLosslessSongs = remember(losslessCandidates) {
+        losslessCandidates.filter { song ->
+            song.sampleRate?.let { it in 1 until 48_000 } == true
+        }
+    }
+    var audioQualitySongs by remember(songs) {
+        mutableStateOf(
+            immediatelyKnownLosslessSongs.takeIf { it.isNotEmpty() }
+                ?.let { mapOf("Lossless" to it) }
+                .orEmpty(),
+        )
+    }
     val songsById = remember(songs) { songs.associateBy(Song::id) }
     val recent = remember(songs) { songs.sortedByDescending(Song::modifiedAt).take(6) }
     val featuredSongs = remember(songs, personalizedRecommendations) {
@@ -441,27 +454,27 @@ internal fun LibraryScreen(
     val madeForYouSongs = remember(smartMixes) {
         smartMixes.firstOrNull { it.id == "made-for-you" }?.songs?.take(HOME_STACK_MIX_SONG_LIMIT).orEmpty()
     }
-    val shouldDetectAudioQualityCollections = destination.page == LibraryPage.Playlists ||
-        (destination.page == LibraryPage.Playlist && destination.itemId in setOf(LOSSLESS_PLAYLIST_ID, HI_RES_LOSSLESS_PLAYLIST_ID))
-    LaunchedEffect(songs, appContext, shouldDetectAudioQualityCollections) {
-        if (!shouldDetectAudioQualityCollections) return@LaunchedEffect
-        audioQualitySongs = withContext(Dispatchers.IO) {
-            val groupedSongs = mutableMapOf<String, MutableList<Song>>()
-            songs.forEach { song ->
-                currentCoroutineContext().ensureActive()
-                if (!isLosslessAudioSource(song)) return@forEach
-                val details = try {
-                    readAudioQualityDetails(appContext, song)
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    null
-                } ?: return@forEach
-                if (details.qualityName == "Lossless" || details.qualityName == "Hi-Res Lossless") {
-                    groupedSongs.getOrPut(details.qualityName) { mutableListOf() }.add(song)
-                }
+    LaunchedEffect(songs, appContext) {
+        val groupedSongs = mutableMapOf<String, MutableList<Song>>()
+        immediatelyKnownLosslessSongs.forEach { song ->
+            groupedSongs.getOrPut("Lossless") { mutableListOf() }.add(song)
+        }
+        audioQualitySongs = groupedSongs.mapValues { (_, tracks) -> tracks.toList() }
+
+        losslessCandidates.forEach { song ->
+            currentCoroutineContext().ensureActive()
+            val details = try {
+                withContext(Dispatchers.IO) { readAudioQualityDetails(appContext, song) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            } ?: return@forEach
+            if (details.qualityName == "Lossless" || details.qualityName == "Hi-Res Lossless") {
+                groupedSongs.values.forEach { tracks -> tracks.removeAll { it.id == song.id } }
+                groupedSongs.getOrPut(details.qualityName) { mutableListOf() }.add(song)
+                audioQualitySongs = groupedSongs.mapValues { (_, tracks) -> tracks.toList() }
             }
-            groupedSongs.mapValues { (_, tracks) -> tracks.toList() }
         }
     }
     val permanentPlaylistSongs = mapOf(
@@ -683,7 +696,11 @@ internal fun LibraryScreen(
                         showAdd = route.page == LibraryPage.Playlists,
                         showSort = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
                         groupActionsInPill = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
-                        onAdd = { onRequestCreatePlaylist(null) },
+                        addContentDescription = if (activeSong == null) "Create playlist" else "Add current song to playlist",
+                        onAdd = {
+                            if (activeSong != null) songForPlaylist = activeSong
+                            else onRequestCreatePlaylist(null)
+                        },
                         onSort = { sortMenu = true },
                     )
                     val orderedCards = remember(cards, sortMode, personalizedRecommendations) {
@@ -932,6 +949,8 @@ internal fun LibraryScreen(
                     hasNowPlaying = hasNowPlaying,
                     isPlaylist = route.page == LibraryPage.Playlist && route.itemId !in PERMANENT_PLAYLIST_IDS,
                     isDetail = route.isDetail,
+                    showCollectionFavoriteAction = route.page != LibraryPage.Liked &&
+                        !(route.page == LibraryPage.Playlist && route.itemId in PERMANENT_PLAYLIST_IDS),
                     onBack = onBack,
                     onPlay = onPlay,
                     onShuffle = onShuffle,
@@ -1033,6 +1052,8 @@ private fun LibrarySongActionsSheet(
     onRequestAddToPlaylist: (Song) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
+    showFavoriteAction: Boolean = true,
+    onRemoveFromPlaylist: (() -> Unit)? = null,
 ) {
     WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = song) { close ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -1046,12 +1067,53 @@ private fun LibrarySongActionsSheet(
         Spacer(Modifier.height(14.dp))
         SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
         SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
-        SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
-            close(); onToggleFavorite(song)
+        if (showFavoriteAction) {
+            SheetActionRow(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (isFavorite) "Remove from favorites" else "Add to favorites") {
+                close(); onToggleFavorite(song)
+            }
         }
         SheetActionRow(Icons.Default.Add, "Add to playlist") { close(); onRequestAddToPlaylist(song) }
         SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
         SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
+        onRemoveFromPlaylist?.let { remove ->
+            SheetActionRow(Icons.Default.Delete, "Remove from playlist") { close(); remove() }
+        }
+    }
+}
+
+@Composable
+private fun LibraryCollectionActionsSheet(
+    title: String,
+    subtitle: String,
+    artworkSong: Song?,
+    isPlaylist: Boolean,
+    pinned: Boolean,
+    onDismiss: () -> Unit,
+    onRenamePlaylist: () -> Unit,
+    onTogglePin: () -> Unit,
+    onDeletePlaylist: () -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = artworkSong) { close ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+            artworkSong?.let { AlbumArt(it, Modifier.size(58.dp), title, 12.dp) }
+            Column(Modifier.weight(1f)) {
+                Text("Collection options", color = Color.White.copy(.52f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = Color.White.copy(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        if (isPlaylist) {
+            SheetActionRow(Icons.Default.Edit, "Edit playlist") { close(); onRenamePlaylist() }
+            SheetActionRow(Icons.Default.PushPin, if (pinned) "Unpin playlist" else "Pin playlist") { close(); onTogglePin() }
+            SheetActionRow(Icons.Default.Delete, "Delete playlist") { close(); onDeletePlaylist() }
+        }
+        artworkSong?.let { song ->
+            SheetActionRow(R.drawable.action_play_next, "Play next") { close(); onPlayNext(song) }
+            SheetActionRow(R.drawable.action_add_to_queue, "Add to queue") { close(); onAddToQueue(song) }
+        }
     }
 }
 
@@ -1210,6 +1272,7 @@ private fun LibraryBrowseHeader(
     showAdd: Boolean,
     showSort: Boolean,
     groupActionsInPill: Boolean,
+    addContentDescription: String,
     onAdd: () -> Unit,
     onSort: () -> Unit,
 ) {
@@ -1232,6 +1295,7 @@ private fun LibraryBrowseHeader(
             layout = layout,
             showAdd = showAdd,
             groupedInPill = groupActionsInPill,
+            addContentDescription = addContentDescription,
             onSort = onSort,
             onToggleLayout = onToggleLayout,
             onAdd = onAdd,
@@ -1246,16 +1310,21 @@ private fun LibraryBrowseHeaderActions(
     layout: LibraryLayout,
     showAdd: Boolean,
     groupedInPill: Boolean,
+    addContentDescription: String,
     onSort: () -> Unit,
     onToggleLayout: () -> Unit,
     onAdd: () -> Unit,
 ) {
     val buttonSize = if (groupedInPill) 36.dp else 38.dp
+    val optionCount = listOf(showSort, showLayout, showAdd).count { it }
+    val pillInset = if (optionCount > 2) 5.dp else 8.dp
+    val pillGap = if (optionCount > 2) 4.dp else 8.dp
     val content: @Composable RowScope.() -> Unit = {
         if (showSort) LibrarySoftIconButton(
             onClick = onSort,
             contentDescription = "Sort",
-            icon = Icons.Default.Tune,
+            icon = null,
+            sortIcon = true,
             modifier = Modifier.size(buttonSize),
             iconSize = 19.dp,
             surfaceAlpha = if (groupedInPill) 0f else .085f,
@@ -1270,7 +1339,7 @@ private fun LibraryBrowseHeaderActions(
         )
         if (showAdd) LibrarySoftIconButton(
             onClick = onAdd,
-            contentDescription = "Create playlist",
+            contentDescription = addContentDescription,
             icon = Icons.Default.Add,
             modifier = Modifier.size(buttonSize),
             iconSize = 21.dp,
@@ -1290,7 +1359,8 @@ private fun LibraryBrowseHeaderActions(
             Row(
                 Modifier.clip(CircleShape)
                     .background(Color.White.copy(.045f))
-                    .padding(horizontal = 4.dp, vertical = 3.dp),
+                    .padding(horizontal = pillInset, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(pillGap),
                 verticalAlignment = Alignment.CenterVertically,
                 content = content,
             )
@@ -1305,7 +1375,8 @@ private fun LibraryHistoryAction(historyVisible: Boolean, onToggleHistory: () ->
     LibrarySoftIconButton(
         onClick = onToggleHistory,
         contentDescription = if (historyVisible) "Return to library" else "Listening history",
-        icon = if (historyVisible) Icons.Default.LibraryMusic else Icons.Default.History,
+        icon = if (historyVisible) Icons.Default.LibraryMusic else null,
+        iconResource = if (historyVisible) null else R.drawable.ic_library_history,
         modifier = Modifier.size(40.dp),
         iconSize = 28.dp,
     )
@@ -1315,13 +1386,15 @@ private fun LibraryHistoryAction(historyVisible: Boolean, onToggleHistory: () ->
 internal fun LibrarySoftIconButton(
     onClick: () -> Unit,
     contentDescription: String,
-    icon: ImageVector,
+    icon: ImageVector?,
     modifier: Modifier = Modifier.size(40.dp),
     iconSize: Dp = 21.dp,
     tint: Color = Color.White.copy(.9f),
     surfaceAlpha: Float = .085f,
     frosted: Boolean = false,
     enabled: Boolean = true,
+    sortIcon: Boolean = false,
+    iconResource: Int? = null,
 ) {
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val backdropCaptureState = remember { AtomicBoolean(false) }
@@ -1340,22 +1413,35 @@ internal fun LibrarySoftIconButton(
         if (frosted) {
             FrostedBackdrop(
                 captureState = backdropCaptureState,
-                blurRadiusDp = 22f,
-                tint = Color(0x9923262D),
+                blurRadiusDp = 30f,
+                tint = Color(0x2223262D),
                 modifier = Modifier.matchParentSize().clip(CircleShape),
                 refreshEnabled = true,
             )
+            Box(Modifier.matchParentSize().background(Color.White.copy(surfaceAlpha)))
         }
-        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.align(Alignment.Center).size(iconSize))
+        val customIconResource = iconResource ?: if (sortIcon) R.drawable.ic_library_sort_arrows else null
+        if (customIconResource != null) {
+            Image(
+                painter = androidx.compose.ui.res.painterResource(customIconResource),
+                contentDescription = contentDescription,
+                modifier = Modifier.align(Alignment.Center).size(iconSize),
+                colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tint),
+            )
+        } else {
+            icon?.let { vector ->
+                Icon(vector, contentDescription = contentDescription, tint = tint, modifier = Modifier.align(Alignment.Center).size(iconSize))
+            }
+        }
     }
 }
 
 @Composable
 private fun LibrarySoftMoreButton(onClick: () -> Unit, contentDescription: String) {
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val backdropCaptureState = remember { AtomicBoolean(false) }
     Box(
-        Modifier.size(48.dp).clip(CircleShape)
-            .background(Color.White.copy(.12f))
+        Modifier.size(42.dp).clip(CircleShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -1365,7 +1451,15 @@ private fun LibrarySoftMoreButton(onClick: () -> Unit, contentDescription: Strin
             .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        FigmaMoreIcon(23.dp)
+        FrostedBackdrop(
+            captureState = backdropCaptureState,
+            blurRadiusDp = 30f,
+            tint = Color(0x2223262D),
+            modifier = Modifier.matchParentSize().clip(CircleShape),
+            refreshEnabled = true,
+        )
+        Box(Modifier.matchParentSize().background(Color.White.copy(.15f)))
+        FigmaMoreIcon(30.dp, showSurface = false, dotRadiusScale = 1.6f, dotSpacingScale = 1.4f)
     }
 }
 
@@ -1481,6 +1575,7 @@ internal fun AddToPlaylistSheet(
     onAddSongToPlaylist: (Long, List<Long>, (Boolean) -> Unit) -> Unit,
     onCreatePlaylist: (Long?) -> Unit,
     onDismiss: () -> Unit,
+    embedded: Boolean = false,
 ) {
     val songIds = remember(selectedSongs) { selectedSongs.map(Song::id).distinct() }
     val allSongsById = remember(allSongs) { allSongs.associateBy(Song::id) }
@@ -1488,46 +1583,41 @@ internal fun AddToPlaylistSheet(
     val configuration = LocalConfiguration.current
     val maxSheetHeight = (configuration.screenHeightDp * .86f).dp.coerceAtLeast(440.dp)
     var searchQuery by remember { mutableStateOf("") }
-    var sortAlphabetically by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf(false) }
     var createPlaylistAfterClose by remember { mutableStateOf(false) }
-    var selectedPlaylistIds by remember(songIds) {
+    val alreadySavedPlaylistIds = remember(playlists, songIds) {
+        playlists.filter { playlist -> songIds.any(playlist.songIds::contains) }.map(UserPlaylist::id).toSet()
+    }
+    var selectedPlaylistIds by remember(songIds, alreadySavedPlaylistIds) {
         mutableStateOf(
-            playlists.filter { playlist -> songIds.isNotEmpty() && songIds.all(playlist.songIds::contains) }
-                .map(UserPlaylist::id)
-                .toSet(),
+            alreadySavedPlaylistIds,
         )
     }
-    val selectedPlaylists = remember(playlists, selectedPlaylistIds) {
-        playlists.filter { it.id in selectedPlaylistIds }
+    val savedPlaylists = remember(playlists, alreadySavedPlaylistIds) {
+        playlists.filter { it.id in alreadySavedPlaylistIds }
     }
-    val availablePlaylists = remember(playlists, selectedPlaylistIds, searchQuery, sortAlphabetically) {
-        val matching = playlists.filter { playlist ->
-            playlist.id !in selectedPlaylistIds && playlist.name.contains(searchQuery.trim(), ignoreCase = true)
-        }
-        if (sortAlphabetically) matching.sortedBy { it.name.lowercase() }
-        else matching.sortedByDescending(UserPlaylist::updatedAt)
+    val availablePlaylists = remember(playlists, alreadySavedPlaylistIds, searchQuery) {
+        playlists.filter { playlist ->
+            playlist.id !in alreadySavedPlaylistIds && playlist.name.contains(searchQuery.trim(), ignoreCase = true)
+        }.sortedByDescending(UserPlaylist::updatedAt)
     }
 
-    WavvBottomSheet(
-        onDismissRequest = {
-            if (!isSaving) {
-                onDismiss()
-                if (createPlaylistAfterClose) onCreatePlaylist(songIds.firstOrNull())
-            }
-        },
-        maxHeight = maxSheetHeight,
-    ) { close ->
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = close, enabled = !isSaving) {
-                Text("Cancel", color = Color.White.copy(.86f), fontWeight = FontWeight.SemiBold)
-            }
-            Spacer(Modifier.weight(1f))
-            TextButton(
+    val onSheetDismiss: () -> Unit = {
+        if (!isSaving) {
+            onDismiss()
+            if (createPlaylistAfterClose) onCreatePlaylist(songIds.firstOrNull())
+        }
+    }
+    val sheetContent: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            AddToPlaylistPillAction("Cancel", enabled = !isSaving, onClick = close)
+            AddToPlaylistPillAction(
+                label = "Done",
+                emphasized = true,
                 enabled = !isSaving,
                 onClick = {
-                    val additions = selectedPlaylists.mapNotNull { playlist ->
+                    val additions = playlists.filter { it.id in selectedPlaylistIds }.mapNotNull { playlist ->
                         val missingIds = songIds.filterNot(playlist.songIds::contains)
                         playlist.id to missingIds
                     }.filter { it.second.isNotEmpty() }
@@ -1552,54 +1642,87 @@ internal fun AddToPlaylistSheet(
                     }
                 },
             ) {
-                if (isSaving) {
-                    CircularProgressIndicator(Modifier.size(17.dp), color = WavvPink, strokeWidth = 2.dp)
-                } else {
-                    Text("Done", color = WavvPink, fontWeight = FontWeight.Bold)
-                }
+                if (isSaving) CircularProgressIndicator(Modifier.size(15.dp), color = WavvPink, strokeWidth = 2.dp)
+                else Text("Done", color = WavvPink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
 
         Row(
-            Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 13.dp),
+            Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Saved in", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold)
-            TextButton(
+            Text(
+                if (savedPlaylists.isEmpty()) "Save in" else "Saved in",
+                color = Color.White,
+                fontSize = 23.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            AddToPlaylistPillAction(
+                "New playlist",
+                emphasized = true,
                 enabled = !isSaving,
                 onClick = {
-                    createPlaylistAfterClose = true
-                    close()
+                    if (embedded) {
+                        close()
+                        onCreatePlaylist(songIds.firstOrNull())
+                    } else {
+                        createPlaylistAfterClose = true
+                        close()
+                    }
                 },
+            )
+        }
+
+        if (savedPlaylists.isNotEmpty()) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 168.dp).verticalScroll(rememberScrollState()).padding(bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                Text("New playlist", color = WavvPink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                savedPlaylists.forEach { playlist ->
+                    PlaylistPickerRow(
+                        playlist = playlist,
+                        allSongsById = allSongsById,
+                        fallbackSong = playlistArtworkSong(playlist.songIds, allSongsById) ?: headerSong,
+                        selected = true,
+                        enabled = false,
+                        onClick = {},
+                    )
+                }
             }
         }
 
-        if (headerSong != null) {
+        Box(Modifier.fillMaxWidth().padding(bottom = 8.dp).height(48.dp).clip(RoundedCornerShape(16.dp))) {
+            val searchBackdrop = remember { AtomicBoolean(false) }
+            FrostedBackdrop(
+                captureState = searchBackdrop,
+                blurRadiusDp = 24f,
+                tint = Color(0x9923262D),
+                modifier = Modifier.matchParentSize().clip(RoundedCornerShape(16.dp)),
+            )
+            Box(Modifier.matchParentSize().background(Color.White.copy(.075f)))
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                Modifier.fillMaxSize().padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                AlbumArt(headerSong, Modifier.size(42.dp), headerSong.title, 10.dp)
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (selectedSongs.size == 1) headerSong.title else "${selectedSongs.size} songs",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                Icon(Icons.Default.Search, contentDescription = "Search playlists", tint = Color.White.copy(.74f), modifier = Modifier.size(21.dp))
+                Box(Modifier.weight(1f)) {
+                    if (searchQuery.isEmpty()) Text("Find playlist", color = Color.White.copy(.48f), fontSize = 14.sp)
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        enabled = !isSaving,
+                        singleLine = true,
+                        textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                        cursorBrush = SolidColor(WavvPink),
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    Text(
-                        if (selectedSongs.size == 1) headerSong.artist else "Choose one or more playlists",
-                        color = Color.White.copy(.48f),
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                }
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }, enabled = !isSaving, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White.copy(.62f), modifier = Modifier.size(17.dp))
+                    }
                 }
             }
         }
@@ -1612,73 +1735,15 @@ internal fun AddToPlaylistSheet(
             Modifier.fillMaxWidth().weight(1f, fill = false),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            if (selectedPlaylists.isNotEmpty()) {
-                items(selectedPlaylists, key = { "saved-${it.id}" }) { playlist ->
-                    PlaylistPickerRow(
-                        playlist = playlist,
-                        allSongsById = allSongsById,
-                        fallbackSong = playlistArtworkSong(playlist.songIds, allSongsById) ?: headerSong,
-                        selected = true,
-                        enabled = !isSaving,
-                        onClick = { selectedPlaylistIds = selectedPlaylistIds - playlist.id },
-                    )
-                }
-            } else {
-                item(key = "saved-empty") {
-                    Text(
-                        "Not saved to a playlist yet",
-                        color = Color.White.copy(.48f),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(start = 3.dp, top = 2.dp, bottom = 10.dp),
-                    )
-                }
-            }
-
-            item(key = "playlist-search") {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(16.dp))
-                            .background(Color.White.copy(.075f)).padding(horizontal = 13.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = "Search playlists", tint = Color.White.copy(.72f), modifier = Modifier.size(21.dp))
-                        Box(Modifier.weight(1f)) {
-                            if (searchQuery.isEmpty()) Text("Find playlist", color = Color.White.copy(.48f), fontSize = 14.sp)
-                            BasicTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                enabled = !isSaving,
-                                singleLine = true,
-                                textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
-                                cursorBrush = SolidColor(WavvPink),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }, enabled = !isSaving, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color.White.copy(.62f), modifier = Modifier.size(17.dp))
-                            }
-                        }
-                    }
-                    TextButton(
-                        onClick = { sortAlphabetically = !sortAlphabetically },
-                        enabled = !isSaving,
-                        modifier = Modifier.height(48.dp).clip(RoundedCornerShape(15.dp)).background(Color.White.copy(.075f)),
-                    ) {
-                        Text(if (sortAlphabetically) "A–Z" else "Recent", color = Color.White.copy(.86f), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-
             if (availablePlaylists.isEmpty()) {
                 item(key = "playlist-empty") {
                     Text(
-                        if (playlists.isEmpty()) "Create a playlist to save your music." else "No matching playlists",
+                        when {
+                            playlists.isEmpty() -> "Create a playlist to save your music."
+                            searchQuery.isNotBlank() -> "No matching playlists"
+                            savedPlaylists.isNotEmpty() -> "Saved in all playlists"
+                            else -> "No matching playlists"
+                        },
                         color = Color.White.copy(.5f),
                         fontSize = 13.sp,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp),
@@ -1703,6 +1768,61 @@ internal fun AddToPlaylistSheet(
                     )
                 }
             }
+        }
+    }
+
+    if (embedded) {
+        Column(Modifier.fillMaxWidth().heightIn(max = maxSheetHeight)) {
+            sheetContent(onDismiss)
+        }
+    } else {
+        WavvBottomSheet(
+            onDismissRequest = onSheetDismiss,
+            maxHeight = maxSheetHeight,
+            artworkSong = headerSong,
+        ) { close -> sheetContent(close) }
+    }
+}
+
+@Composable
+private fun AddToPlaylistPillAction(
+    label: String,
+    enabled: Boolean,
+    emphasized: Boolean = false,
+    onClick: () -> Unit,
+    content: (@Composable () -> Unit)? = null,
+) {
+    val backdropCaptureState = remember { AtomicBoolean(false) }
+    Box(
+        Modifier.height(38.dp).clip(CircleShape)
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        FrostedBackdrop(
+            captureState = backdropCaptureState,
+            blurRadiusDp = 24f,
+            tint = Color(0x5523262D),
+            modifier = Modifier.matchParentSize().clip(CircleShape),
+            refreshEnabled = true,
+        )
+        Box(Modifier.matchParentSize().background(Color.White.copy(if (emphasized) .11f else .075f)))
+        Row(
+            Modifier.padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (content != null) content() else Text(
+                label,
+                color = if (emphasized) WavvPink else Color.White.copy(.9f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }
@@ -1733,16 +1853,26 @@ private fun PlaylistPickerRow(
                 fontSize = 13.sp,
             )
         }
-        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(42.dp)) {
+        Box(
+            Modifier.size(42.dp).clip(CircleShape)
+                .clickable(
+                    enabled = enabled,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Button,
+                    onClick = onClick,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
             Box(
                 Modifier.size(30.dp).clip(CircleShape)
-                    .background(if (selected) WavvPink else Color.Transparent),
+                    .background(if (selected) WavvPink else Color.White.copy(.09f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     if (selected) Icons.Default.Check else Icons.Default.Add,
-                    contentDescription = if (selected) "Remove from ${playlist.name}" else "Add to ${playlist.name}",
-                    tint = if (selected) Color(0xFF151015) else Color.White.copy(.82f),
+                    contentDescription = if (selected) "Saved in ${playlist.name}" else "Add to ${playlist.name}",
+                    tint = if (selected) Color(0xFF151015) else Color.White.copy(.88f),
                     modifier = Modifier.size(if (selected) 19.dp else 22.dp),
                 )
             }
@@ -1764,6 +1894,7 @@ private fun LibraryCollectionScreen(
     hasNowPlaying: Boolean,
     isPlaylist: Boolean,
     isDetail: Boolean,
+    showCollectionFavoriteAction: Boolean,
     onBack: () -> Unit,
     onPlay: (Song, List<Song>, String?) -> Unit,
     onShuffle: (List<Song>, String?) -> Unit,
@@ -1784,6 +1915,7 @@ private fun LibraryCollectionScreen(
     var featureOffset by remember(title, songs) { mutableStateOf(0) }
     var favoriteSparkleTrigger by remember(title, songs) { mutableIntStateOf(0) }
     var menuSong by remember { mutableStateOf<Song?>(null) }
+    var collectionOptionsVisible by remember { mutableStateOf(false) }
     var addToPlaylist by remember { mutableStateOf(false) }
     val displaySongs = remember(songs, sortMode, personalizedRecommendations) {
         when (sortMode) {
@@ -1857,7 +1989,7 @@ private fun LibraryCollectionScreen(
                             ) {
                                 Image(androidx.compose.ui.res.painterResource(R.drawable.play_solid), null, Modifier.size(19.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color(0xFF111111)))
                             }
-                            if (page != LibraryPage.Songs) {
+                            if (showCollectionFavoriteAction && page != LibraryPage.Songs) {
                                 val allFavorites = displaySongs.isNotEmpty() && displaySongs.all { it.id in favoriteIds }
                                 IconButton(
                                     onClick = {
@@ -1900,39 +2032,26 @@ private fun LibraryCollectionScreen(
                     }
                     Box {
                         Box(Modifier.size(36.dp).clickable { menuSong = item }, contentAlignment = Alignment.Center) { FigmaMoreIcon(30.dp) }
-                        DropdownMenu(expanded = menuSong?.id == item.id, onDismissRequest = { menuSong = null }) {
-                            DropdownMenuItem(
-                                text = { Text("Play next") },
-                                leadingIcon = {
-                                    Icon(
-                                        androidx.compose.ui.res.painterResource(R.drawable.action_play_next),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuSong = null; onPlayNext(item) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add to queue") },
-                                leadingIcon = {
-                                    Icon(
-                                        androidx.compose.ui.res.painterResource(R.drawable.action_add_to_queue),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { menuSong = null; onAddToQueue(item) },
-                            )
-                            DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { menuSong = null; onRequestAddToPlaylist(item) })
-                            DropdownMenuItem(text = { Text("Go to album") }, onClick = { menuSong = null; onNavigateToAlbum(item) })
-                            DropdownMenuItem(text = { Text("Go to artist") }, onClick = { menuSong = null; onNavigateToArtist(item) })
-                            if (isPlaylist) DropdownMenuItem(text = { Text("Remove from playlist") }, onClick = { menuSong = null; onRemoveSongFromPlaylist(item.id) })
-                        }
                     }
                 }
                 Hairline()
             }
             if (songs.isEmpty()) item { LibraryEmpty("No songs yet", "Add music to your library, then come back here.") }
+        }
+        menuSong?.let { item ->
+            LibrarySongActionsSheet(
+                song = item,
+                isFavorite = item.id in favoriteIds,
+                onDismiss = { menuSong = null },
+                onPlayNext = onPlayNext,
+                onAddToQueue = onAddToQueue,
+                onToggleFavorite = { song -> onSetFavorites(setOf(song.id), song.id !in favoriteIds) },
+                onRequestAddToPlaylist = onRequestAddToPlaylist,
+                onNavigateToAlbum = onNavigateToAlbum,
+                onNavigateToArtist = onNavigateToArtist,
+                showFavoriteAction = false,
+                onRemoveFromPlaylist = if (isPlaylist) ({ onRemoveSongFromPlaylist(item.id) }) else null,
+            )
         }
         Row(
             Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding().padding(start = 14.dp, end = 14.dp, top = 8.dp),
@@ -1944,57 +2063,51 @@ private fun LibraryCollectionScreen(
                 icon = Icons.AutoMirrored.Filled.ArrowBack,
                 modifier = Modifier.size(42.dp),
                 iconSize = 23.dp,
+                surfaceAlpha = .15f,
                 frosted = true,
             )
             Spacer(Modifier.weight(1f))
             if (isDetail) {
-                var expanded by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { expanded = true }, modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(.2f))) {
-                        FigmaMoreIcon(30.dp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (isPlaylist) {
+                        LibrarySoftIconButton(
+                            onClick = onSort,
+                            contentDescription = "Sort playlist songs",
+                            icon = null,
+                            modifier = Modifier.size(42.dp),
+                            iconSize = 22.dp,
+                            frosted = true,
+                            sortIcon = true,
+                        )
                     }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        if (isPlaylist) {
-                            DropdownMenuItem(text = { Text("Edit playlist") }, onClick = { expanded = false; onRequestRenamePlaylist() })
-                            DropdownMenuItem(text = { Text(if (pinned) "Unpin" else "Pin") }, onClick = { expanded = false; onTogglePin() })
-                            DropdownMenuItem(text = { Text("Delete playlist") }, onClick = { expanded = false; onRequestDeletePlaylist() })
-                        }
-                        displaySongs.firstOrNull()?.let { first ->
-                            DropdownMenuItem(
-                                text = { Text("Play next") },
-                                leadingIcon = {
-                                    Icon(
-                                        androidx.compose.ui.res.painterResource(R.drawable.action_play_next),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { expanded = false; onPlayNext(first) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add to queue") },
-                                leadingIcon = {
-                                    Icon(
-                                        androidx.compose.ui.res.painterResource(R.drawable.action_add_to_queue),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                onClick = { expanded = false; onAddToQueue(first) },
-                            )
-                        }
-                    }
+                    LibrarySoftMoreButton(onClick = { collectionOptionsVisible = true }, contentDescription = "Collection options")
                 }
             } else {
                 LibrarySoftIconButton(
                     onClick = onSort,
                     contentDescription = "Sort songs",
-                    icon = Icons.Default.Tune,
+                    icon = null,
                     modifier = Modifier.size(40.dp),
                     iconSize = 22.dp,
                     frosted = true,
+                    sortIcon = true,
                 )
             }
+        }
+        if (collectionOptionsVisible) {
+            LibraryCollectionActionsSheet(
+                title = title,
+                subtitle = subtitle,
+                artworkSong = displaySongs.firstOrNull(),
+                isPlaylist = isPlaylist,
+                pinned = pinned,
+                onDismiss = { collectionOptionsVisible = false },
+                onRenamePlaylist = onRequestRenamePlaylist,
+                onTogglePin = onTogglePin,
+                onDeletePlaylist = onRequestDeletePlaylist,
+                onPlayNext = onPlayNext,
+                onAddToQueue = onAddToQueue,
+            )
         }
     }
     if (addToPlaylist) {

@@ -9,6 +9,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
@@ -77,7 +78,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -113,6 +113,7 @@ internal fun SearchScreen(
     semanticLoading: Boolean = false,
     semanticSearchComplete: Boolean = false,
     searchActivationSignal: Int = 0,
+    searchReselectSignal: Int = 0,
     searchBrowseSignal: Int = 0,
     searchError: String? = null,
     searchNotice: String? = null,
@@ -155,6 +156,7 @@ internal fun SearchScreen(
         )
     }
     var recentSongMenu by remember { mutableStateOf<Song?>(null) }
+    var genreSongMenu by remember { mutableStateOf<Song?>(null) }
     fun rememberRecentSearch(rawQuery: String) {
         val term = rawQuery.trim()
         if (term.isEmpty()) return
@@ -193,6 +195,18 @@ internal fun SearchScreen(
         if (searchActivationSignal > 0) {
             focusRequester.requestFocus()
             keyboardController?.show()
+        }
+    }
+    LaunchedEffect(searchReselectSignal) {
+        if (searchReselectSignal > 0) {
+            if (query.isBlank() && selectedGenre == null && focused) {
+                focused = false
+                focusManager.clearFocus()
+                keyboardController?.hide()
+            } else {
+                focusRequester.requestFocus()
+                keyboardController?.show()
+            }
         }
     }
     LaunchedEffect(searchBrowseSignal) {
@@ -249,8 +263,17 @@ internal fun SearchScreen(
                         val shape = RoundedCornerShape(16.dp)
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)
-                                .clip(shape).background(Brush.verticalGradient(listOf(genreTint, Color.Black)))
-                                .border(1.dp, Color.White.copy(.14f), shape)
+                                .clip(shape)
+                                .background(
+                                    Brush.linearGradient(
+                                        colorStops = arrayOf(
+                                            0f to genreTint.copy(alpha = .94f),
+                                            .38f to genreTint.copy(alpha = .68f),
+                                            .76f to Color(0xFF191922),
+                                            1f to Color(0xFF08090E),
+                                        ),
+                                    ),
+                                )
                                 .padding(horizontal = 16.dp, vertical = 13.dp),
                         ) {
                             Text(genreName, color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -283,7 +306,11 @@ internal fun SearchScreen(
                         }
                     }
                     itemsIndexed(genreSongs, key = { _, song -> song.id }) { index, song ->
-                        SearchResultRow(song) { onPlay(it, "genre") }
+                        SearchResultRow(
+                            song = song,
+                            onPlay = { onPlay(it, "genre") },
+                            onLongClick = { genreSongMenu = it },
+                        )
                         if (index != genreSongs.lastIndex) Hairline()
                     }
                 } else if (query.isNotBlank()) {
@@ -351,11 +378,11 @@ internal fun SearchScreen(
                         }
                     }
                     itemsIndexed(searchResults.orEmpty(), key = { _, song -> song.id }) { index, song ->
-                        SearchResultRow(song, Modifier.animateItem()) {
+                        SearchResultRow(song, Modifier.animateItem(), onPlay = {
                             rememberRecentSong(it)
                             removeRecentSearch(query)
                             onPlay(it, "search")
-                        }
+                        })
                         if (index != searchResults.orEmpty().lastIndex) Hairline()
                     }
                 } else if (!focused) {
@@ -492,11 +519,35 @@ internal fun SearchScreen(
             },
         )
     }
+    genreSongMenu?.let { song ->
+        SearchRecentSongActionsSheet(
+            song = song,
+            isFavorite = song.id in favoriteIds,
+            onDismiss = { genreSongMenu = null },
+            onPlayNext = onPlayNext,
+            onAddToQueue = onAddToQueue,
+            onToggleFavorite = onToggleFavorite,
+            onRequestAddToPlaylist = onRequestAddToPlaylist,
+            onNavigateToAlbum = onNavigateToAlbum,
+            onNavigateToArtist = onNavigateToArtist,
+            showRemoveFromRecent = false,
+        )
+    }
 }
 
 @Composable
-internal fun SearchResultRow(song: Song, modifier: Modifier = Modifier, onPlay: (Song) -> Unit) {
-    Row(modifier.fillMaxWidth().clickable { onPlay(song) }.padding(horizontal = 20.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+internal fun SearchResultRow(
+    song: Song,
+    modifier: Modifier = Modifier,
+    onPlay: (Song) -> Unit,
+    onLongClick: ((Song) -> Unit)? = null,
+) {
+    val interactionModifier = if (onLongClick != null) {
+        Modifier.combinedClickable(onClick = { onPlay(song) }, onLongClick = { onLongClick(song) })
+    } else {
+        Modifier.clickable { onPlay(song) }
+    }
+    Row(modifier.fillMaxWidth().then(interactionModifier).padding(horizontal = 20.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         AlbumArt(song, Modifier.size(46.dp), song.title, 8.dp)
         Column(Modifier.weight(1f)) {
             Text(song.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -650,10 +701,8 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: B
     LaunchedEffect(silverGlowActive) {
         if (silverGlowActive) {
             silverGlowProgress.snapTo(0f)
-            silverGlowProgress.animateTo(1f, tween(durationMillis = 500, easing = LinearEasing))
-        } else {
-            silverGlowProgress.snapTo(1f)
         }
+        silverGlowProgress.animateTo(1f, tween(durationMillis = 1300, easing = FastOutSlowInEasing))
     }
     Box(
         modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).height(58.dp)
@@ -683,28 +732,21 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, focused: B
                 )
                 .drawWithCache {
                     val progress = silverGlowProgress.value.coerceIn(0f, 1f)
-                    val columns = 72
-                    val columnWidth = size.width / columns
-                    val centerX = size.width / 2f
-                    val maxDistance = centerX.coerceAtLeast(1f)
-                    val feather = (maxDistance * .12f).coerceAtLeast(1f)
-                    val fadeFront = -feather + progress * (maxDistance + feather * 2f)
+                    val remainingGlow = 1f - progress
+                    val glowAlpha = .28f * remainingGlow * remainingGlow
+                    val glowRadius = (size.width * (.1f + .82f * progress)).coerceAtLeast(1f)
+                    val glow = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0f to Color(0xFFF4F7FB).copy(alpha = glowAlpha),
+                            .32f to Color(0xFFE2EAF4).copy(alpha = glowAlpha * .58f),
+                            .72f to Color(0xFFDDE2EA).copy(alpha = glowAlpha * .12f),
+                            1f to Color.Transparent,
+                        ),
+                        center = Offset(size.width / 2f, size.height / 2f),
+                        radius = glowRadius,
+                    )
                     onDrawBehind {
-                        for (column in 0 until columns) {
-                            val x = (column + .5f) * columnWidth
-                            val distance = kotlin.math.abs(x - centerX)
-                            val fade = ((fadeFront - (distance - feather)) / (feather * 2f))
-                                .coerceIn(0f, 1f)
-                            val easedFade = fade * fade * (3f - 2f * fade)
-                            val remainingGlow = 1f - easedFade
-                            val centerGlow = 1f - (distance / maxDistance).coerceIn(0f, 1f)
-                            val alpha = (.045f + .22f * centerGlow * centerGlow) * remainingGlow
-                            drawRect(
-                                color = Color(0xFFDDE2EA).copy(alpha = alpha),
-                                topLeft = Offset(column * columnWidth, 0f),
-                                size = Size(columnWidth + 1f, size.height),
-                            )
-                        }
+                        drawRect(glow)
                     }
                 },
         )
@@ -739,7 +781,8 @@ private fun SearchRecentSongActionsSheet(
     onRequestAddToPlaylist: (Song) -> Unit,
     onNavigateToAlbum: (Song) -> Unit,
     onNavigateToArtist: (Song) -> Unit,
-    onRemoveFromRecent: () -> Unit,
+    onRemoveFromRecent: () -> Unit = {},
+    showRemoveFromRecent: Boolean = true,
 ) {
     WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = song) { close ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -759,6 +802,8 @@ private fun SearchRecentSongActionsSheet(
         SheetActionRow(Icons.Default.Add, "Add to playlist") { close(); onRequestAddToPlaylist(song) }
         SheetActionRow(Icons.Default.Album, "Go to album") { close(); onNavigateToAlbum(song) }
         SheetActionRow(Icons.Default.Mic, "Go to artist") { close(); onNavigateToArtist(song) }
-        SheetActionRow(Icons.Default.Delete, "Remove from recent") { close(); onRemoveFromRecent() }
+        if (showRemoveFromRecent) {
+            SheetActionRow(Icons.Default.Delete, "Remove from recent") { close(); onRemoveFromRecent() }
+        }
     }
 }

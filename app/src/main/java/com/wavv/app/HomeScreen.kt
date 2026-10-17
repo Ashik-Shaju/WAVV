@@ -508,12 +508,12 @@ internal fun HomeMixCardOverlayFlight(
     }
 }
 
-private fun brighterAcrylicLogoColor(surfaceColor: Color): Color {
+private fun brighterAccentColor(accentColor: Color): Color {
     val lift = .54f
     return Color(
-        red = surfaceColor.red + (1f - surfaceColor.red) * lift,
-        green = surfaceColor.green + (1f - surfaceColor.green) * lift,
-        blue = surfaceColor.blue + (1f - surfaceColor.blue) * lift,
+        red = accentColor.red + (1f - accentColor.red) * lift,
+        green = accentColor.green + (1f - accentColor.green) * lift,
+        blue = accentColor.blue + (1f - accentColor.blue) * lift,
     )
 }
 
@@ -661,16 +661,27 @@ internal fun HomeScreen(
     BackHandler(enabled = mixDetailVisible && !isNowPlayingOpen) { closeHomeMixDetail() }
     var backdropSong by remember(carouselSongs) { mutableStateOf(carouselSongs.firstOrNull()) }
     var acrylicChipColor by remember { mutableStateOf(Color(0xFF26385D)) }
+    var carouselAccentColor by remember(carouselSongs) {
+        mutableStateOf(carouselSongs.firstOrNull()?.let { homeFallbackAccent(it.id) } ?: Color(0xFF26385D))
+    }
     val context = LocalContext.current
     LaunchedEffect(backdropSong) {
-        acrylicChipColor = backdropSong?.let { song ->
-            withContext(Dispatchers.IO) { homeAcrylicChipColor(context, song) }
-        } ?: Color(0xFF26385D)
+        val activeCard = backdropSong
+        if (activeCard == null) {
+            acrylicChipColor = Color(0xFF26385D)
+            carouselAccentColor = Color(0xFF26385D)
+        } else {
+            val colors = withContext(Dispatchers.IO) {
+                homeAcrylicChipColor(context, activeCard) to homeThumbnailAccentColor(context, activeCard)
+            }
+            acrylicChipColor = colors.first
+            carouselAccentColor = colors.second
+        }
     }
     val acrylicLogoColor by animateColorAsState(
-        targetValue = brighterAcrylicLogoColor(acrylicChipColor),
+        targetValue = brighterAccentColor(carouselAccentColor),
         animationSpec = tween(650, easing = WavvMotionEasing),
-        label = "home acrylic logo color",
+        label = "active carousel accent logo color",
     )
 
     Box(Modifier.fillMaxSize()) {
