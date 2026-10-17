@@ -3712,9 +3712,14 @@ private fun FullPlayer(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { showTrackCredits = false }) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to track options", tint = Color.White)
-                                }
+                                LibrarySoftIconButton(
+                                    onClick = { showTrackCredits = false },
+                                    contentDescription = "Back to track options",
+                                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                                    modifier = Modifier.size(48.dp),
+                                    iconSize = 24.dp,
+                                    frosted = true,
+                                )
                                 Text("Credits", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
                             }
                             Row(

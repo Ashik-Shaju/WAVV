@@ -1312,7 +1312,7 @@ private fun LibraryHistoryAction(historyVisible: Boolean, onToggleHistory: () ->
 }
 
 @Composable
-private fun LibrarySoftIconButton(
+internal fun LibrarySoftIconButton(
     onClick: () -> Unit,
     contentDescription: String,
     icon: ImageVector,
@@ -1321,6 +1321,7 @@ private fun LibrarySoftIconButton(
     tint: Color = Color.White.copy(.9f),
     surfaceAlpha: Float = .085f,
     frosted: Boolean = false,
+    enabled: Boolean = true,
 ) {
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val backdropCaptureState = remember { AtomicBoolean(false) }
@@ -1328,6 +1329,7 @@ private fun LibrarySoftIconButton(
         modifier.clip(CircleShape)
             .then(if (frosted) Modifier else Modifier.background(Color.White.copy(surfaceAlpha)))
             .clickable(
+                enabled = enabled,
                 interactionSource = interactionSource,
                 indication = null,
                 role = Role.Button,
@@ -1936,9 +1938,14 @@ private fun LibraryCollectionScreen(
             Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding().padding(start = 14.dp, end = 14.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.Black.copy(.2f))) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-            }
+            LibrarySoftIconButton(
+                onClick = onBack,
+                contentDescription = "Back",
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                modifier = Modifier.size(42.dp),
+                iconSize = 23.dp,
+                frosted = true,
+            )
             Spacer(Modifier.weight(1f))
             if (isDetail) {
                 var expanded by remember { mutableStateOf(false) }
@@ -1979,9 +1986,14 @@ private fun LibraryCollectionScreen(
                     }
                 }
             } else {
-                IconButton(onClick = onSort, modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(.2f))) {
-                    Icon(Icons.Default.Tune, contentDescription = "Sort songs", tint = Color.White)
-                }
+                LibrarySoftIconButton(
+                    onClick = onSort,
+                    contentDescription = "Sort songs",
+                    icon = Icons.Default.Tune,
+                    modifier = Modifier.size(40.dp),
+                    iconSize = 22.dp,
+                    frosted = true,
+                )
             }
         }
     }

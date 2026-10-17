@@ -1339,11 +1339,15 @@ private fun HomeCategoryDetailScreen(
         Box(Modifier.fillMaxWidth().height(204.dp).background(color.copy(alpha = .12f))) {
             artworkSong?.let { AlbumArt(it, Modifier.fillMaxSize().statusBarsPadding().alpha(.4f).edgeBlendedArtworkMask(), title, 0.dp) }
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color(0xFF090B11).copy(alpha = .72f))))
-            IconButton(
+            LibrarySoftIconButton(
                 onClick = onClose,
+                contentDescription = "Back",
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
                 modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 16.dp, top = 8.dp)
-                    .size(36.dp).clip(CircleShape).background(Color.Black.copy(.3f)).border(1.dp, Color.White.copy(.2f), CircleShape),
-            ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(18.dp)) }
+                    .size(36.dp),
+                iconSize = 18.dp,
+                frosted = true,
+            )
             Column(Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 18.dp)) {
                 Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, fontFamily = FontFamily.SansSerif)
                 Text("${songs.size} songs", Modifier.padding(top = 3.dp), color = Color.White.copy(.58f), fontSize = 13.sp)
@@ -1443,14 +1447,16 @@ private fun HomeMixDetailScreen(
                             )
                         }
                     }
-                    IconButton(
-                        enabled = isInteractive,
+                    LibrarySoftIconButton(
                         onClick = onBack,
+                        contentDescription = "Back to home",
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
                         modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 12.dp, top = 8.dp)
-                            .size(42.dp).clip(CircleShape).background(Color.Black.copy(.28f)),
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to home", tint = Color.White)
-                    }
+                            .size(42.dp),
+                        iconSize = 23.dp,
+                        frosted = true,
+                        enabled = isInteractive,
+                    )
                     Column(
                         Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
