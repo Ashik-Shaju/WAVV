@@ -20,7 +20,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    val releaseKeystore = file("keystore/wavv-release.jks")
+    val releaseKeystore = file("keystore/android key")
     val releaseSigningValues = listOf(
         System.getenv("WAVV_KEYSTORE_PASSWORD"),
         System.getenv("WAVV_KEY_ALIAS"),
