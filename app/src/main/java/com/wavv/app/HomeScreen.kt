@@ -1401,16 +1401,24 @@ private fun HomeMixDetailScreen(
     LaunchedEffect(mix.seed.id, mix.seed.albumArtUri, mix.seed.uri) {
         artworkAccent = withContext(Dispatchers.IO) { homeThumbnailAccentColor(context, mix.seed) }
     }
-    val titleAccent = Color(
-        red = (artworkAccent.red * 1.45f).coerceAtMost(.95f),
-        green = (artworkAccent.green * 1.45f).coerceAtMost(.95f),
-        blue = (artworkAccent.blue * 1.45f).coerceAtMost(.95f),
-    )
-    val playContentColor = if (
-        artworkAccent.red * .299f + artworkAccent.green * .587f + artworkAccent.blue * .114f > .55f
-    ) Color(0xFF111111) else Color.White
+    val accentLuminance = artworkAccent.red * .299f + artworkAccent.green * .587f + artworkAccent.blue * .114f
+    val actionAccent = if (accentLuminance > .52f) {
+        Color(
+            red = (artworkAccent.red * .62f).coerceAtLeast(.08f),
+            green = (artworkAccent.green * .62f).coerceAtLeast(.08f),
+            blue = (artworkAccent.blue * .62f).coerceAtLeast(.08f),
+        )
+    } else {
+        Color(
+            red = (artworkAccent.red * 1.55f).coerceAtMost(.92f),
+            green = (artworkAccent.green * 1.55f).coerceAtMost(.92f),
+            blue = (artworkAccent.blue * 1.55f).coerceAtMost(.92f),
+        )
+    }
+    val titleAccent = if (accentLuminance > .52f) Color.White else Color(0xFFE8F0FF)
+    val playContentColor = if (actionAccent.red * .299f + actionAccent.green * .587f + actionAccent.blue * .114f > .55f) Color(0xFF111111) else Color.White
     BoxWithConstraints(modifier.graphicsLayer { alpha = overlayAlpha }.background(WavvBackground)) {
-        val heroHeight = minOf(620.dp, maxWidth + 170.dp)
+        val heroHeight = minOf(660.dp, maxWidth + 220.dp)
         val artworkSize = minOf(maxWidth, 480.dp)
         val density = LocalDensity.current
         val mixListState = rememberLazyListState()
@@ -1489,7 +1497,7 @@ private fun HomeMixDetailScreen(
                         ) {
                             Row(
                                 Modifier.weight(3f).height(56.dp)
-                                    .clip(CircleShape).background(artworkAccent)
+                                    .clip(CircleShape).background(actionAccent)
                                     .scrollSafeTap(
                                         enabled = isInteractive,
                                         canTap = { isInteractive && !mixListIsScrolling.value },
@@ -1502,7 +1510,7 @@ private fun HomeMixDetailScreen(
                             }
                             Box(
                                 Modifier.weight(1f).height(56.dp)
-                                    .clip(CircleShape).background(artworkAccent)
+                                    .clip(CircleShape).background(actionAccent)
                                     .scrollSafeTap(
                                         enabled = isInteractive,
                                         canTap = { isInteractive && !mixListIsScrolling.value },

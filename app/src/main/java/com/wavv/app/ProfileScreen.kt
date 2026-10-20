@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PrivacyTip
@@ -196,6 +197,7 @@ internal fun YouScreen(
         ProfileSetting(Icons.Default.History, "Listening History", "Local · 1 year", "Listening activity stays on this device for up to one year and is used to personalize recommendations.", ProfileSettingContent.History),
         ProfileSetting(Icons.Outlined.PrivacyTip, "Privacy", "", "Your selected library and playback history are stored locally on this device."),
         ProfileSetting(Icons.AutoMirrored.Outlined.HelpOutline, "Help & Support", "", "Wavv is a local music player. Open Android app settings to manage permissions. No in-app support contact is configured."),
+        ProfileSetting(Icons.Outlined.Info, "About", "WAVV project", "Wavv is a local-first music player designed to make on-device listening feel calm, fast, and personal. It is built and maintained by Bristo Biju and Ashik Shaju."),
     )
     var activeSetting by remember { mutableStateOf<ProfileSetting?>(null) }
     var confirmClearHistory by remember { mutableStateOf(false) }
@@ -502,6 +504,23 @@ internal fun YouScreen(
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text("Open app settings") }
+                        } else if (setting.title == "About") {
+                            Spacer(Modifier.height(12.dp))
+                            Text("Developers", color = Color.White.copy(.55f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Bristo Biju · Ashik Shaju", Modifier.padding(top = 4.dp), color = Color.White.copy(.82f), fontSize = 14.sp)
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(
+                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Ashik-Shaju/WAVV"))) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("WAVV on GitHub") }
+                            TextButton(
+                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/bristo-biju"))) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Bristo Biju · GitHub") }
+                            TextButton(
+                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Ashik-Shaju"))) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Ashik Shaju · GitHub") }
                         }
                     }
                 }

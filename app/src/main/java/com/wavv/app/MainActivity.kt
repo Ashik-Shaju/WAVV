@@ -950,6 +950,8 @@ private fun audioPermission(): String = if (Build.VERSION.SDK_INT >= Build.VERSI
 }
 
 private const val PLAYLIST_PIN_PREFERENCES = "wavv.playlists"
+private const val WAVV_WELCOME_PREFERENCES = "wavv.welcome"
+private const val WAVV_WELCOME_SEEN = "welcome_seen"
 private const val PLAYLIST_PIN_IDS = "pinned_ids"
 
 private fun reportQueueAction(result: QueueActionResult, showMessage: (String) -> Unit) {
@@ -1149,6 +1151,12 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     val hostActivity = remember(context) { context.findActivity() }
     val playlistPinPreferences = remember(context) {
         context.getSharedPreferences(PLAYLIST_PIN_PREFERENCES, Context.MODE_PRIVATE)
+    }
+    val welcomePreferences = remember(context) {
+        context.getSharedPreferences(WAVV_WELCOME_PREFERENCES, Context.MODE_PRIVATE)
+    }
+    var showWelcome by remember(welcomePreferences) {
+        mutableStateOf(!welcomePreferences.getBoolean(WAVV_WELCOME_SEEN, false))
     }
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
@@ -2207,28 +2215,16 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
             )
         }
         if (showCreatePlaylist) {
-            AlertDialog(
-                onDismissRequest = { showCreatePlaylist = false },
-                title = { Text("Create playlist") },
-                text = {
-                    OutlinedTextField(
-                        value = createPlaylistName,
-                        onValueChange = { createPlaylistName = it },
-                        singleLine = true,
-                        label = { Text("Playlist name") },
-                    )
+            CreatePlaylistSheet(
+                name = createPlaylistName,
+                artworkSong = songs.firstOrNull { it.id == createPlaylistSongId },
+                onNameChange = { createPlaylistName = it },
+                onDismiss = { showCreatePlaylist = false },
+                onCreate = {
+                    onCreatePlaylist(createPlaylistName, createPlaylistSongId) { success ->
+                        if (success) showCreatePlaylist = false
+                    }
                 },
-                confirmButton = {
-                    TextButton(
-                        enabled = createPlaylistName.isNotBlank(),
-                        onClick = {
-                            onCreatePlaylist(createPlaylistName, createPlaylistSongId) { success ->
-                                if (success) showCreatePlaylist = false
-                            }
-                        },
-                    ) { Text("Create") }
-                },
-                dismissButton = { TextButton(onClick = { showCreatePlaylist = false }) { Text("Cancel") } },
             )
         }
         renamePlaylist?.let { playlist ->
@@ -2267,6 +2263,19 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                     }) { Text("Delete") }
                 },
                 dismissButton = { TextButton(onClick = { deletePlaylist = null }) { Text("Cancel") } },
+            )
+        }
+        if (showWelcome && showLibrary && !showStandby) {
+            WavvWelcomeSheet(
+                onDismiss = {
+                    welcomePreferences.edit().putBoolean(WAVV_WELCOME_SEEN, true).apply()
+                    showWelcome = false
+                },
+                onGetStarted = {
+                    welcomePreferences.edit().putBoolean(WAVV_WELCOME_SEEN, true).apply()
+                    showWelcome = false
+                    tab = Tab.You
+                },
             )
         }
         AnimatedVisibility(
@@ -2591,68 +2600,93 @@ private fun ImportSourceScreen(
     onChooseFiles: () -> Unit,
     onChooseFolder: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        ScreenHeader("wavv", waveform = true, titleFontFamily = WavvAppNameFontFamily)
-        Column(
-            Modifier.fillMaxWidth().padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF3A122A), Color(0xFF17131F))))
-                    .border(1.dp, Color.White.copy(.1f), RoundedCornerShape(28.dp))
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(
-                    Modifier.size(58.dp).clip(CircleShape).background(WavvAccentGradient),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Default.LibraryMusic, contentDescription = null, tint = Color.White, modifier = Modifier.size(30.dp))
-                }
-                Text(
-                    buildAnnotatedString {
-                        append("Bring your music to ")
-                        append("wavv")
-                    },
-                    color = Color.White,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.ExtraBold,
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Box(Modifier.fillMaxWidth().height(360.dp)) {
+                Image(
+                    painter = androidx.compose.ui.res.painterResource(R.drawable.startup_dj_gradient),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
                 )
-                Text("Choose one place for Wavv to read your audio from. You can change this later.", color = Color.White.copy(.62f), fontSize = 15.sp, lineHeight = 21.sp)
+                Box(
+                    Modifier.matchParentSize().background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            .42f to Color.Black.copy(.12f),
+                            1f to Color.Black,
+                        ),
+                    ),
+                )
+                Text(
+                    "wavv",
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp),
+                    color = Color.White,
+                    fontSize = 54.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = WavvAppNameFontFamily,
+                )
             }
-            Text("Choose a source", color = WavvMuted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .8.sp)
-            SourceOptionCard(Icons.Default.LibraryMusic, "All music on this device", "Use music indexed by Android.", onChooseAllDevice)
-            SourceOptionCard(Icons.Default.MusicNote, "Individual audio files", "Pick one or more files from storage.", onChooseFiles)
-            SourceOptionCard(Icons.Default.Folder, "A specific folder", "Include audio in this folder and its subfolders.", onChooseFolder)
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "Your music, your space.",
+                    color = Color.White.copy(.64f),
+                    fontSize = 14.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Text("Bring your music to wavv", Modifier.padding(top = 8.dp), color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Text("Choose where Wavv should read your audio from.", Modifier.padding(top = 8.dp, bottom = 24.dp), color = Color.White.copy(.56f), fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SourceOptionCard(Icons.Default.LibraryMusic, "All music on this device", "Use music indexed by Android.", onChooseAllDevice)
+                    SourceOptionCard(Icons.Default.MusicNote, "Individual audio files", "Pick one or more files from storage.", onChooseFiles)
+                    SourceOptionCard(Icons.Default.Folder, "A specific folder", "Include audio in this folder and its subfolders.", onChooseFolder)
+                }
+                Spacer(Modifier.height(24.dp))
+            }
         }
     }
 }
 
 @Composable
 private fun SourceOptionCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(WavvSurfaceGradient)
-            .border(1.dp, Color.White.copy(alpha = .08f), RoundedCornerShape(22.dp))
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    val shape = CircleShape
+    val captureState = remember { AtomicBoolean(false) }
+    Box(
+        Modifier.fillMaxWidth().height(58.dp).clip(shape)
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
     ) {
-        Box(
-            Modifier.size(48.dp).clip(CircleShape).background(Brush.linearGradient(listOf(WavvPink.copy(.32f), Color(0xFF7B1FA2).copy(.24f)))),
-            contentAlignment = Alignment.Center,
+        FrostedBackdrop(
+            captureState = captureState,
+            blurRadiusDp = 26f,
+            tint = Color(0x6623262D),
+            modifier = Modifier.matchParentSize().clip(shape),
+            refreshEnabled = true,
+        )
+        Box(Modifier.matchParentSize().background(Color.White.copy(.045f)))
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = WavvPink, modifier = Modifier.size(24.dp))
+            Icon(icon, contentDescription = null, tint = Color.White.copy(.94f), modifier = Modifier.size(22.dp))
+            Text(
+                title,
+                Modifier.padding(start = 14.dp),
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text(subtitle, color = WavvMuted, fontSize = 13.sp)
-        }
-        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.White.copy(alpha = .3f))
     }
 }
 
@@ -2888,6 +2922,8 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
     }
     val horizontalDismissOffset = remember(song.id) { Animatable(0f) }
     val horizontalDismissScope = rememberCoroutineScope()
+    var horizontalDragInProgress by remember(song.id) { mutableStateOf(false) }
+    var pointerDragX by remember(song.id) { mutableFloatStateOf(0f) }
     val shape = RoundedCornerShape(cornerRadius)
     val density = LocalDensity.current
     val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
@@ -2907,57 +2943,85 @@ private fun NowPlayingBar(song: Song, state: PlaybackState, progressFlow: StateF
     val barPosition = restingPosition * (1f - dockProgress) + topPosition * dockProgress
     Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).offset(y = barPosition).height(height)
         .onGloballyPositioned { onBoundsChange(it.boundsInRoot()) }
-        .graphicsLayer { translationX = horizontalDismissOffset.value }
         .pointerInput(expanded, stacked, onCollapse, onExpand, onEnterStandby, onDismiss) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                var swiped = false
-                while (true) {
+                var previousPosition = down.position
+                var dragX = 0f
+                var horizontalDrag = false
+                var verticalDrag = false
+                var released = false
+                while (!released) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                    if (!change.pressed) break
-                    val delta = change.position - down.position
-                    val crossedTouchSlop = kotlin.math.max(kotlin.math.abs(delta.x), kotlin.math.abs(delta.y)) > viewConfiguration.touchSlop
-                    if (
-                        !swiped && crossedTouchSlop &&
-                        kotlin.math.abs(delta.x) > kotlin.math.abs(delta.y) * 1.15f
-                    ) {
-                        swiped = true
-                        change.consume()
-                        val direction = if (delta.x < 0f) -1f else 1f
-                        val dismissTarget = size.width * direction
-                        horizontalDismissScope.launch {
-                            horizontalDismissOffset.animateTo(
-                                targetValue = dismissTarget,
-                                animationSpec = tween(180, easing = WavvMotionEasing),
-                            )
-                            onDismiss()
+                    val delta = change.position - previousPosition
+                    previousPosition = change.position
+                    if (!change.pressed) {
+                        if (horizontalDrag) {
+                            dragX = (dragX + delta.x).coerceIn(-size.width.toFloat(), size.width.toFloat())
+                            pointerDragX = dragX
                         }
-                        break
-                    } else if (
-                        !swiped && (expanded || stacked) && crossedTouchSlop &&
-                        kotlin.math.abs(delta.y) > kotlin.math.abs(delta.x) * 1.15f
-                    ) {
-                        if (expanded && delta.y < 0f) {
-                            swiped = true
+                        released = true
+                        continue
+                    }
+                    if (!horizontalDrag && !verticalDrag) {
+                        val total = change.position - down.position
+                        val crossedTouchSlop = kotlin.math.max(kotlin.math.abs(total.x), kotlin.math.abs(total.y)) > viewConfiguration.touchSlop
+                        if (crossedTouchSlop && kotlin.math.abs(total.x) > kotlin.math.abs(total.y) * 1.15f) {
+                            horizontalDrag = true
+                            dragX = total.x
+                            horizontalDragInProgress = true
+                            pointerDragX = dragX.coerceIn(-size.width.toFloat(), size.width.toFloat())
                             change.consume()
-                            onCollapse()
-                        } else if (expanded && delta.y > 0f) {
-                            swiped = true
-                            change.consume()
-                            onEnterStandby()
-                        } else if (stacked && delta.y > 0f) {
-                            swiped = true
-                            change.consume()
-                            onExpand()
+                        } else if (crossedTouchSlop && kotlin.math.abs(total.y) > kotlin.math.abs(total.x) * 1.15f) {
+                            if (expanded && total.y < 0f) {
+                                verticalDrag = true
+                                change.consume()
+                                onCollapse()
+                            } else if (expanded && total.y > 0f) {
+                                verticalDrag = true
+                                change.consume()
+                                onEnterStandby()
+                            } else if (stacked && total.y > 0f) {
+                                verticalDrag = true
+                                change.consume()
+                                onExpand()
+                            }
                         }
-                    } else if (swiped) {
+                    } else if (horizontalDrag) {
+                        dragX = (dragX + delta.x).coerceIn(-size.width.toFloat(), size.width.toFloat())
                         change.consume()
+                        pointerDragX = dragX
+                    } else if (verticalDrag) {
+                        change.consume()
+                    }
+                }
+                if (horizontalDrag) {
+                    val dismissThreshold = size.width * .38f
+                    val dismiss = kotlin.math.abs(dragX) >= dismissThreshold
+                    val destination = if (dismiss) {
+                        size.width * if (dragX < 0f) -1f else 1f
+                    } else {
+                        0f
+                    }
+                    horizontalDismissScope.launch {
+                        horizontalDismissOffset.snapTo(dragX)
+                        horizontalDragInProgress = false
+                        horizontalDismissOffset.animateTo(
+                            targetValue = destination,
+                            animationSpec = tween(if (dismiss) 180 else 220, easing = WavvMotionEasing),
+                        )
+                        if (dismiss) onDismiss()
                     }
                 }
             }
         }
-        .shadow(18.dp, shape).clip(shape)
+        .graphicsLayer {
+            translationX = if (horizontalDragInProgress) pointerDragX else horizontalDismissOffset.value
+            this.shape = shape
+            clip = true
+            shadowElevation = with(density) { 18.dp.toPx() }
+        }
         .clickable(onClick = onOpen)) {
         Box(Modifier.matchParentSize().homeNowPlayingFill(accentColor))
         Box(
@@ -3642,8 +3706,10 @@ private fun FullPlayer(
         }
         AnimatedVisibility(
             visible = showQueue,
-            enter = fadeIn(tween(150, easing = WavvEaseInOut)) + slideInVertically(tween(280, easing = WavvMotionEasing)) { it / 2 },
-            exit = fadeOut(tween(130, easing = WavvEaseInOut)) + slideOutVertically(tween(240, easing = WavvMotionEasing)) { it / 2 },
+            enter = fadeIn(tween(240, easing = WavvMotionEasing)) +
+                slideInVertically(tween(340, easing = WavvMotionEasing)) { it / 16 },
+            exit = fadeOut(tween(180, easing = CubicBezierEasing(.4f, 0f, .2f, 1f))) +
+                slideOutVertically(tween(280, easing = WavvMotionEasing)) { it / 18 },
         ) {
             QueuePanel(
                 song = song,
@@ -3843,6 +3909,7 @@ private fun FullPlayer(
         }
         if (showQualityDetails) {
             AudioQualityInfoDialog(
+                artworkSong = song,
                 details = audioDetails,
                 uhqActive = state.isUHQEnhanced,
                 onDismiss = { showQualityDetails = false },
@@ -3854,27 +3921,27 @@ private fun FullPlayer(
             )
         }
         if (showQualitySettings) {
-            AlertDialog(
-                onDismissRequest = { showQualitySettings = false },
-                title = { Text("Audio quality settings") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("UHQ AAC enhancement", fontWeight = FontWeight.SemiBold)
-                        Text("When enabled, eligible AAC tracks use their cached UHQ version automatically.", color = Color.White.copy(.68f))
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(if (uhqEnabledForSettings) "On" else "Off")
-                            Switch(
-                                checked = uhqEnabledForSettings,
-                                onCheckedChange = { enabled ->
-                                    uhqEnabledForSettings = enabled
-                                    UHQPlaybackPreference.setEnabled(context, enabled)
-                                },
-                            )
-                        }
+            WavvBottomSheet(onDismissRequest = { showQualitySettings = false }, artworkSong = song) { close ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    BlurSheetAction("Cancel", onClick = close)
+                    BlurSheetAction("Done", accent = true, onClick = close)
+                }
+                Text("Audio quality settings", Modifier.padding(top = 22.dp, bottom = 14.dp), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("UHQ AAC enhancement", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    Text("When enabled, eligible AAC tracks use their cached UHQ version automatically.", color = Color.White.copy(.68f))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(if (uhqEnabledForSettings) "On" else "Off", color = Color.White.copy(.86f))
+                        Switch(
+                            checked = uhqEnabledForSettings,
+                            onCheckedChange = { enabled ->
+                                uhqEnabledForSettings = enabled
+                                UHQPlaybackPreference.setEnabled(context, enabled)
+                            },
+                        )
                     }
-                },
-                confirmButton = { TextButton(onClick = { showQualitySettings = false }) { Text("Done") } },
-            )
+                }
+            }
         }
         }
     }
@@ -3925,31 +3992,22 @@ private fun QualityWaveLogo(logoSize: Dp) {
 
 @Composable
 private fun AudioQualityInfoDialog(
+    artworkSong: Song,
     details: AudioQualityDetails?,
     uhqActive: Boolean,
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     var showStats by remember(details) { mutableStateOf(false) }
-    val view = LocalView.current
-    val density = LocalDensity.current
-    val dialogWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-    SideEffect {
-        dialogWindow?.setDimAmount(.32f)
-        if (Build.VERSION.SDK_INT >= 31) {
-            dialogWindow?.setBackgroundBlurRadius(with(density) { 22.dp.roundToPx() })
-        }
-    }
     val title = if (uhqActive) "UHQ" else details?.qualityName ?: "Audio quality"
     val subtitle = when {
         uhqActive -> "16-bit/44.1 kHz PCM output"
         details == null -> "Reading audio details…"
         else -> details.formattedSourceSpec()
     }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(color = Color(0xF2171717), shape = RoundedCornerShape(26.dp), tonalElevation = 0.dp) {
+    WavvBottomSheet(onDismissRequest = onDismiss, maxHeight = 620.dp, artworkSong = artworkSong) { close ->
             Column(
-                Modifier.fillMaxWidth().widthIn(max = 380.dp).heightIn(max = 620.dp)
+                Modifier.fillMaxWidth().heightIn(max = 620.dp)
                     .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -3992,14 +4050,11 @@ private fun AudioQualityInfoDialog(
                 }
                 Spacer(Modifier.height(12.dp))
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(.12f)))
-                TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                    Text("Audio Quality Settings", color = Color.White.copy(.92f), fontSize = 15.sp)
-                }
-                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                    Text("Done", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                }
+                Spacer(Modifier.height(14.dp))
+                BlurSheetAction("Audio Quality Settings", accent = true, onClick = { close(); onOpenSettings() })
+                Spacer(Modifier.height(6.dp))
+                BlurSheetAction("Done", onClick = close)
             }
-        }
     }
 }
 
@@ -5319,11 +5374,14 @@ private fun QueuePanel(
             FrostedBackdrop(
                 captureState = captureState,
                 blurRadiusDp = 38f,
-                tint = Color(0xA9101117),
+                tint = Color(0xE6101117),
                 modifier = Modifier.matchParentSize(),
                 refreshEnabled = true,
                 freezeAfterFirstCapture = true,
             )
+            // Keep the queue surface opaque enough that the source artwork cannot
+            // bleed through the header while preserving the frosted texture.
+            Box(Modifier.matchParentSize().background(Color(0x3A101117)))
         }
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 8.dp)) {
         Row(
@@ -5559,24 +5617,34 @@ private fun QueuePanel(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { onQueueMode(queueMode.next()) }, modifier = Modifier.size(42.dp).clip(CircleShape).background(if (queueMode == QueueMode.Off) Color.White.copy(.07f) else Color.White.copy(.13f)).border(1.dp, Color.White.copy(.13f), CircleShape)) {
-                Image(
-                    androidx.compose.ui.res.painterResource(if (queueMode == QueueMode.Shuffle) R.drawable.queue_mode_shuffle else R.drawable.queue_mode_off),
-                    contentDescription = if (queueMode == QueueMode.Shuffle) "Shuffle is on. Tap to turn it off" else "Shuffle is off. Tap to turn it on",
-                    Modifier.size(23.dp),
-                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(if (queueMode == QueueMode.Off) Color.White.copy(.42f) else Color.White),
-                )
-            }
-            IconButton(onClick = onClose, modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(.1f)).border(1.dp, Color.White.copy(.15f), CircleShape)) {
-                Image(androidx.compose.ui.res.painterResource(R.drawable.chevron_down), "Back to Now Playing", Modifier.size(18.dp))
-            }
-            IconButton(onClick = onCycleLoop, modifier = Modifier.size(42.dp).clip(CircleShape).background(if (loopMode == LoopMode.Off) Color.White.copy(.07f) else Color.White.copy(.13f)).border(1.dp, Color.White.copy(.13f), CircleShape)) {
-                Icon(
-                    if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                    contentDescription = "Loop ${loopMode.name.lowercase()}",
-                    tint = if (loopMode == LoopMode.Off) Color.White.copy(.5f) else Color.White,
-                )
-            }
+            LibrarySoftIconButton(
+                onClick = { onQueueMode(queueMode.next()) },
+                contentDescription = if (queueMode == QueueMode.Shuffle) "Shuffle is on. Tap to turn it off" else "Shuffle is off. Tap to turn it on",
+                icon = null,
+                modifier = Modifier.size(42.dp),
+                iconSize = 23.dp,
+                tint = if (queueMode == QueueMode.Off) Color.White.copy(.42f) else Color.White,
+                frosted = true,
+                iconResource = if (queueMode == QueueMode.Shuffle) R.drawable.queue_mode_shuffle else R.drawable.queue_mode_off,
+            )
+            LibrarySoftIconButton(
+                onClick = onClose,
+                contentDescription = "Back to Now Playing",
+                icon = null,
+                modifier = Modifier.size(40.dp),
+                iconSize = 18.dp,
+                frosted = true,
+                iconResource = R.drawable.chevron_down,
+            )
+            LibrarySoftIconButton(
+                onClick = onCycleLoop,
+                contentDescription = "Loop ${loopMode.name.lowercase()}",
+                icon = if (loopMode == LoopMode.One) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                modifier = Modifier.size(42.dp),
+                iconSize = 23.dp,
+                tint = if (loopMode == LoopMode.Off) Color.White.copy(.5f) else Color.White,
+                frosted = true,
+            )
         }
         }
         val overlayKey = draggingSongKey ?: settlingSongKey
@@ -7081,4 +7149,132 @@ private fun NoArtwork(modifier: Modifier, contentDescription: String?, radius: D
 private fun formatTime(millis: Long): String {
     val seconds = millis.coerceAtLeast(0L) / 1_000
     return (seconds / 60).toString() + ":" + (seconds % 60).toString().padStart(2, '0')
+}
+
+@Composable
+private fun CreatePlaylistSheet(
+    name: String,
+    artworkSong: Song?,
+    onNameChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onCreate: () -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss, artworkSong = artworkSong) { close ->
+        val enabled = name.trim().isNotEmpty()
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            BlurSheetAction("Cancel", onClick = close)
+            BlurSheetAction("Create", enabled = enabled, accent = true, onClick = onCreate)
+        }
+        Text(
+            "New playlist",
+            Modifier.padding(top = 22.dp, bottom = 12.dp),
+            color = Color.White,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        androidx.compose.material3.TextField(
+            value = name,
+            onValueChange = onNameChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text("Playlist name", color = Color.White.copy(.42f)) },
+            shape = RoundedCornerShape(16.dp),
+            colors = androidx.compose.material3.TextFieldDefaults.colors(
+                focusedContainerColor = Color.White.copy(.07f),
+                unfocusedContainerColor = Color.White.copy(.045f),
+                disabledContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = WavvPink,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun BlurSheetAction(
+    label: String,
+    enabled: Boolean = true,
+    accent: Boolean = false,
+    modifier: Modifier = Modifier,
+    height: Dp = 38.dp,
+    fontSize: androidx.compose.ui.unit.TextUnit = 13.sp,
+    onClick: () -> Unit,
+) {
+    val captureState = remember { AtomicBoolean(false) }
+    Box(
+        modifier.height(height).clip(CircleShape).clickable(
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null,
+            enabled = enabled,
+            onClick = onClick,
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        FrostedBackdrop(
+            captureState = captureState,
+            blurRadiusDp = 24f,
+            tint = Color(0x5523262D),
+            modifier = Modifier.matchParentSize().clip(CircleShape),
+            refreshEnabled = true,
+        )
+        Box(Modifier.matchParentSize().background(Color.White.copy(if (accent) .11f else .075f)))
+        Text(label, Modifier.padding(horizontal = 20.dp), color = if (accent) WavvPink else Color.White.copy(.86f), fontSize = fontSize, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun WavvWelcomeSheet(
+    onDismiss: () -> Unit,
+    onGetStarted: () -> Unit,
+) {
+    WavvBottomSheet(onDismissRequest = onDismiss, maxHeight = 620.dp) { close ->
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Text("Welcome to Wavv", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+            Text(
+                "Explore everything Wavv can do from Settings.",
+                Modifier.padding(top = 6.dp),
+                color = Color.White.copy(.68f),
+                fontSize = 15.sp,
+            )
+            Box(
+                Modifier.fillMaxWidth().padding(top = 18.dp).height(3.dp)
+                    .background(Brush.horizontalGradient(listOf(WavvPink, Color(0xFFB7A0FF), Color.Transparent)), CircleShape),
+            )
+            Column(Modifier.padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                WelcomeFeature("Personalised Suggestions", "Discover mixes shaped around your listening.")
+                WelcomeFeature("Autoplay", "Keep the music going with recommendations that follow your queue.")
+                WelcomeFeature("UHQ AAC", "Enhance eligible AAC tracks with Wavv’s cached high-quality path.")
+                WelcomeFeature("Synced Lyrics", "Follow embedded or matching local lyrics while you listen.")
+                WelcomeFeature("Bit-perfect mode", "Use compatible USB output without framework mixing.")
+                WelcomeFeature("Standby", "Turn your device into a calm music display while docked.")
+            }
+            Box(Modifier.fillMaxWidth().padding(top = 22.dp), contentAlignment = Alignment.Center) {
+                BlurSheetAction(
+                    "Get Started",
+                    enabled = true,
+                    accent = true,
+                    modifier = Modifier.widthIn(min = 230.dp),
+                    height = 54.dp,
+                    fontSize = 16.sp,
+                    onClick = { close(); onGetStarted() },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WelcomeFeature(title: String, description: String) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(description, Modifier.padding(top = 2.dp), color = Color.White.copy(.58f), fontSize = 12.sp, lineHeight = 17.sp)
+    }
 }

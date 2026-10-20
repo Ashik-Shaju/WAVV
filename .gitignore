@@ -23,3 +23,6 @@ venv/
 *.log
 Thumbs.db
 Desktop.ini
+
+# Local reference material
+references/

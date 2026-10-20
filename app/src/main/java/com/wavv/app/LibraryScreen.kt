@@ -696,11 +696,8 @@ internal fun LibraryScreen(
                         showAdd = route.page == LibraryPage.Playlists,
                         showSort = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
                         groupActionsInPill = route.page in setOf(LibraryPage.Playlists, LibraryPage.Artists, LibraryPage.Albums),
-                        addContentDescription = if (activeSong == null) "Create playlist" else "Add current song to playlist",
-                        onAdd = {
-                            if (activeSong != null) songForPlaylist = activeSong
-                            else onRequestCreatePlaylist(null)
-                        },
+                        addContentDescription = "Create playlist",
+                        onAdd = { onRequestCreatePlaylist(null) },
                         onSort = { sortMenu = true },
                     )
                     val orderedCards = remember(cards, sortMode, personalizedRecommendations) {
@@ -1493,11 +1490,9 @@ internal fun WavvBottomSheet(
     val view = LocalView.current
     val dialogWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
     SideEffect {
-        if (artworkSong != null) {
-            dialogWindow?.setDimAmount(.46f)
-            if (Build.VERSION.SDK_INT >= 31) {
-                dialogWindow?.setBackgroundBlurRadius(with(density) { 20.dp.roundToPx() })
-            }
+        dialogWindow?.setDimAmount(.46f)
+        if (Build.VERSION.SDK_INT >= 31) {
+            dialogWindow?.setBackgroundBlurRadius(with(density) { 20.dp.roundToPx() })
         }
     }
     LaunchedEffect(dismissing) {
@@ -1520,7 +1515,9 @@ internal fun WavvBottomSheet(
             ) {
                 Box(
                     Modifier.fillMaxSize()
-                        .background(if (artworkSong == null) Color.Black.copy(.5f) else Color.Transparent)
+                        .background(
+                            if (Build.VERSION.SDK_INT < 31) Color.Black.copy(.46f) else Color.Transparent,
+                        )
                         .clickable(onClick = requestClose),
                 )
             }
@@ -1535,11 +1532,15 @@ internal fun WavvBottomSheet(
                         .clip(RoundedCornerShape(32.dp))
                 ) {
                     if (artworkSong == null) {
-                        Box(
-                            Modifier.matchParentSize().background(
-                                Brush.verticalGradient(listOf(Color(0xF41C1419), Color(0xF20A0A0E))),
-                            ),
+                        val sheetCaptureState = remember { AtomicBoolean(false) }
+                        FrostedBackdrop(
+                            captureState = sheetCaptureState,
+                            blurRadiusDp = 30f,
+                            tint = Color(0xA8171921),
+                            modifier = Modifier.matchParentSize().clip(RoundedCornerShape(32.dp)),
+                            refreshEnabled = true,
                         )
+                        Box(Modifier.matchParentSize().background(Color.Black.copy(.08f)))
                     } else {
                         AlbumArt(
                             artworkSong,
