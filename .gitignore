@@ -3,6 +3,8 @@
 .kotlin/
 build/
 app/build/
+app/keystore/
+app/release/
 local.properties
 .idea/
 *.iml

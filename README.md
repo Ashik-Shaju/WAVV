@@ -51,7 +51,9 @@ The debug APK is written to <code>app/build/outputs/apk/debug/app-debug.apk</cod
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ~~~
 
-The release build currently uses the debug signing configuration. It is for local development and is not a production-signed release.
+### Release APK
+
+Create a signed release APK with a private keystore at <code>app/keystore/wavv-release.jks</code> and the environment variables <code>WAVV_KEYSTORE_PASSWORD</code>, <code>WAVV_KEY_ALIAS</code>, and <code>WAVV_KEY_PASSWORD</code> set, then run <code>.\gradlew.bat :app:assembleRelease</code> on Windows or <code>./gradlew :app:assembleRelease</code> on macOS/Linux. The APK is written to <code>app/build/outputs/apk/release/app-release.apk</code>. Without a keystore, Gradle creates an unsigned APK for local inspection only. Never commit the keystore or its passwords; keep the same key for future updates. See [Release notes](RELEASE_NOTES.md) for the current summary.
 
 ## Tests
 

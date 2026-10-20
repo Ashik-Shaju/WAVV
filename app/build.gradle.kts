@@ -13,17 +13,46 @@ android {
         applicationId = "com.wavv.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        versionCode = 1
+        versionName = "0.1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    val releaseKeystore = file("keystore/wavv-release.jks")
+    val releaseSigningValues = listOf(
+        System.getenv("WAVV_KEYSTORE_PASSWORD"),
+        System.getenv("WAVV_KEY_ALIAS"),
+        System.getenv("WAVV_KEY_PASSWORD")
+    )
+    if (releaseKeystore.exists()) {
+        require(releaseSigningValues.all { !it.isNullOrBlank() }) {
+            "Set WAVV_KEYSTORE_PASSWORD, WAVV_KEY_ALIAS, and WAVV_KEY_PASSWORD to sign the release build."
+        }
+        signingConfigs {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = releaseSigningValues[0]
+                keyAlias = releaseSigningValues[1]
+                keyPassword = releaseSigningValues[2]
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            // Temporary device-install signing; replace with the production keystore before release.
-            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+
+            if (releaseKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -45,6 +74,7 @@ android {
 
 dependencies {
     implementation(platform(libs.kotlinx.serialization.bom))
+
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -61,16 +91,18 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.inspector)
     implementation(libs.androidx.mediarouter)
+
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.onnxruntime.android)
 
     testImplementation(libs.junit)
+
     androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
-
 }

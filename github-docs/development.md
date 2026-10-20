@@ -35,6 +35,6 @@ The repository has unit tests for screen-content decisions, but no end-to-end te
 - Keep file metadata distinct from analysis results.
 - Keep file access behind the Android permissions or document grants selected by the user.
 - A Compose preview or unit test cannot validate device playback, Android permission prompts, audio routing, or real file metadata.
-- The current release build uses the debug signing configuration and is not a production release.
+- Release builds enable code and resource shrinking. Without the private release keystore, local `assembleRelease` output is unsigned. See the root README for signed build instructions.
 
 For build, indexing, search, and playback symptoms, see [Troubleshooting](troubleshooting.md).
