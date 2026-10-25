@@ -26,10 +26,17 @@ android {
         System.getenv("WAVV_KEY_ALIAS"),
         System.getenv("WAVV_KEY_PASSWORD")
     )
-    if (releaseKeystore.exists()) {
-        require(releaseSigningValues.all { !it.isNullOrBlank() }) {
-            "Set WAVV_KEYSTORE_PASSWORD, WAVV_KEY_ALIAS, and WAVV_KEY_PASSWORD to sign the release build."
-        }
+    val hasAnyReleaseSigningValue = releaseSigningValues.any { !it.isNullOrBlank() }
+    val hasReleaseSigning = releaseSigningValues.all { !it.isNullOrBlank() }
+
+    require(!hasAnyReleaseSigningValue || hasReleaseSigning) {
+        "Set all three signing variables: WAVV_KEYSTORE_PASSWORD, WAVV_KEY_ALIAS, and WAVV_KEY_PASSWORD."
+    }
+    require(!hasReleaseSigning || releaseKeystore.exists()) {
+        "Release signing variables are set, but app/keystore/android key was not found."
+    }
+
+    if (hasReleaseSigning) {
         signingConfigs {
             create("release") {
                 storeFile = releaseKeystore
@@ -45,7 +52,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
 
-            if (releaseKeystore.exists()) {
+            if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
 
