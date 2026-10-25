@@ -1811,6 +1811,11 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
                         statusChips = homeStatusChips,
                         onChooseSource = onChooseSource,
                         onPlay = { song -> startPlayback(song, "home") },
+                        onPlayRandomSong = {
+                            songs.filterNot { it.id == activeSong?.id }.ifEmpty { songs }
+                                .randomOrNull()
+                                ?.let { startPlayback(it, "home_random") }
+                        },
                         onPlayFromContext = { song, contextQueue, sourceLabel ->
                             playerExpanded = true
                             playerPositionInitialized = true
@@ -2301,6 +2306,7 @@ internal fun WavvContent(state: WavvContentState, actions: WavvContentActions) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ScreenHeader(
     title: String,
@@ -2312,6 +2318,7 @@ internal fun ScreenHeader(
     statusChipColor: Color = Color(0xFF26385D),
     titleColor: Color? = null,
     titleFontFamily: FontFamily? = null,
+    onLogoDoubleClick: (() -> Unit)? = null,
     trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
     val isBrandTitle = title.equals("Wavv", ignoreCase = true)
@@ -2366,6 +2373,15 @@ internal fun ScreenHeader(
         ) {
             Text(
                 title,
+                modifier = if (isBrandTitle && onLogoDoubleClick != null) {
+                    Modifier.combinedClickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null,
+                        role = Role.Button,
+                        onClick = {},
+                        onDoubleClick = onLogoDoubleClick,
+                    )
+                } else Modifier,
                 color = titleColor ?: if (brandHome) Color(0xFFE6B4C1) else Color.White,
                 fontSize = if (brandHome) 33.sp else 32.sp,
                 fontWeight = if (isBrandTitle) FontWeight.Normal else if (brandHome) FontWeight.Black else FontWeight.ExtraBold,

@@ -542,6 +542,7 @@ internal fun HomeScreen(
     onExpandPlayer: () -> Unit,
     recentSongs: List<Song> = emptyList(),
     personalizedRecommendations: List<Song> = emptyList(),
+    onPlayRandomSong: () -> Unit = {},
     smartMixes: List<SmartMix> = emptyList(),
     onPlayMix: (SmartMix) -> Unit = {},
     homeMixArtworkFlightActive: Boolean,
@@ -712,6 +713,7 @@ internal fun HomeScreen(
             statusChipColor = acrylicChipColor,
             titleColor = acrylicLogoColor,
             titleFontFamily = WavvAppNameFontFamily,
+            onLogoDoubleClick = onPlayRandomSong,
         )
         if (songs.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -1415,7 +1417,6 @@ private fun HomeMixDetailScreen(
             blue = (artworkAccent.blue * 1.55f).coerceAtMost(.92f),
         )
     }
-    val titleAccent = if (accentLuminance > .52f) Color.White else Color(0xFFE8F0FF)
     val playContentColor = if (actionAccent.red * .299f + actionAccent.green * .587f + actionAccent.blue * .114f > .55f) Color(0xFF111111) else Color.White
     BoxWithConstraints(modifier.graphicsLayer { alpha = overlayAlpha }.background(WavvBackground)) {
         val heroHeight = minOf(660.dp, maxWidth + 220.dp)
@@ -1481,7 +1482,7 @@ private fun HomeMixDetailScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text("PERSONALIZED MIX", color = Color.White.copy(.65f), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.1.sp)
-                        Text(mix.title, color = titleAccent, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp, fontFamily = WavvFontFamily, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(mix.title, color = actionAccent, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = (-.6).sp, fontFamily = WavvFontFamily, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(
                             listOfNotNull(mix.seed.artist.takeIf(String::isNotBlank), mix.seed.genre?.takeIf(String::isNotBlank))
                                 .joinToString(" · ").ifBlank { "Recommended around ${mix.seed.title}" },
