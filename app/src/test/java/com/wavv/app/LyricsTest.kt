@@ -12,9 +12,9 @@ class LyricsTest {
 
         assertEquals(
             listOf(
-                LyricLine(1_750L, "First"),
-                LyricLine(4_000L, "First"),
-                LyricLine(5_500L, "Second"),
+                LyricLine(1_750L, "First", vocalSide = -1),
+                LyricLine(4_000L, "First", vocalSide = -1),
+                LyricLine(5_500L, "Second", vocalSide = -1),
             ),
             lines,
         )
@@ -23,7 +23,7 @@ class LyricsTest {
     @Test
     fun parseLyrics_keepsPlainEmbeddedLyricsAsUntimedLines() {
         assertEquals(
-            listOf(LyricLine(null, "First line"), LyricLine(null, "Second line")),
+            listOf(LyricLine(null, "First line", vocalSide = -1), LyricLine(null, "Second line", vocalSide = -1)),
             parseLyrics(listOf("First line\nSecond line")),
         )
     }

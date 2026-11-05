@@ -34,10 +34,8 @@ import org.json.JSONObject
 
 internal const val DCLAP_MODEL_ID = "audiomuse-dclap-v1-fp32-audio-int8-text"
 private const val AUDIO_MODEL = "model_epoch_36.onnx"
-private const val AUDIO_EXTERNAL_DATA = "model_epoch_36.onnx.data"
 private const val TEXT_MODEL = "clap_text_model.int8.dynamic.per_channel.onnx"
-private const val AUDIO_SHA256 = "17860403f8fc90aff8ac0632a0741eb5e58d8c0b0ad2fce5ced967274b0ea971"
-private const val AUDIO_EXTERNAL_DATA_SHA256 = "2a735b23c2aad7b12d9ffc85334cebcc659c07696d2ff60e2e378da28b6df657"
+private const val AUDIO_SHA256 = "c34fd5550bb0407583cba6758c74f33c283519bd4d05256524fa4cf9087dff5d"
 private const val TEXT_SHA256 = "b8f1b1ded9d7484e7d8be29c1f04a06d8e357787083965cf96626c9e57aa7985"
 private const val DCLAP_SAMPLE_RATE = 48_000
 private const val DCLAP_SEGMENT_SAMPLES = 480_000
@@ -74,8 +72,8 @@ private object DclapModelInstaller {
     @Synchronized
     fun install(context: Context): DclapModels {
         val root = modelDirectory(context)
+        File(root, "model_epoch_36.onnx.data").delete()
         val audio = copyVerified(context, "$ASSET_ROOT/$AUDIO_MODEL", File(root, AUDIO_MODEL), AUDIO_SHA256)
-        copyVerified(context, "$ASSET_ROOT/$AUDIO_EXTERNAL_DATA", File(root, AUDIO_EXTERNAL_DATA), AUDIO_EXTERNAL_DATA_SHA256)
         val text = installText(context)
         return DclapModels(audio, text.model, text.tokenizer)
     }

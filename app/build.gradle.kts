@@ -14,10 +14,18 @@ android {
         minSdk = 26
         targetSdk = 37
 
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    androidResources {
+        localeFilters += listOf("en")
     }
 
     val releaseKeystore = file("keystore/android key")
@@ -91,7 +99,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.icons.extended)
+    implementation(libs.androidx.compose.icons.core)
     implementation(libs.kyant.backdrop)
 
     implementation(libs.androidx.media3.exoplayer)
